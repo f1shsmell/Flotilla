@@ -48,6 +48,16 @@ func (c Config) handshakeTimeout() time.Duration {
 	return handshakeTimeout
 }
 
+// handshakeDeadline is the earlier of the configured wait and the caller's own
+// deadline: a caller on a short budget must not wait out the default.
+func handshakeDeadline(ctx context.Context, timeout time.Duration) time.Time {
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		return d
+	}
+	return deadline
+}
+
 // Conn is one authenticated connection carrying both planes.
 type Conn struct {
 	rwc     net.Conn
@@ -114,7 +124,7 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 	}
 
 	c := newConn(nc, cfg)
-	if err := nc.SetReadDeadline(time.Now().Add(cfg.handshakeTimeout())); err != nil {
+	if err := nc.SetReadDeadline(handshakeDeadline(ctx, cfg.handshakeTimeout())); err != nil {
 		_ = nc.Close()
 		return nil, fmt.Errorf("set the handshake deadline: %w", err)
 	}

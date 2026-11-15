@@ -233,6 +233,30 @@ func TestServeDropsAPeerThatNeverSendsAHandshake(t *testing.T) {
 	}
 }
 
+// TestDialHonoursTheCallersDeadline pins a client's budget against a peer that
+// accepts the pipe and never answers: the caller's deadline must win over the
+// default handshake wait, or a short budget is a lie.
+func TestDialHonoursTheCallersDeadline(t *testing.T) {
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := Dial(ctx, addr, dir, Config{Token: "shared", Role: "cli"})
+	elapsed := time.Since(started)
+
+	_ = finishAccept(t, acceptc)
+
+	if err == nil {
+		t.Fatal("Dial accepted a peer that never answered its handshake")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Dial waited %s past a %s deadline", elapsed.Round(time.Millisecond), 100*time.Millisecond)
+	}
+}
+
 func TestCallRoundTrips(t *testing.T) {
 	served, client := servePair(t,
 		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, method string, params json.RawMessage) (any, error) {
