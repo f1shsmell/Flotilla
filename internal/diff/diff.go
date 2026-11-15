@@ -68,12 +68,12 @@ type Request struct {
 
 // Files lists what changed in the request's scope.
 func Files(ctx context.Context, req Request) ([]File, error) {
-	repo, err := repositoryRoot(req.Repo)
+	repo, err := repositoryRoot(ctx, req.Repo)
 	if err != nil {
 		return nil, err
 	}
 
-	args, err := diffArgs(repo, req)
+	args, err := diffArgs(ctx, repo, req)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func Files(ctx context.Context, req Request) ([]File, error) {
 
 // Patch returns one file's unified diff, ready to render line by line.
 func Patch(ctx context.Context, req Request, path string) (string, error) {
-	repo, err := repositoryRoot(req.Repo)
+	repo, err := repositoryRoot(ctx, req.Repo)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +121,7 @@ func Patch(ctx context.Context, req Request, path string) (string, error) {
 		return "", err
 	}
 
-	args, err := diffArgs(repo, req)
+	args, err := diffArgs(ctx, repo, req)
 	if err != nil {
 		return "", err
 	}
@@ -142,7 +142,7 @@ func Patch(ctx context.Context, req Request, path string) (string, error) {
 }
 
 // diffArgs is the git invocation a scope needs, without the output format.
-func diffArgs(repo string, req Request) ([]string, error) {
+func diffArgs(ctx context.Context, repo string, req Request) ([]string, error) {
 	switch req.Scope {
 	case Unstaged:
 		return []string{"diff"}, nil
@@ -150,7 +150,7 @@ func diffArgs(repo string, req Request) ([]string, error) {
 		base := req.Base
 		if base == "" {
 			var err error
-			if base, err = defaultBranch(repo); err != nil {
+			if base, err = defaultBranch(ctx, repo); err != nil {
 				return nil, err
 			}
 		}
@@ -169,15 +169,15 @@ func diffArgs(repo string, req Request) ([]string, error) {
 
 // defaultBranch names the branch this one left, falling back to the two names
 // repositories actually use.
-func defaultBranch(repo string) (string, error) {
-	if head, err := run(context.Background(), repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+func defaultBranch(ctx context.Context, repo string) (string, error) {
+	if head, err := run(ctx, repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		if name := strings.TrimSpace(head); name != "" {
 			return name, nil
 		}
 	}
 
 	for _, name := range []string{"main", "master"} {
-		if _, err := run(context.Background(), repo, "rev-parse", "--verify", name); err == nil {
+		if _, err := run(ctx, repo, "rev-parse", "--verify", name); err == nil {
 			return name, nil
 		}
 	}
@@ -333,7 +333,7 @@ func untrackedPatch(repo, path string) (string, error) {
 }
 
 // repositoryRoot checks that repo is the root of a working tree.
-func repositoryRoot(repo string) (string, error) {
+func repositoryRoot(ctx context.Context, repo string) (string, error) {
 	if repo == "" {
 		return "", fmt.Errorf("open the repository: empty path: %w", ErrNotARepository)
 	}
@@ -342,7 +342,7 @@ func repositoryRoot(repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve the repository %q: %w", repo, err)
 	}
-	if _, err := run(context.Background(), abs, "rev-parse", "--show-toplevel"); err != nil {
+	if _, err := run(ctx, abs, "rev-parse", "--show-toplevel"); err != nil {
 		return "", fmt.Errorf("%q: %w", abs, ErrNotARepository)
 	}
 	return abs, nil

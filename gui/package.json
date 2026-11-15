@@ -64,5 +64,8 @@
       "shortcutName": "Flotilla",
       "deleteAppDataOnUninstall": false
     }
+  },
+  "author": {
+    "name": "f1shsmell"
   }
 }

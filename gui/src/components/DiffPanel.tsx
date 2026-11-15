@@ -36,6 +36,7 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
   }, [load, scope]);
 
   const openFile = async (path: string): Promise<void> => {
+    setError(null);
     try {
       const patched = (await window.flotilla.diff(sessionId, scope, path)) as {
         patch?: string;
