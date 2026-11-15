@@ -34,6 +34,34 @@ interface Pending {
 
 // DaemonClient is one authenticated connection to the daemon. It owns the
 // framing and the request bookkeeping; callers only name methods.
+// A named pipe has no pending instance between one accept and the next, so a
+// dial can land in that gap and be told the endpoint does not exist. These are
+// the codes worth retrying; anything else is a real failure.
+const retryable = new Set(["ENOENT", "EBUSY", "EPIPE"]);
+
+const dialRetryIntervalMs = 10;
+
+async function dialWithRetry(path: string, deadline: number): Promise<net.Socket> {
+  for (;;) {
+    try {
+      return await new Promise<net.Socket>((resolve, reject) => {
+        const socket = net.connect(path);
+        socket.once("connect", () => {
+          socket.removeListener("error", reject);
+          resolve(socket);
+        });
+        socket.once("error", reject);
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (!retryable.has(code) || Date.now() > deadline) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, dialRetryIntervalMs));
+    }
+  }
+}
+
 export class DaemonClient {
   private readonly decoder = new FrameDecoder();
   private readonly pending = new Map<number, Pending>();
@@ -50,42 +78,43 @@ export class DaemonClient {
     const timeoutMs = options.timeoutMs ?? 5000;
 
     return new Promise((resolve, reject) => {
-      const socket = net.connect(options.path);
-      const client = new DaemonClient(socket, options.handlers ?? {});
-      let settled = false;
+      dialWithRetry(options.path, Date.now() + timeoutMs).then((socket) => {
+        const client = new DaemonClient(socket, options.handlers ?? {});
+        let settled = false;
 
-      const timer = setTimeout(() => {
-        socket.destroy();
-        if (!settled) {
+        const timer = setTimeout(() => {
+          socket.destroy();
+          if (!settled) {
+            settled = true;
+            reject(new Error(`handshake with ${options.path} timed out`));
+          }
+        }, timeoutMs);
+
+        client.onHandshake = (hello) => {
+          clearTimeout(timer);
+          if (settled) {
+            return;
+          }
           settled = true;
-          reject(new Error(`handshake with ${options.path} timed out`));
-        }
-      }, timeoutMs);
+          if (hello.error) {
+            socket.destroy();
+            reject(new Error(`${options.path} rejected the connection: ${hello.error}`));
+            return;
+          }
+          if (hello.version !== PROTOCOL_VERSION) {
+            socket.destroy();
+            reject(
+              new Error(
+                `peer speaks protocol ${hello.version}, this build speaks ${PROTOCOL_VERSION}`,
+              ),
+            );
+            return;
+          }
+          resolve(client);
+        };
 
-      client.onHandshake = (hello) => {
-        clearTimeout(timer);
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (hello.error) {
-          socket.destroy();
-          reject(new Error(`${options.path} rejected the connection: ${hello.error}`));
-          return;
-        }
-        if (hello.version !== PROTOCOL_VERSION) {
-          socket.destroy();
-          reject(
-            new Error(
-              `peer speaks protocol ${hello.version}, this build speaks ${PROTOCOL_VERSION}`,
-            ),
-          );
-          return;
-        }
-        resolve(client);
-      };
-
-      socket.once("connect", () => {
+        // The socket is already connected: dialWithRetry resolved on "connect",
+        // so the handshake goes out now rather than on an event that has passed.
         socket.write(
           encodeControl({
             version: PROTOCOL_VERSION,
@@ -94,27 +123,27 @@ export class DaemonClient {
             session: options.session,
           }),
         );
-      });
 
-      socket.on("data", (chunk: Buffer) => client.onChunk(chunk));
+        socket.on("data", (chunk: Buffer) => client.onChunk(chunk));
 
-      socket.on("error", (error: Error) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(error);
-        }
-        client.fail(error);
-      });
+        socket.on("error", (error: Error) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+          }
+          client.fail(error);
+        });
 
-      socket.on("close", () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(new Error(`${options.path} closed before the handshake`));
-        }
-        client.fail(new Error("connection closed"));
-      });
+        socket.on("close", () => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            reject(new Error(`${options.path} closed before the handshake`));
+          }
+          client.fail(new Error("connection closed"));
+        });
+      }, reject);
     });
   }
 

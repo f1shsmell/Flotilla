@@ -43,10 +43,24 @@ describe.skipIf(!binary)("daemon interop", () => {
   });
 
   afterAll(async () => {
-    daemon?.kill();
-    if (home) {
-      await fs.rm(home, { recursive: true, force: true });
+    if (daemon && daemon.exitCode === null) {
+      // Wait for the process to be gone: Windows keeps its log file locked until
+      // it exits, and the directory cannot be removed under it.
+      await new Promise<void>((resolve) => {
+        daemon!.once("exit", () => resolve());
+        daemon!.kill();
+      });
     }
+
+    for (let attempt = 0; home && attempt < 10; attempt += 1) {
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
     delete process.env.FLT_HOME;
   });
 
