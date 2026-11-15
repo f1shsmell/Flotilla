@@ -3,6 +3,7 @@ import path from "node:path";
 import { app, BrowserWindow, ipcMain, type WebContents } from "electron";
 
 import { DaemonClient } from "./client";
+import { STREAM_INPUT } from "./wire";
 import { ensure } from "./daemon";
 
 const channel = process.env.FLT_CHANNEL ?? "stable";
@@ -56,9 +57,16 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
     },
   });
 
-  const attached = await client.call<{ id: string; info: unknown }>("session.attach", {
-    id: sessionId,
-  });
+  let attached: unknown;
+  try {
+    attached = await client.call("session.attach", { id: sessionId });
+  } catch (error) {
+    // A connection that never attached has nothing to carry: closing it here is
+    // what keeps a failed click from leaving a pipe open on the daemon.
+    client.close();
+    throw error;
+  }
+
   links.set(sessionId, { client, attached });
   return attached;
 }
@@ -118,7 +126,7 @@ function register(): void {
   );
 
   ipcMain.handle("flotilla:input", async (_event, sessionId: string, text: string) => {
-    link(sessionId).sendData(2, Buffer.from(text, "utf8"));
+    link(sessionId).sendData(STREAM_INPUT, Buffer.from(text, "utf8"));
   });
 
   ipcMain.handle(
@@ -158,6 +166,12 @@ function createWindow(): void {
   }
   window.on("closed", () => {
     window = null;
+    // The sessions keep running in their hosts; this window's connections do
+    // not outlive it.
+    for (const [, held] of links) {
+      held.client.close();
+    }
+    links.clear();
   });
 }
 
