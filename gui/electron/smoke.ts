@@ -22,6 +22,16 @@ async function waitFor(target: BrowserWindow, needle: string, deadline: number):
   throw new Error(`${needle} never appeared; body was:\n${text}`);
 }
 
+async function clickButton(target: BrowserWindow, text: string): Promise<void> {
+  await target.webContents.executeJavaScript(`(() => {
+    const buttons = [...document.querySelectorAll("button")];
+    const button = buttons.find((candidate) => candidate.innerText.trim() === ${JSON.stringify(text)})
+      ?? buttons.find((candidate) => candidate.innerText.includes(${JSON.stringify(text)}));
+    if (!button) { throw new Error("no button " + ${JSON.stringify(text)}); }
+    button.click();
+  })()`);
+}
+
 async function clickSession(target: BrowserWindow, id: string): Promise<void> {
   await target.webContents.executeJavaScript(`(() => {
     const row = [...document.querySelectorAll(".session-row")]
@@ -83,6 +93,28 @@ async function finish(
   return true;
 }
 
+async function waitForAddedLine(
+  target: BrowserWindow,
+  needle: string,
+  deadline: number,
+): Promise<string> {
+  let text = "";
+  while (Date.now() < deadline) {
+    text = (await target.webContents.executeJavaScript(`(() => {
+      const added = [...document.querySelectorAll(".diff-patch .add")]
+        .map((line) => line.textContent ?? "");
+      return added.some((line) => line.includes(${JSON.stringify(needle)}))
+        ? added.join(" | ")
+        : "";
+    })()`)) as string;
+    if (text !== "") {
+      return text;
+    }
+    await step();
+  }
+  throw new Error(`${needle} never appeared as an added line; body was://n${await body(target)}`);
+}
+
 async function waitForTerminal(
   target: BrowserWindow,
   needle: string,
@@ -106,6 +138,8 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   const form = process.env.FLT_GUI_SMOKE_FORM ?? "";
+  const diffFile = process.env.FLT_GUI_SMOKE_DIFF ?? "";
+  const diffLine = process.env.FLT_GUI_SMOKE_PATCH ?? "";
   const deadline = Date.now() + 120000;
 
   target.webContents.on("render-process-gone", (_event, details) => {
@@ -128,10 +162,13 @@ export async function run(target: BrowserWindow): Promise<boolean> {
           element.dispatchEvent(new Event(
             element.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
         };
-        const [command, args, dir] = document.querySelectorAll(".new-session input");
+        const [command, args, dir, repo, branch] =
+          document.querySelectorAll(".new-session input");
         setValue(command, fields.command);
         setValue(args, fields.args ?? "");
         setValue(dir, fields.dir ?? "");
+        setValue(repo, fields.repo ?? "");
+        setValue(branch, fields.branch ?? "");
         if (fields.mode) {
           setValue(document.querySelector(".new-session select"), fields.mode);
         }
@@ -165,6 +202,21 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (diffFile !== "") {
+      await clickButton(target, "Diff");
+      await waitFor(target, diffFile, deadline);
+      await clickButton(target, diffFile);
+      if (diffLine !== "") {
+        // The renderer strips git's prefix, so an added line is found by the
+        // class that colours it, not by a leading "+".
+        const added = diffLine.replace(/^\+/, "");
+        const text = await waitForAddedLine(target, added, deadline);
+        console.log(`smoke: ok (diff: ${diffLine})`);
+        console.log(text);
+        return true;
+      }
     }
 
     return finish(target, expect, expectTerminal, deadline);

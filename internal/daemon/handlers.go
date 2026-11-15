@@ -3,11 +3,15 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
+	"github.com/f1shsmell/flotilla/internal/worktree"
 )
 
 // Allowed methods on the daemon connection.
@@ -81,7 +85,30 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	// A start for a session this daemon already serves is a retry, not a second
 	// host: the caller's id chose the session, so it names one agent.
 	if att := d.lookup(req.ID); att != nil {
-		return StartResponse{ID: req.ID, HostPID: att.Info.PID, Endpoint: att.Record.Endpoint}, nil
+		return StartResponse{
+			ID:       req.ID,
+			HostPID:  att.Info.PID,
+			Endpoint: att.Record.Endpoint,
+			Dir:      att.Info.Dir,
+		}, nil
+	}
+
+	dir, included, skipped, err := worktreeFor(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	req.Dir = dir
+	// A worktree outlives a failed start: it holds a branch and whatever
+	// .worktreeinclude copied, so it is kept and named rather than deleted.
+	kept := ""
+	if req.Worktree != nil {
+		kept = fmt.Sprintf(" (its worktree is at %q)", dir)
+	}
+
+	// The turn scope compares against where the session started, so the commit
+	// is taken now, before the agent touches anything.
+	if head, err := gitHead(ctx, dir); err == nil {
+		d.remember(req.ID, head)
 	}
 
 	endpoint, err := d.spawn(ctx, SpawnRequest{
@@ -98,12 +125,12 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		StateDir: d.cfg.StateDir,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("spawn session %q: %w", req.ID, err)
+		return nil, fmt.Errorf("spawn session %q: %w%s", req.ID, err, kept)
 	}
 
 	att, err := AttachOne(ctx, d.reg, req.ID, d.cfg.Token, d.cfg.StateDir, d.hostHooks(req.ID))
 	if err != nil {
-		return nil, fmt.Errorf("attach the new session %q: %w", req.ID, err)
+		return nil, fmt.Errorf("attach the new session %q: %w%s", req.ID, err, kept)
 	}
 
 	d.mu.Lock()
@@ -112,9 +139,51 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	d.watch(att)
 
 	d.cfg.Log.Info("session started",
-		"session", req.ID, "host_pid", att.Info.PID, "endpoint", endpoint.String())
+		"session", req.ID, "host_pid", att.Info.PID, "endpoint", endpoint.String(), "dir", dir)
 
-	return StartResponse{ID: req.ID, HostPID: att.Info.PID, Endpoint: endpoint}, nil
+	return StartResponse{
+		ID:       req.ID,
+		HostPID:  att.Info.PID,
+		Endpoint: endpoint,
+		Dir:      dir,
+		Included: included,
+		Skipped:  skipped,
+	}, nil
+}
+
+// gitHead reports the commit a directory is on, or an empty string when it is
+// not a repository.
+func gitHead(ctx context.Context, dir string) (string, error) {
+	if dir == "" {
+		return "", errors.New("no directory")
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("read the commit of %q: %w", dir, err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// worktreeFor creates the worktree a request asks for and reports where the
+// session should run. Without a request the caller's own directory stands.
+func worktreeFor(ctx context.Context, req StartRequest) (dir string, included, skipped []string, err error) {
+	if req.Worktree == nil {
+		return req.Dir, nil, nil, nil
+	}
+
+	created, err := worktree.Create(ctx, worktree.Spec{
+		Repo:   req.Worktree.Repo,
+		Branch: req.Worktree.Branch,
+		Base:   req.Worktree.Base,
+		Dir:    req.Worktree.Dir,
+	})
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create a worktree for session %q: %w", req.ID, err)
+	}
+
+	return created.Dir, created.Included, created.Skipped, nil
 }
 
 func (d *Daemon) lookup(id session.ID) *Attachment {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/f1shsmell/flotilla/internal/diff"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -148,6 +149,12 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 // reply is handed back untouched, so the client decodes the same shape it would
 // have got by dialling the host itself.
 func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, params json.RawMessage) (any, error) {
+	// The diff belongs to the checkout, not to the agent: the daemon answers it
+	// itself instead of forwarding it to a host that has no repository.
+	if method == session.MethodDiff {
+		return d.readDiff(ctx, id, params)
+	}
+
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
 		session.MethodPermissionReply, session.MethodResize:
@@ -165,6 +172,64 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 		return nil, fmt.Errorf("%s on session %q: %w", method, id, err)
 	}
 	return raw, nil
+}
+
+// readDiff answers a diff request for one session's checkout. The turn scope
+// falls back to the commit the daemon saw when the session started.
+func (d *Daemon) readDiff(ctx context.Context, id session.ID, params json.RawMessage) (any, error) {
+	var req session.DiffRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", session.MethodDiff, err)
+	}
+
+	att := d.lookup(id)
+	if att == nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodDiff, id, ErrUnknownSession)
+	}
+
+	request := diff.Request{
+		Repo:  att.Info.Dir,
+		Scope: diff.Scope(req.Scope),
+		Base:  req.Base,
+	}
+	if request.Base == "" && request.Scope == diff.Turn {
+		request.Base = d.baseline(id)
+	}
+
+	if req.Path != "" {
+		patch, err := diff.Patch(ctx, request, req.Path)
+		if err != nil {
+			return nil, fmt.Errorf("%s on session %q: %w", session.MethodDiff, id, err)
+		}
+		return session.DiffResponse{Patch: patch}, nil
+	}
+
+	files, err := diff.Files(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodDiff, id, err)
+	}
+	return session.DiffResponse{Files: files}, nil
+}
+
+// baseline reports the commit a session started at, if the daemon watched it
+// start. A session reattached after a restart has none, and the turn scope then
+// asks the caller for one.
+func (d *Daemon) baseline(id session.ID) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.baselines[id]
+}
+
+// remember records the commit a session started at.
+func (d *Daemon) remember(id session.ID, base string) {
+	if base == "" {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.baselines[id] = base
 }
 
 // clientData forwards terminal input from an attached client to its host.

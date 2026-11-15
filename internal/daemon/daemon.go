@@ -87,6 +87,21 @@ type StartRequest struct {
 	// Cols and Rows size the initial PTY.
 	Cols int `json:"cols,omitempty"`
 	Rows int `json:"rows,omitempty"`
+	// Worktree, when set, creates a worktree and runs the session there, so two
+	// sessions can work on one repository without sharing a checkout.
+	Worktree *WorktreeRequest `json:"worktree,omitempty"`
+}
+
+// WorktreeRequest asks for a fresh worktree for one session.
+type WorktreeRequest struct {
+	// Repo is the repository's main worktree.
+	Repo string `json:"repo"`
+	// Branch is the branch to create and check out.
+	Branch string `json:"branch"`
+	// Base is the commit-ish to branch from; empty means HEAD.
+	Base string `json:"base,omitempty"`
+	// Dir is where the worktree goes; empty means a sibling of Repo.
+	Dir string `json:"dir,omitempty"`
 }
 
 // StartResponse reports the session the daemon created and where it listens.
@@ -94,6 +109,12 @@ type StartResponse struct {
 	ID       session.ID  `json:"id"`
 	HostPID  int         `json:"host_pid"`
 	Endpoint ipc.Address `json:"endpoint"`
+	// Dir is where the agent runs: the worktree when one was asked for.
+	Dir string `json:"dir,omitempty"`
+	// Included and Skipped report what .worktreeinclude copied and what it
+	// named but could not find.
+	Included []string `json:"worktree_included,omitempty"`
+	Skipped  []string `json:"worktree_skipped,omitempty"`
 }
 
 // Daemon is the control plane. Its only state is the fleet it can reach, and it
@@ -107,16 +128,20 @@ type Daemon struct {
 	mu    sync.Mutex
 	fleet Fleet
 	relay *relay
+	// baselines is the commit each session started at, which is what the turn
+	// scope compares against. It is memory only: a daemon restart forgets it.
+	baselines map[session.ID]string
 }
 
 // New builds a daemon. Call Run to serve.
 func New(cfg Config, spawn Spawner) *Daemon {
 	return &Daemon{
-		cfg:   cfg,
-		reg:   session.NewRegistry(cfg.StateDir),
-		addr:  ipc.Address{Channel: cfg.Channel, Name: "daemon"},
-		spawn: spawn,
-		relay: newRelay(),
+		cfg:       cfg,
+		reg:       session.NewRegistry(cfg.StateDir),
+		addr:      ipc.Address{Channel: cfg.Channel, Name: "daemon"},
+		spawn:     spawn,
+		relay:     newRelay(),
+		baselines: make(map[session.ID]string),
 	}
 }
 

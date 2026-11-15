@@ -7,9 +7,11 @@ import {
   endTurn,
   loseSession,
   newSession,
+  parsePatch,
   parseStatus,
   splitArgs,
   startTurn,
+  worktreeOf,
   summarise,
 } from "../src/store";
 
@@ -80,6 +82,52 @@ describe("splitArgs", () => {
 
   it("keeps an empty quoted argument", () => {
     expect(splitArgs('--name ""')).toEqual(["--name", ""]);
+  });
+});
+
+describe("parsePatch", () => {
+  it("classifies the lines a renderer colours", () => {
+    const patch = [
+      "diff --git a/readme.md b/readme.md",
+      "--- a/readme.md",
+      "+++ b/readme.md",
+      "@@ -1 +1,2 @@",
+      " hello",
+      "+world",
+      "-gone",
+    ].join("\n");
+
+    expect(parsePatch(patch).map((line) => line.kind)).toEqual([
+      "meta",
+      "meta",
+      "meta",
+      "hunk",
+      "context",
+      "add",
+      "del",
+    ]);
+    expect(parsePatch(patch)[5].text).toBe("world");
+  });
+
+  it("drops the trailing newline git leaves", () => {
+    expect(parsePatch("+one\n")).toHaveLength(1);
+  });
+});
+
+describe("worktreeOf", () => {
+  it("asks for nothing when both fields are empty", () => {
+    expect(worktreeOf("", "")).toEqual({});
+  });
+
+  it("asks for a worktree when both fields are filled", () => {
+    expect(worktreeOf(" C:/repo ", " feat/x ")).toEqual({
+      request: { repo: "C:/repo", branch: "feat/x" },
+    });
+  });
+
+  it("refuses half a worktree instead of falling back", () => {
+    expect(worktreeOf("C:/repo", "").error).toMatch(/both/);
+    expect(worktreeOf("", "feat/x").error).toMatch(/both/);
   });
 });
 

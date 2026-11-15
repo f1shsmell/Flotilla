@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { DiffPanel } from "./DiffPanel";
+
 import type { Entry, SessionState } from "../store";
 import { PermissionCard } from "./PermissionCard";
 import { Terminal } from "./Terminal";
@@ -46,6 +48,7 @@ export function SessionView({
   onResize,
 }: Props): React.ReactElement {
   const [draft, setDraft] = useState("");
+  const [view, setView] = useState<"stream" | "diff">("stream");
   const working = state.turn === "working";
 
   const submit = (): void => {
@@ -67,9 +70,25 @@ export function SessionView({
             {state.stopReason ? ` · ${state.stopReason}` : ""}
           </p>
         </div>
-        <button type="button" onClick={onCancel} disabled={!working}>
-          Cancel turn
-        </button>
+        <div className="session-actions">
+          <button
+            type="button"
+            className={view === "stream" ? "primary" : ""}
+            onClick={() => setView("stream")}
+          >
+            {state.mode === "pty" ? "Terminal" : "Log"}
+          </button>
+          <button
+            type="button"
+            className={view === "diff" ? "primary" : ""}
+            onClick={() => setView("diff")}
+          >
+            Diff
+          </button>
+          <button type="button" onClick={onCancel} disabled={!working}>
+            Cancel turn
+          </button>
+        </div>
       </header>
 
       {state.error ? <p className="error">{state.error}</p> : null}
@@ -82,7 +101,9 @@ export function SessionView({
         />
       ))}
 
-      {state.mode === "pty" ? (
+      {view === "diff" ? (
+        <DiffPanel sessionId={state.id} />
+      ) : state.mode === "pty" ? (
         <Terminal onInput={onInput} onResize={onResize} onReady={onTerminalReady} />
       ) : (
         <div className="log">

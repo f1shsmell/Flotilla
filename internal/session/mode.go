@@ -1,5 +1,7 @@
 package session
 
+import "github.com/f1shsmell/flotilla/internal/diff"
+
 // Mode says how a session speaks to its agent.
 type Mode string
 
@@ -39,6 +41,29 @@ const MethodResize = "session.resize"
 type ResizeRequest struct {
 	Cols int `json:"cols"`
 	Rows int `json:"rows"`
+}
+
+// MethodDiff reads what changed in the session's repository. The daemon answers
+// it, not the host: the host holds the agent, the daemon holds the checkout.
+const MethodDiff = "session.diff"
+
+// DiffRequest asks for a file list, or for one file's patch.
+type DiffRequest struct {
+	// Scope is "unstaged", "branch" or "turn".
+	Scope string `json:"scope"`
+	// Base is the commit a branch left from, or the commit a turn started at.
+	// Empty means the daemon's own answer for the session.
+	Base string `json:"base,omitempty"`
+	// Path asks for one file's patch instead of the list.
+	Path string `json:"path,omitempty"`
+}
+
+// DiffResponse carries either the list or one patch.
+type DiffResponse struct {
+	// Files is the changed paths, present when the request named no path.
+	Files []diff.File `json:"files,omitempty"`
+	// Patch is one file's unified diff, present when the request named a path.
+	Patch string `json:"patch,omitempty"`
 }
 
 // MethodAttach binds one client connection to one session. The daemon serves it,

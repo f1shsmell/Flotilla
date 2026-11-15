@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { splitArgs, type StartRequest } from "../store";
+import { splitArgs, worktreeOf, type StartRequest } from "../store";
 
 interface Props {
   onStart: (request: StartRequest) => Promise<void>;
@@ -12,6 +12,8 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [dir, setDir] = useState("");
+  const [repo, setRepo] = useState("");
+  const [branch, setBranch] = useState("");
   const [mode, setMode] = useState("acp");
   const [policy, setPolicy] = useState("supervised");
   const [busy, setBusy] = useState(false);
@@ -23,6 +25,12 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
       return;
     }
 
+    const worktree = worktreeOf(repo, branch);
+    if (worktree.error) {
+      setError(worktree.error);
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
@@ -31,8 +39,9 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
         mode,
         command: name,
         args: splitArgs(args),
-        dir: dir.trim(),
+        dir: worktree.request ? "" : dir.trim(),
         policy: mode === "acp" ? policy : undefined,
+        worktree: worktree.request,
       });
       setCommand("");
       setArgs("");
@@ -67,6 +76,16 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
         value={dir}
         placeholder="working directory (optional)"
         onChange={(event) => setDir(event.target.value)}
+      />
+      <input
+        value={repo}
+        placeholder="worktree of repository (optional)"
+        onChange={(event) => setRepo(event.target.value)}
+      />
+      <input
+        value={branch}
+        placeholder="new branch for the worktree"
+        onChange={(event) => setBranch(event.target.value)}
       />
 
       <div className="row">

@@ -10,6 +10,7 @@ interface FlotillaBridge {
   answer(sessionId: string, questionId: string, optionId: string): Promise<unknown>;
   input(sessionId: string, text: string): Promise<unknown>;
   resize(sessionId: string, cols: number, rows: number): Promise<unknown>;
+  diff(sessionId: string, scope: string, path?: string): Promise<unknown>;
   onEvent(handler: (event: unknown) => void): () => void;
 }
 
