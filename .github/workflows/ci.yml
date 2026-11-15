@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &docs-only
+      - "**/*.md"
+      - LICENSE
+  pull_request:
+    branches: [main]
+    paths-ignore: *docs-only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            Write-Error "gofmt required for: $($unformatted -join ', ')"
+            exit 1
+          }
+
+      - run: go vet ./...
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+
+      - run: go build ./...
+
+      - run: go test ./...

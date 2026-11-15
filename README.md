@@ -15,9 +15,9 @@ its discipline.
 - **ACP-first**: structured sessions for agents that speak the Agent Client
   Protocol; a full-interaction PTY fallback for any other CLI.
 - **Sessions outlive the app**: GUI and daemon restarts keep sessions alive.
-  Honest boundary: a session-host crash loses PTY sessions and resumes ACP
-  sessions where the agent supports resume; OS restarts restore layout and
-  history only.
+  Honest boundary: a session-host crash loses the session, PTY and ACP alike —
+  the host holds the agent's handles and its ACP session id, and resuming one
+  is not implemented yet. OS restarts restore layout and history only.
 - **BYO subscription**: no token resale, no model lock-in.
 - **Adapters are data**: most new agents are one JSON definition.
 
