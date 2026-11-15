@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / GUI
+node_modules/
+gui/dist/
+gui/.vite/
+
+# Electron builder output
+gui/out/
+gui/release/
+
+# Dev isolation homes and local state
+.flt-home/
+*.local.md
+
+# Secrets and credentials — never commit
+.env
+.env.*
+*.pem
+*.p12
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
