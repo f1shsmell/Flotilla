@@ -147,6 +147,10 @@ func copyIncluded(repo, dest string) (included, skipped []string, err error) {
 		return nil, nil, fmt.Errorf("read .worktreeinclude: %w", err)
 	}
 
+	// The repository's own path may itself be reached through a link, so both
+	// sides of every containment check are compared after resolution.
+	root := resolve(repo)
+
 	for _, line := range strings.Split(string(payload), "\n") {
 		entry := strings.TrimSpace(line)
 		if entry == "" || strings.HasPrefix(entry, "#") {
@@ -154,7 +158,7 @@ func copyIncluded(repo, dest string) (included, skipped []string, err error) {
 		}
 
 		src := filepath.Join(repo, entry)
-		if !inside(repo, src) {
+		if !inside(root, resolve(src)) {
 			return nil, nil, fmt.Errorf("entry %q: %w", entry, ErrOutsideRepo)
 		}
 
@@ -206,6 +210,21 @@ func copyFile(src, dest string) error {
 		return fmt.Errorf("close %q: %w", dest, err)
 	}
 	return nil
+}
+
+// resolve returns path with every link along it followed. A path that does not
+// exist is resolved as far as it goes, which is what a containment check needs:
+// a link that points outside the repository is exactly the escape to catch.
+func resolve(path string) string {
+	if resolved, err := canonical(path); err == nil {
+		return resolved
+	}
+
+	dir := filepath.Dir(path)
+	if dir == path {
+		return path
+	}
+	return filepath.Join(resolve(dir), filepath.Base(path))
 }
 
 // inside reports whether path is root or below it.

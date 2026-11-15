@@ -167,6 +167,21 @@ func TestCreateRefusesAnIncludeThatEscapes(t *testing.T) {
 	}
 }
 
+// linkDir makes a directory link, which needs a privilege a plain test run may
+// not hold: a junction is the fallback that works on Windows without it.
+func linkDir(t *testing.T, target, link string) {
+	t.Helper()
+
+	if err := os.Symlink(target, link); err == nil {
+		return
+	}
+
+	cmd := exec.CommandContext(context.Background(), "cmd", "/c", "mklink", "/J", link, target)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("this machine cannot create links: %v: %s", err, output)
+	}
+}
+
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
@@ -177,4 +192,33 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v in %s: %v: %s", args, dir, err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// TestCreateRefusesAnIncludeThatLinksOutside pins the other way out of the
+// repository: a name that stays inside but is a link to somewhere else.
+func TestCreateRefusesAnIncludeThatLinksOutside(t *testing.T) {
+	repo := initRepo(t)
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("not yours\n"), 0o600); err != nil {
+		t.Fatalf("write the outside file: %v", err)
+	}
+	linkDir(t, outside, filepath.Join(repo, "linked"))
+
+	if err := os.WriteFile(filepath.Join(repo, ".worktreeinclude"), []byte("linked\n"), 0o600); err != nil {
+		t.Fatalf("write .worktreeinclude: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "wt")
+	_, err := worktree.Create(context.Background(), worktree.Spec{
+		Repo:   repo,
+		Branch: "feat/linked",
+		Dir:    dir,
+	})
+	if !errors.Is(err, worktree.ErrOutsideRepo) {
+		t.Fatalf("Create with a link out of the repository = %v, want ErrOutsideRepo", err)
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		t.Fatal("a failed create left its worktree on disk")
+	}
 }

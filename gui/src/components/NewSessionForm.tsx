@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { splitArgs, type StartRequest } from "../store";
+import { splitArgs, worktreeOf, type StartRequest } from "../store";
 
 interface Props {
   onStart: (request: StartRequest) => Promise<void>;
@@ -25,22 +25,23 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
       return;
     }
 
+    const worktree = worktreeOf(repo, branch);
+    if (worktree.error) {
+      setError(worktree.error);
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
-      const worktree =
-        repo.trim() !== "" && branch.trim() !== ""
-          ? { repo: repo.trim(), branch: branch.trim() }
-          : undefined;
-
       await onStart({
         id: `sess-${Date.now().toString(36)}`,
         mode,
         command: name,
         args: splitArgs(args),
-        dir: worktree ? "" : dir.trim(),
+        dir: worktree.request ? "" : dir.trim(),
         policy: mode === "acp" ? policy : undefined,
-        worktree,
+        worktree: worktree.request,
       });
       setCommand("");
       setArgs("");

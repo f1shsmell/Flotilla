@@ -30,6 +30,25 @@ export interface StartRequest {
   worktree?: { repo: string; branch: string };
 }
 
+// worktreeOf reads the form's two worktree fields. Both empty means none, both
+// filled means one, and half of one is an error: falling back to the plain
+// directory would start the session somewhere the user did not ask for.
+export function worktreeOf(
+  repo: string,
+  branch: string,
+): { request?: { repo: string; branch: string }; error?: string } {
+  const repository = repo.trim();
+  const name = branch.trim();
+
+  if (repository === "" && name === "") {
+    return {};
+  }
+  if (repository === "" || name === "") {
+    return { error: "a worktree needs both a repository and a branch" };
+  }
+  return { request: { repo: repository, branch: name } };
+}
+
 // splitArgs turns the form's argument line into argv: spaces separate, double
 // quotes group, and a quote with nothing in it still makes an empty argument.
 export function splitArgs(line: string): string[] {
