@@ -42,12 +42,12 @@ func (d *Daemon) status() Status {
 	for i := range d.fleet.Attachments {
 		att := d.fleet.Attachments[i]
 		st.Sessions = append(st.Sessions, StatusEntry{
-			ID:       att.Record.ID,
-			Mode:     session.Mode(att.Info.Mode),
-			HostPID:  att.Info.PID,
-			Command:  att.Info.Command,
-			Dir:      att.Info.Dir,
-			Attached: att.Conn.Alive(),
+			ID:        att.Record.ID,
+			Mode:      session.Mode(att.Info.Mode),
+			HostPID:   att.Info.PID,
+			Command:   att.Info.Command,
+			Dir:       att.Info.Dir,
+			Reachable: att.Conn.Alive(),
 		})
 	}
 

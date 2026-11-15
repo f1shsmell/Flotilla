@@ -97,9 +97,9 @@ func status(channel string, asJSON bool, out io.Writer) error {
 		return print(out, "no sessions")
 	}
 	for _, s := range st.Sessions {
-		state := "detached"
-		if s.Attached {
-			state = "attached"
+		state := "unreachable"
+		if s.Reachable {
+			state = "reachable"
 		}
 		mode := string(s.Mode)
 		if mode == "" {

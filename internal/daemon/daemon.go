@@ -45,11 +45,14 @@ type Status struct {
 type StatusEntry struct {
 	ID session.ID `json:"id"`
 	// Mode is "pty" or "acp": the client renders the two differently.
-	Mode     session.Mode `json:"mode"`
-	HostPID  int          `json:"host_pid"`
-	Command  string       `json:"command"`
-	Dir      string       `json:"dir"`
-	Attached bool         `json:"attached"`
+	Mode    session.Mode `json:"mode"`
+	HostPID int          `json:"host_pid"`
+	Command string       `json:"command"`
+	Dir     string       `json:"dir"`
+	// Reachable is true while this daemon still holds its connection to the
+	// session's host. A session whose host died, or that another client
+	// attached to directly, reports false.
+	Reachable bool `json:"reachable"`
 }
 
 // StartRequest asks the daemon for a session.

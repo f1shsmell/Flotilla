@@ -44,15 +44,27 @@ func Attach(ctx context.Context, reg session.Registry, token, stateDir string, l
 	fleet := Fleet{}
 	for _, rec := range records {
 		att, err := AttachOne(ctx, reg, rec.ID, token, stateDir)
-		if err != nil {
-			log.Warn("session host unreachable", "session", rec.ID, "pid", rec.PID, "err", err.Error())
-			fleet.Failures = append(fleet.Failures, fmt.Errorf("attach to session %q: %w", rec.ID, err))
+		if err == nil {
+			fleet.Attachments = append(fleet.Attachments, att)
+			log.Info("session reattached",
+				"session", rec.ID, "host_pid", att.Info.PID, "command", att.Info.Command)
 			continue
 		}
 
-		fleet.Attachments = append(fleet.Attachments, att)
-		log.Info("session reattached",
-			"session", rec.ID, "host_pid", att.Info.PID, "command", att.Info.Command)
+		// Deleting a record is destructive, so it takes two independent signals:
+		// nothing answers the endpoint and no process stands behind the pid. A
+		// host that is merely wedged keeps its record for the next attempt.
+		if !processAlive(rec.PID) {
+			if err := reg.Unpublish(rec.ID); err != nil {
+				log.Warn("cannot prune a stale host record", "session", rec.ID, "err", err.Error())
+			} else {
+				log.Info("pruned a stale host record", "session", rec.ID, "pid", rec.PID)
+			}
+			continue
+		}
+
+		log.Warn("session host unreachable", "session", rec.ID, "pid", rec.PID, "err", err.Error())
+		fleet.Failures = append(fleet.Failures, fmt.Errorf("attach to session %q: %w", rec.ID, err))
 	}
 
 	return fleet, nil

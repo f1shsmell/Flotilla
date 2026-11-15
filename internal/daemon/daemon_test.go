@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -175,9 +176,58 @@ func TestDaemonReportsSessionsItCanReach(t *testing.T) {
 	if len(st.Sessions) != 1 || st.Sessions[0].ID != "sess-status" {
 		t.Fatalf("status = %+v, want the one live session", st.Sessions)
 	}
-	if !st.Sessions[0].Attached {
-		t.Fatalf("session %q reports not attached", st.Sessions[0].ID)
+	if !st.Sessions[0].Reachable {
+		t.Fatalf("session %q reports unreachable", st.Sessions[0].ID)
 	}
+}
+
+// TestAttachPrunesARecordWhoseHostIsGone pins the cleanup: a record left behind
+// by a dead host must not read as a failure on every restart, forever.
+func TestAttachPrunesARecordWhoseHostIsGone(t *testing.T) {
+	dir := t.TempDir()
+	reg := session.NewRegistry(dir)
+
+	if err := reg.Publish(session.Record{
+		ID:       "sess-gone",
+		Endpoint: ipc.Address{Channel: "sess-gone", Name: "host"},
+		PID:      deadPID(t),
+		Started:  time.Now(),
+	}); err != nil {
+		t.Fatalf("publish a stale record: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if len(fleet.Attachments) != 0 || len(fleet.Failures) != 0 {
+		t.Fatalf("attach reported %d sessions and %d failures, want neither",
+			len(fleet.Attachments), len(fleet.Failures))
+	}
+	if _, err := reg.Read("sess-gone"); !errors.Is(err, session.ErrNoRecord) {
+		t.Fatalf("the stale record survived: %v", err)
+	}
+}
+
+// deadPID returns the pid of a process this test has already reaped.
+func deadPID(t *testing.T) int {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestNoSuchTestRuns")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start a throwaway process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("reap the throwaway process: %v", err)
+	}
+	if processAlive(pid) {
+		t.Skipf("pid %d was reused before the check", pid)
+	}
+	return pid
 }
 
 // TestDaemonSurvivesAHostThatCannotBeReached pins the honest half of the
@@ -191,13 +241,16 @@ func TestDaemonSurvivesAHostThatCannotBeReached(t *testing.T) {
 		t.Fatalf("the live host never published a record: %v", err)
 	}
 
-	// A record whose host is gone: the pipe name is real, nothing listens.
+	// A record whose host process is alive but whose endpoint answers nobody.
+	// The pipe name is real, nothing listens.
 	reg := session.NewRegistry(dir)
 	if err := reg.Publish(session.Record{
 		ID:       "sess-gone",
 		Endpoint: ipc.Address{Channel: "sess-gone", Name: "host"},
+		PID:      os.Getpid(),
+		Started:  time.Now(),
 	}); err != nil {
-		t.Fatalf("publish a stale record: %v", err)
+		t.Fatalf("publish an unreachable record: %v", err)
 	}
 
 	d := New(Config{Channel: "test", Token: token, StateDir: dir, Log: discardLogger()}, nil)
