@@ -200,7 +200,7 @@ func TestAttachPrunesARecordWhoseHostIsGone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
-	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger(), attachTimeout)
+	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger(), attachTimeout, nil)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -356,7 +356,7 @@ func talkToHost(ctx context.Context, t *testing.T, dir, token, line string) (str
 	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{
 		Token: token,
 		Role:  "test",
-		OnData: func(stream uint32, payload []byte) {
+		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			if stream == session.StreamOutput {
 				output <- string(payload)
 			}

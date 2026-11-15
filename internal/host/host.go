@@ -240,7 +240,7 @@ func (h *Host) attach(conn *ipc.Conn) {
 	}()
 }
 
-func (h *Host) handleCall(ctx context.Context, method string, params json.RawMessage) (any, error) {
+func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
 	switch method {
 	case session.MethodInfo:
 		return h.info(), nil
@@ -284,7 +284,7 @@ func (h *Host) info() session.Info {
 	}
 }
 
-func (h *Host) handleData(stream uint32, payload []byte) {
+func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {
 	if stream != session.StreamInput || h.pty == nil {
 		return
 	}

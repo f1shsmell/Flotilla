@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
 
@@ -17,12 +18,20 @@ const (
 	MethodSessionStart = "session.start"
 )
 
-func (d *Daemon) handleCall(ctx context.Context, method string, params json.RawMessage) (any, error) {
+func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, params json.RawMessage) (any, error) {
+	// A bound connection speaks for one session, so every call on it belongs to
+	// that session rather than to the control plane.
+	if id, ok := d.relay.sessionOf(peer); ok {
+		return d.relayCall(ctx, id, method, params)
+	}
+
 	switch method {
 	case MethodStatus:
 		return d.status(), nil
 	case MethodSessionStart:
 		return d.startSession(ctx, params)
+	case session.MethodAttach:
+		return d.attachClient(peer, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnknownMethod, method)
 	}
@@ -92,7 +101,7 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		return nil, fmt.Errorf("spawn session %q: %w", req.ID, err)
 	}
 
-	att, err := AttachOne(ctx, d.reg, req.ID, d.cfg.Token, d.cfg.StateDir)
+	att, err := AttachOne(ctx, d.reg, req.ID, d.cfg.Token, d.cfg.StateDir, d.hostHooks(req.ID))
 	if err != nil {
 		return nil, fmt.Errorf("attach the new session %q: %w", req.ID, err)
 	}
@@ -100,6 +109,7 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	d.mu.Lock()
 	d.fleet.Attachments = append(d.fleet.Attachments, att)
 	d.mu.Unlock()
+	d.watch(att)
 
 	d.cfg.Log.Info("session started",
 		"session", req.ID, "host_pid", att.Info.PID, "endpoint", endpoint.String())

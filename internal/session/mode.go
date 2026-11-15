@@ -31,6 +31,22 @@ const (
 	MethodPermissionReply = "session.permission.reply"
 )
 
+// MethodAttach binds one client connection to one session. The daemon serves it,
+// not the host: after it succeeds, that connection carries the session's calls,
+// its updates and its terminal bytes.
+const MethodAttach = "session.attach"
+
+// AttachRequest names the session a client wants to drive.
+type AttachRequest struct {
+	ID ID `json:"id"`
+}
+
+// AttachResponse reports what the session holds once the client is bound.
+type AttachResponse struct {
+	ID   ID   `json:"id"`
+	Info Info `json:"info"`
+}
+
 // PromptRequest is one turn's input.
 type PromptRequest struct {
 	// Text is the user's message.

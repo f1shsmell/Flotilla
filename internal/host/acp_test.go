@@ -95,7 +95,7 @@ func dialHost(t *testing.T, dir string, onUpdate func(session.UpdateMessage), on
 	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{
 		Token: "shared",
 		Role:  "test",
-		Handler: func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		Handler: func(_ context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
 			switch method {
 			case session.MethodUpdate:
 				var msg session.UpdateMessage

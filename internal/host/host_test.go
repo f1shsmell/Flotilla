@@ -122,7 +122,7 @@ func TestHostPipesClientInputToTheAgent(t *testing.T) {
 	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{
 		Token: "shared",
 		Role:  "test",
-		OnData: func(stream uint32, payload []byte) {
+		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			if stream == session.StreamOutput {
 				output <- string(payload)
 			}

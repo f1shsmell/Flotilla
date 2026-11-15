@@ -37,8 +37,9 @@ var ErrNoHosts = errors.New("daemon: no session hosts")
 
 // Attach dials every published host and asks what it holds. Each host gets
 // timeout of its own, so one that stopped answering costs a bounded wait
-// instead of the whole scan.
-func Attach(ctx context.Context, reg session.Registry, token, stateDir string, log *slog.Logger, timeout time.Duration) (Fleet, error) {
+// instead of the whole scan. hooks receive what each host sends afterwards; nil
+// means the fleet is only being counted.
+func Attach(ctx context.Context, reg session.Registry, token, stateDir string, log *slog.Logger, timeout time.Duration, hooks func(session.ID) HostHooks) (Fleet, error) {
 	records, err := reg.List()
 	if err != nil {
 		return Fleet{}, fmt.Errorf("list host records: %w", err)
@@ -46,7 +47,7 @@ func Attach(ctx context.Context, reg session.Registry, token, stateDir string, l
 
 	fleet := Fleet{}
 	for _, rec := range records {
-		att, err := attachOneWithin(ctx, timeout, reg, rec, token, stateDir)
+		att, err := attachOneWithin(ctx, timeout, reg, rec, token, stateDir, hooksFor(hooks, rec.ID))
 		if err == nil {
 			fleet.Attachments = append(fleet.Attachments, att)
 			log.Info("session reattached",
@@ -74,16 +75,25 @@ func Attach(ctx context.Context, reg session.Registry, token, stateDir string, l
 }
 
 // attachOneWithin is AttachOne under a budget of its own.
-func attachOneWithin(ctx context.Context, timeout time.Duration, reg session.Registry, rec session.Record, token, stateDir string) (Attachment, error) {
+func attachOneWithin(ctx context.Context, timeout time.Duration, reg session.Registry, rec session.Record, token, stateDir string, hooks HostHooks) (Attachment, error) {
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return AttachOne(hctx, reg, rec.ID, token, stateDir)
+	return AttachOne(hctx, reg, rec.ID, token, stateDir, hooks)
+}
+
+// hooksFor resolves the hooks for one session, tolerating a caller that only
+// wants the fleet counted.
+func hooksFor(hooks func(session.ID) HostHooks, id session.ID) HostHooks {
+	if hooks == nil {
+		return HostHooks{}
+	}
+	return hooks(id)
 }
 
 // AttachOne dials the host that published a record for id and asks it what it
 // holds. The record is the only source of the endpoint: no side guesses a name.
-func AttachOne(ctx context.Context, reg session.Registry, id session.ID, token, stateDir string) (Attachment, error) {
+func AttachOne(ctx context.Context, reg session.Registry, id session.ID, token, stateDir string, hooks HostHooks) (Attachment, error) {
 	rec, err := reg.Read(id)
 	if err != nil {
 		return Attachment{}, fmt.Errorf("read the record for session %q: %w", id, err)
@@ -92,7 +102,12 @@ func AttachOne(ctx context.Context, reg session.Registry, id session.ID, token, 
 		return Attachment{}, fmt.Errorf("session %q published no endpoint: %w", id, session.ErrNoRecord)
 	}
 
-	conn, err := ipc.Dial(ctx, rec.Endpoint, stateDir, ipc.Config{Token: token, Role: "daemon"})
+	conn, err := ipc.Dial(ctx, rec.Endpoint, stateDir, ipc.Config{
+		Token:   token,
+		Role:    "daemon",
+		Handler: hooks.Handler,
+		OnData:  hooks.OnData,
+	})
 	if err != nil {
 		return Attachment{}, fmt.Errorf("dial session %q: %w", id, err)
 	}
