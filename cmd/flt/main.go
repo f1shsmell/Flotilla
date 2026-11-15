@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"strings"
 	"time"
 
+	"github.com/f1shsmell/flotilla/internal/acp/probe"
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
@@ -38,6 +41,9 @@ func run(args []string, out io.Writer) error {
 	fs.Usage = func() { _, _ = io.WriteString(out, usage) }
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return fmt.Errorf("parse arguments: %w", err)
 	}
 
@@ -51,12 +57,30 @@ func run(args []string, out io.Writer) error {
 		fs.Usage()
 		return nil
 	case "version":
+		if err := rejectArgs(fs, command); err != nil {
+			return err
+		}
 		return print(out, version.String())
 	case "status":
+		if err := rejectArgs(fs, command); err != nil {
+			return err
+		}
 		return status(*channel, *asJSON, out)
+	case "probe":
+		return probeAgent(fs.Args()[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// rejectArgs refuses trailing arguments for a command that takes none. The flag
+// package stops at the first non-flag, so ignoring them would hide a typo such
+// as `flt status --json`, which then silently prints the human form.
+func rejectArgs(fs *flag.FlagSet, command string) error {
+	if fs.NArg() > 1 {
+		return fmt.Errorf("%s takes no arguments, got %q: flags go before the command", command, fs.Args()[1:])
+	}
+	return nil
 }
 
 // status reports the fleet a running daemon serves.
@@ -112,7 +136,92 @@ func status(channel string, asJSON bool, out io.Writer) error {
 	return nil
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n"
+// probeTimeout bounds one probe turn. A real agent turn is slow, but a hung
+// one must not hold the terminal for good.
+const probeTimeout = 5 * time.Minute
+
+// probeAgent runs one real turn against an agent and reports what came back.
+// It spends the user's own tokens, so it runs only when named explicitly.
+func probeAgent(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("flt probe", flag.ContinueOnError)
+	fs.SetOutput(out)
+	command := fs.String("command", "", "agent command to probe, as a binary and its arguments")
+	dir := fs.String("dir", "", "working directory for the turn")
+	prompt := fs.String("prompt", probe.DefaultPrompt, "prompt to send")
+	timeout := fs.Duration("timeout", probeTimeout, "give up after this long")
+
+	fs.Usage = func() {
+		_, _ = fmt.Fprint(out, "usage: flt probe [flags] [agent]\n\n"+
+			"Runs one real turn and prints what came back. It spends your own tokens.\n"+
+			"Tool calls are auto-approved; file access stays inside --dir; terminals\n"+
+			"are refused. A missing binary or login fails before the turn starts.\n\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("parse arguments: %w", err)
+	}
+
+	agent, err := probeTarget(*command, fs.Args())
+	if err != nil {
+		return err
+	}
+	// A missing binary or a missing login fails before any token is spent.
+	if err := agent.Available(); err != nil {
+		return fmt.Errorf("probe %s: %w", agent.Command, err)
+	}
+
+	workspace := *dir
+	if workspace == "" {
+		if workspace, err = os.Getwd(); err != nil {
+			return fmt.Errorf("resolve the working directory: %w", err)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+
+	res, err := probe.Run(ctx, agent, workspace, *prompt)
+	if err != nil {
+		return fmt.Errorf("probe %s: %w", agent.Command, err)
+	}
+	return print(out, res.Report())
+}
+
+// probeTarget resolves what to probe. With --command the remaining arguments
+// belong to the agent, which is what `--` is for; without it the first argument
+// names a known agent and any other is a typo worth refusing.
+func probeTarget(command string, rest []string) (probe.Agent, error) {
+	if command != "" {
+		fields := strings.Fields(command)
+		return probe.Agent{
+			Name:    fields[0],
+			Command: fields[0],
+			Args:    append(fields[1:], rest...),
+		}, nil
+	}
+
+	switch {
+	case len(rest) == 0:
+		return probe.Agent{}, fmt.Errorf("name an agent (%s) or pass --command", strings.Join(probe.Names(), ", "))
+	case len(rest) > 1:
+		return probe.Agent{}, fmt.Errorf("unexpected arguments %q: flags go before the agent name", rest[1:])
+	}
+
+	agent, err := probe.Lookup(rest[0])
+	if err != nil {
+		return probe.Agent{}, fmt.Errorf("resolve the agent to probe: %w", err)
+	}
+	return agent, nil
+}
+
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  probe    run one real turn against an agent and report what came back\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {

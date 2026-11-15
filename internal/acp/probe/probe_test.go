@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,17 @@ func TestAvailableReportsAMissingBinary(t *testing.T) {
 	}
 	if err := missing.Available(); err == nil {
 		t.Fatal("Available reported a missing binary as present")
+	}
+
+	// A command the user names has no login hint, so the message must not
+	// carry an empty pair of parentheses.
+	bare := probe.Agent{Name: "absent", Command: "flotilla-no-such-agent-binary"}
+	err := bare.Available()
+	if err == nil {
+		t.Fatal("Available reported a missing binary as present")
+	}
+	if strings.Contains(err.Error(), "()") {
+		t.Fatalf("error %q carries an empty hint", err)
 	}
 
 	present := probe.Agent{Name: "go", Command: "go"}

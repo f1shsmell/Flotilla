@@ -1,0 +1,7 @@
+# A package listed here may not fall below its floor. Raise a floor when the
+# real number rises; never lower one to make a build pass.
+#
+# Sensitive paths only, per FLOTILLA.md: a wrong change under them is a hole in
+# a boundary. Add the package the same commit that lands the boundary.
+internal/ipc 75
+internal/host 75

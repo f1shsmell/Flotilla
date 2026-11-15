@@ -16,9 +16,10 @@ import (
 	sdk "github.com/coder/acp-go-sdk"
 )
 
-// maxReadBytes bounds one file reply. A reply rides one transport frame, so a
-// larger file is refused before it is loaded rather than after it fails to send.
-const maxReadBytes = 1 << 20
+// defaultMaxReadBytes bounds one file reply when the caller names no limit. A
+// reply rides one transport frame, so a larger file is refused before it is
+// loaded rather than after it fails to send.
+const defaultMaxReadBytes = 1 << 20
 
 // Policy decides what an agent may do without asking. It answers the same
 // question for every permission request, so a session's autonomy is one setting
@@ -109,9 +110,20 @@ type Config struct {
 	Policy Policy
 	// Asker answers requests the policy does not decide on its own.
 	Asker Asker
+	// MaxReadBytes bounds one file reply. Zero uses the default; the host sets
+	// it from the transport's frame limit, which is the only place that knows
+	// how much one reply can carry.
+	MaxReadBytes int
 	// OnUpdate receives every session update. It is called from the reader
 	// goroutine, so it must not block.
 	OnUpdate func(Update)
+}
+
+func (c Config) maxReadBytes() int {
+	if c.MaxReadBytes > 0 {
+		return c.MaxReadBytes
+	}
+	return defaultMaxReadBytes
 }
 
 // Client is the client side of an ACP conversation: it serves the agent's file
@@ -143,12 +155,13 @@ func (c *Client) ReadTextFile(_ context.Context, params sdk.ReadTextFileRequest)
 	}
 	defer func() { _ = f.Close() }()
 
-	content, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
+	limit := c.cfg.maxReadBytes()
+	content, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
 		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: %w", path, err)
 	}
-	if len(content) > maxReadBytes {
-		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: over %d bytes: %w", path, maxReadBytes, ErrFileTooLarge)
+	if len(content) > limit {
+		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: over %d bytes: %w", path, limit, ErrFileTooLarge)
 	}
 
 	return sdk.ReadTextFileResponse{Content: sliceLines(string(content), params.Line, params.Limit)}, nil

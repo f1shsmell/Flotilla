@@ -14,6 +14,8 @@ import (
 
 // Handler serves one inbound method call. Returning an error sends the peer a
 // failure reply; a notification has no reply channel, so its error is dropped.
+// Calls run concurrently; notifications run in arrival order on one goroutine,
+// so a notification handler that blocks stalls the stream behind it.
 type Handler func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
 // DataSink receives terminal bytes for one stream.
@@ -74,6 +76,8 @@ type Conn struct {
 	pendMu  sync.Mutex
 	pending map[int64]chan rpcMessage
 
+	notifyQ chan rpcMessage
+
 	closed       chan struct{}
 	shutdownOnce sync.Once
 	cause        atomic.Pointer[error]
@@ -111,6 +115,7 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 
 	c.peer = hello.Role
 	c.session = hello.Session
+	go c.readNotifications()
 	go c.readLoop()
 	return c, nil
 }
@@ -157,6 +162,7 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 	}
 
 	c.peer = hello.Role
+	go c.readNotifications()
 	go c.readLoop()
 	return c, nil
 }
@@ -172,6 +178,7 @@ func newConn(nc net.Conn, cfg Config) *Conn {
 		handler: cfg.Handler,
 		onData:  cfg.OnData,
 		pending: make(map[int64]chan rpcMessage),
+		notifyQ: make(chan rpcMessage, QueueDepth),
 		closed:  make(chan struct{}),
 	}
 }
@@ -365,9 +372,31 @@ func (c *Conn) handleControl(payload []byte) bool {
 	case msg.Method == "":
 		c.shutdown(fmt.Errorf("control frame with neither id nor method: %w", ErrProtocol))
 		return false
+	case msg.ID == nil:
+		select {
+		case c.notifyQ <- msg:
+			return true
+		case <-c.closed:
+			return false
+		}
 	default:
 		go c.dispatch(msg)
 		return true
+	}
+}
+
+// readNotifications serves inbound notifications in arrival order from one
+// goroutine: an update stream is meaning, and a goroutine per message reorders
+// it. A queue rather than the read loop keeps a handler free to call back
+// without waiting on the reply only the read loop can deliver.
+func (c *Conn) readNotifications() {
+	for {
+		select {
+		case <-c.closed:
+			return
+		case msg := <-c.notifyQ:
+			c.dispatch(msg)
+		}
 	}
 }
 

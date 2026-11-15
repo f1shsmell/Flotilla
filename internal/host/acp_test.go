@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
 	"github.com/f1shsmell/flotilla/internal/ipc"
@@ -271,4 +273,111 @@ func TestPTYHostRejectsACPCalls(t *testing.T) {
 	if _, err := conn.Call(dialCtx, session.MethodPrompt, session.PromptRequest{Text: "hi"}); err == nil {
 		t.Fatal("a PTY session accepted a prompt call")
 	}
+}
+
+// TestChunkUpdateKeepsEveryCharacter pins the split itself: a piece never
+// exceeds the budget and never cuts a rune in half.
+func TestChunkUpdateKeepsEveryCharacter(t *testing.T) {
+	msg := session.UpdateMessage{
+		Kind: acp.UpdateMessage,
+		Text: strings.Repeat("héllo wörld ", 4*updateTextBudget/len("héllo wörld ")),
+	}
+
+	parts := chunkUpdate(msg, updateTextBudget)
+	if len(parts) < 4 {
+		t.Fatalf("split into %d parts, want the text spread over several", len(parts))
+	}
+
+	var joined strings.Builder
+	for i, part := range parts {
+		if len(part.Text) > updateTextBudget {
+			t.Fatalf("part %d carries %d bytes, over the %d budget", i, len(part.Text), updateTextBudget)
+		}
+		if !utf8.ValidString(part.Text) {
+			t.Fatalf("part %d split a rune", i)
+		}
+		if part.Kind != msg.Kind {
+			t.Fatalf("part %d lost its kind", i)
+		}
+		joined.WriteString(part.Text)
+	}
+	if joined.String() != msg.Text {
+		t.Fatalf("the parts reassemble to %d bytes, want %d", joined.Len(), len(msg.Text))
+	}
+}
+
+// TestChunkUpdateLeavesASmallUpdateAlone keeps the common case one notification.
+func TestChunkUpdateLeavesASmallUpdateAlone(t *testing.T) {
+	msg := session.UpdateMessage{Kind: acp.UpdateMessage, Text: "short"}
+
+	parts := chunkUpdate(msg, updateTextBudget)
+	if len(parts) != 1 || parts[0] != msg {
+		t.Fatalf("chunkUpdate returned %+v, want the message untouched", parts)
+	}
+}
+
+// TestACPHostSendsAnUpdateTooLargeForOneFrame pins what used to vanish: the
+// wire refused an update past the frame limit and the client never saw it.
+func TestACPHostSendsAnUpdateTooLargeForOneFrame(t *testing.T) {
+	h, dir := startACPHost(t, acp.Supervised)
+
+	big := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 35000)
+	if len(big) <= ipc.MaxFrameSize {
+		t.Fatalf("the fixture is %d bytes, it must exceed the %d-byte frame", len(big), ipc.MaxFrameSize)
+	}
+
+	var (
+		mu   sync.Mutex
+		got  strings.Builder
+		done = make(chan struct{}, 1)
+	)
+
+	dialHost(t, dir, func(msg session.UpdateMessage) {
+		mu.Lock()
+		got.WriteString(msg.Text)
+		complete := got.Len() >= len(big)
+		mu.Unlock()
+
+		if complete {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}
+	}, nil)
+
+	waitForAttach(t, h)
+	h.forwardUpdate(acp.Update{Kind: acp.UpdateMessage, Text: big})
+
+	select {
+	case <-done:
+	case <-time.After(waitFor):
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("the client assembled %d of %d bytes", got.Len(), len(big))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got.String() != big {
+		t.Fatalf("the client assembled %d bytes, want %d", got.Len(), len(big))
+	}
+}
+
+// waitForAttach blocks until the host has a client, which Serve does just after
+// the handshake and therefore just after Dial returns.
+func waitForAttach(t *testing.T, h *Host) {
+	t.Helper()
+
+	deadline := time.Now().Add(waitFor)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		attached := h.conn != nil
+		h.mu.Unlock()
+		if attached {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the host never attached the client")
 }
