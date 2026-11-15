@@ -126,13 +126,37 @@ func TestReadTextFileSlicesLines(t *testing.T) {
 func TestReadTextFileRefusesAFileBeyondOneFrame(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "big.txt")
-	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxReadBytes+1)), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", defaultMaxReadBytes+1)), 0o600); err != nil {
 		t.Fatalf("write the fixture: %v", err)
 	}
 
 	c := NewClient(Config{Workspace: root})
 	if _, err := c.ReadTextFile(context.Background(), sdk.ReadTextFileRequest{Path: path}); !errors.Is(err, ErrFileTooLarge) {
 		t.Fatalf("ReadTextFile of an oversized file = %v, want ErrFileTooLarge", err)
+	}
+}
+
+// TestReadTextFileHonoursTheCallersLimit pins the knob the host sets from the
+// transport's frame limit, so the number lives where the wire is known.
+func TestReadTextFileHonoursTheCallersLimit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(path, []byte("0123456789abcdef"), 0o600); err != nil {
+		t.Fatalf("write the fixture: %v", err)
+	}
+
+	c := NewClient(Config{Workspace: root, MaxReadBytes: 8})
+	if _, err := c.ReadTextFile(context.Background(), sdk.ReadTextFileRequest{Path: path}); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("ReadTextFile past a 8-byte limit = %v, want ErrFileTooLarge", err)
+	}
+
+	c = NewClient(Config{Workspace: root, MaxReadBytes: len("0123456789abcdef")})
+	resp, err := c.ReadTextFile(context.Background(), sdk.ReadTextFileRequest{Path: path})
+	if err != nil {
+		t.Fatalf("ReadTextFile at the limit: %v", err)
+	}
+	if resp.Content != "0123456789abcdef" {
+		t.Fatalf("content = %q, want the whole file", resp.Content)
 	}
 }
 

@@ -49,10 +49,11 @@ func (h *Host) startACP(ctx context.Context) error {
 		Dir:     h.cfg.Dir,
 		Env:     h.cfg.Env,
 	}, acp.Config{
-		Workspace: h.cfg.Dir,
-		Policy:    h.cfg.Policy,
-		Asker:     h.askClient,
-		OnUpdate:  h.forwardUpdate,
+		Workspace:    h.cfg.Dir,
+		Policy:       h.cfg.Policy,
+		Asker:        h.askClient,
+		MaxReadBytes: ipc.MaxFrameSize,
+		OnUpdate:     h.forwardUpdate,
 	})
 	if err != nil {
 		return fmt.Errorf("open the acp connection: %w", err)
