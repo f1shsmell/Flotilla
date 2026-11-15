@@ -92,7 +92,13 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		}
 		log.Info("session host spawned", "session", req.Session, "pid", cmd.Process.Pid)
 
-		if err := waitForRecord(ctx, session.NewRegistry(req.StateDir), req.Session); err != nil {
+		// The host publishes before it listens, so a record is the only proof it
+		// came up. A host that dies first must say so now, not after the caller's
+		// deadline.
+		exited := make(chan error, 1)
+		go func() { exited <- cmd.Wait() }()
+
+		if err := waitForRecord(ctx, session.NewRegistry(req.StateDir), req.Session, exited); err != nil {
 			return ipc.Address{}, err
 		}
 		return ipc.Address{Channel: string(req.Session), Name: "host"}, nil
@@ -100,8 +106,9 @@ func ExecSpawner(log *slog.Logger) Spawner {
 }
 
 // waitForRecord blocks until the host has published its record, so the daemon
-// attaches to a listening host instead of racing its startup.
-func waitForRecord(ctx context.Context, reg session.Registry, id session.ID) error {
+// attaches to a listening host instead of racing its startup. A host that exits
+// first ends the wait with its own error.
+func waitForRecord(ctx context.Context, reg session.Registry, id session.ID, exited <-chan error) error {
 	for {
 		if _, err := reg.Read(id); err == nil {
 			return nil
@@ -110,6 +117,8 @@ func waitForRecord(ctx context.Context, reg session.Registry, id session.ID) err
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for session %q to publish: %w", id, ctx.Err())
+		case err := <-exited:
+			return fmt.Errorf("session %q exited before it published: %w (its stderr is the daemon's)", id, err)
 		case <-time.After(recordPollInterval):
 		}
 	}
