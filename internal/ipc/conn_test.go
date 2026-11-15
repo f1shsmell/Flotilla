@@ -257,6 +257,47 @@ func TestDialHonoursTheCallersDeadline(t *testing.T) {
 	}
 }
 
+// TestNotificationsKeepTheirOrder pins the order of an inbound stream: an
+// update sequence is meaning, so a goroutine per notification is a reorder.
+// The first handler is deliberately slow, the way a real one that forwards and
+// marshals is: with a goroutine per message the rest overtake it.
+func TestNotificationsKeepTheirOrder(t *testing.T) {
+	const count = 50
+
+	seen := make(chan int, count)
+	_, client := servePair(t,
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, params json.RawMessage) (any, error) {
+			var n int
+			if err := json.Unmarshal(params, &n); err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+			seen <- n
+			return nil, nil
+		}},
+		Config{Token: "shared", Role: "cli"},
+	)
+
+	for i := 0; i < count; i++ {
+		if err := client.Notify("tick", i); err != nil {
+			t.Fatalf("notify %d: %v", i, err)
+		}
+	}
+
+	for want := 0; want < count; want++ {
+		select {
+		case got := <-seen:
+			if got != want {
+				t.Fatalf("notification %d arrived as %d", want, got)
+			}
+		case <-time.After(testTimeout):
+			t.Fatalf("only %d of %d notifications arrived", want, count)
+		}
+	}
+}
+
 func TestCallRoundTrips(t *testing.T) {
 	served, client := servePair(t,
 		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, method string, params json.RawMessage) (any, error) {
