@@ -16,20 +16,26 @@ func TestResolveKeepsFilesInsideTheWorkspace(t *testing.T) {
 	root := t.TempDir()
 	c := NewClient(Config{Workspace: root})
 
+	// Root and candidate are both normalised, so the result may name the
+	// workspace by its long form where the input used a short one. What matters
+	// is that the file the agent asked for is still the one it gets.
 	inner := filepath.Join(root, "src", "main.go")
 	got, err := c.resolve(inner)
 	if err != nil {
 		t.Fatalf("resolve(%q): %v", inner, err)
 	}
-	if got != inner {
-		t.Fatalf("resolve(%q) = %q, want it unchanged", inner, got)
+	if !inside(resolveExistingAncestor(root), got) {
+		t.Fatalf("resolve(%q) = %q, outside the workspace", inner, got)
+	}
+	if filepath.Base(got) != "main.go" {
+		t.Fatalf("resolve(%q) = %q, want the same file", inner, got)
 	}
 
 	relative, err := c.resolve("src/main.go")
 	if err != nil {
 		t.Fatalf("resolve a relative path: %v", err)
 	}
-	if !inside(root, relative) {
+	if !inside(resolveExistingAncestor(root), relative) {
 		t.Fatalf("resolve turned a relative path into %q, outside %q", relative, root)
 	}
 }
