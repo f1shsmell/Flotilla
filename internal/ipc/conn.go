@@ -14,6 +14,8 @@ import (
 
 // Handler serves one inbound method call. Returning an error sends the peer a
 // failure reply; a notification has no reply channel, so its error is dropped.
+// Calls run concurrently; notifications run in arrival order on one goroutine,
+// so a notification handler that blocks stalls the stream behind it.
 type Handler func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
 // DataSink receives terminal bytes for one stream.

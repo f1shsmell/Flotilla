@@ -41,6 +41,9 @@ func run(args []string, out io.Writer) error {
 	fs.Usage = func() { _, _ = io.WriteString(out, usage) }
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return fmt.Errorf("parse arguments: %w", err)
 	}
 
@@ -147,7 +150,18 @@ func probeAgent(args []string, out io.Writer) error {
 	prompt := fs.String("prompt", probe.DefaultPrompt, "prompt to send")
 	timeout := fs.Duration("timeout", probeTimeout, "give up after this long")
 
+	fs.Usage = func() {
+		_, _ = fmt.Fprint(out, "usage: flt probe [flags] [agent]\n\n"+
+			"Runs one real turn and prints what came back. It spends your own tokens.\n"+
+			"Tool calls are auto-approved; file access stays inside --dir; terminals\n"+
+			"are refused. A missing binary or login fails before the turn starts.\n\n")
+		fs.PrintDefaults()
+	}
+
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return fmt.Errorf("parse arguments: %w", err)
 	}
 

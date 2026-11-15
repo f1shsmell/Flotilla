@@ -103,3 +103,18 @@ func TestStatusRefusesTrailingArguments(t *testing.T) {
 		t.Fatalf("status with a trailing flag = %v, want it refused", err)
 	}
 }
+
+// TestHelpExitsCleanly pins -h as a normal outcome: a help request is not a
+// parse failure, and exiting non-zero makes `flt -h` look broken in scripts.
+func TestHelpExitsCleanly(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"probe", "-h"}} {
+		var out bytes.Buffer
+
+		if err := run(args, &out); err != nil {
+			t.Fatalf("run(%q) = %v, want a clean exit", args, err)
+		}
+		if out.Len() == 0 {
+			t.Fatalf("run(%q) printed nothing", args)
+		}
+	}
+}
