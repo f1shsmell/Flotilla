@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -34,8 +35,10 @@ type Fleet struct {
 // ErrNoHosts reports a scan that found nothing reachable.
 var ErrNoHosts = errors.New("daemon: no session hosts")
 
-// Attach dials every published host and asks what it holds.
-func Attach(ctx context.Context, reg session.Registry, token, stateDir string, log *slog.Logger) (Fleet, error) {
+// Attach dials every published host and asks what it holds. Each host gets
+// timeout of its own, so one that stopped answering costs a bounded wait
+// instead of the whole scan.
+func Attach(ctx context.Context, reg session.Registry, token, stateDir string, log *slog.Logger, timeout time.Duration) (Fleet, error) {
 	records, err := reg.List()
 	if err != nil {
 		return Fleet{}, fmt.Errorf("list host records: %w", err)
@@ -43,7 +46,7 @@ func Attach(ctx context.Context, reg session.Registry, token, stateDir string, l
 
 	fleet := Fleet{}
 	for _, rec := range records {
-		att, err := AttachOne(ctx, reg, rec.ID, token, stateDir)
+		att, err := attachOneWithin(ctx, timeout, reg, rec, token, stateDir)
 		if err == nil {
 			fleet.Attachments = append(fleet.Attachments, att)
 			log.Info("session reattached",
@@ -68,6 +71,14 @@ func Attach(ctx context.Context, reg session.Registry, token, stateDir string, l
 	}
 
 	return fleet, nil
+}
+
+// attachOneWithin is AttachOne under a budget of its own.
+func attachOneWithin(ctx context.Context, timeout time.Duration, reg session.Registry, rec session.Record, token, stateDir string) (Attachment, error) {
+	hctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return AttachOne(hctx, reg, rec.ID, token, stateDir)
 }
 
 // AttachOne dials the host that published a record for id and asks it what it

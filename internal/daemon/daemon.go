@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -28,8 +29,22 @@ type Config struct {
 	StateDir string
 	// HostBinary is the flt-session-host executable spawned for new sessions.
 	HostBinary string
+	// AttachTimeout bounds the wait for one host during a fleet scan. Zero uses
+	// the default: a host that accepts the pipe and then stops answering must
+	// not hold the scan, which runs before the daemon listens.
+	AttachTimeout time.Duration
 	// Log receives the daemon's diagnostics.
 	Log *slog.Logger
+}
+
+// attachTimeout is the default bound on the wait for one host.
+const attachTimeout = 5 * time.Second
+
+func (c Config) attachTimeout() time.Duration {
+	if c.AttachTimeout > 0 {
+		return c.AttachTimeout
+	}
+	return attachTimeout
 }
 
 // Status is what the daemon reports to a client.
@@ -157,7 +172,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 // Reattach rebuilds the fleet from the records on disk. A daemon restart costs
 // nothing but this scan: the hosts were never waiting on the daemon.
 func (d *Daemon) Reattach(ctx context.Context) error {
-	fleet, err := Attach(ctx, d.reg, d.cfg.Token, d.cfg.StateDir, d.cfg.Log)
+	fleet, err := Attach(ctx, d.reg, d.cfg.Token, d.cfg.StateDir, d.cfg.Log, d.cfg.attachTimeout())
 	if err != nil {
 		return err
 	}

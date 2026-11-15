@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -199,7 +200,7 @@ func TestAttachPrunesARecordWhoseHostIsGone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
-	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger())
+	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger(), attachTimeout)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -272,6 +273,73 @@ func TestDaemonSurvivesAHostThatCannotBeReached(t *testing.T) {
 	}
 	if len(fleet.Failures) != 1 {
 		t.Fatalf("reported %d failures, want the one unreachable host", len(fleet.Failures))
+	}
+}
+
+// TestReattachDoesNotStallOnAHostThatStopsAnswering pins the startup path: a
+// host that accepts the pipe and then answers nothing must cost one bounded
+// wait, not the whole daemon. Reattach runs before the daemon listens, so a
+// stall here is a daemon that never becomes reachable.
+func TestReattachDoesNotStallOnAHostThatStopsAnswering(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	addr := ipc.Address{Channel: "sess-wedged", Name: "host"}
+	l, err := ipc.Listen(addr, dir)
+	if err != nil {
+		t.Fatalf("listen for the wedged host: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	// Accept, then say nothing: the dial succeeds and the handshake never does.
+	heldc := make(chan net.Conn, 1)
+	go func() {
+		nc, err := l.Accept()
+		if err == nil {
+			heldc <- nc
+		}
+	}()
+	t.Cleanup(func() {
+		select {
+		case nc := <-heldc:
+			_ = nc.Close()
+		default:
+		}
+	})
+
+	if err := session.NewRegistry(dir).Publish(session.Record{
+		ID:       "sess-wedged",
+		Endpoint: addr,
+		PID:      os.Getpid(),
+		Started:  time.Now(),
+	}); err != nil {
+		t.Fatalf("publish the wedged record: %v", err)
+	}
+
+	d := New(Config{
+		Channel:       "test",
+		Token:         token,
+		StateDir:      dir,
+		Log:           discardLogger(),
+		AttachTimeout: 200 * time.Millisecond,
+	}, nil)
+
+	// A hang guard, not a condition: the assertion is the elapsed time.
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	started := time.Now()
+	if err := d.Reattach(ctx); err != nil {
+		t.Fatalf("Reattach: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("reattach waited %s on a host that answers nothing", elapsed.Round(time.Millisecond))
+	}
+
+	fleet := d.Fleet()
+	if len(fleet.Attachments) != 0 || len(fleet.Failures) != 1 {
+		t.Fatalf("fleet holds %d sessions and %d failures, want the one wedged host reported",
+			len(fleet.Attachments), len(fleet.Failures))
 	}
 }
 
