@@ -26,6 +26,8 @@ export interface StartRequest {
   args: string[];
   dir: string;
   policy?: string;
+  // worktree, when set, runs the session in a fresh worktree of repo.
+  worktree?: { repo: string; branch: string };
 }
 
 // splitArgs turns the form's argument line into argv: spaces separate, double

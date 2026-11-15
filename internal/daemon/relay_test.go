@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -416,5 +417,81 @@ func TestTheDaemonTakesBackToBackClients(t *testing.T) {
 			t.Fatalf("dial %d of 25: %v", i+1, err)
 		}
 		conn.Close()
+	}
+}
+
+// initGitRepo makes a repository with one commit, a .gitignore that keeps .env
+// out of git, and a .worktreeinclude that asks for it anyway.
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+
+	git("init", "-b", "main")
+	for name, content := range map[string]string{
+		"readme.md":        "hello\n",
+		".gitignore":       ".env\n",
+		".worktreeinclude": ".env\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	git("add", ".")
+	git("commit", "-m", "init")
+
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	return dir
+}
+
+// TestStartRunsTheSessionInAWorktree pins the daemon's half of the slice: a
+// request for a worktree becomes the directory the agent runs in.
+func TestStartRunsTheSessionInAWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+
+	dir, included, skipped, err := worktreeFor(context.Background(), StartRequest{
+		ID:       "sess-wt",
+		Worktree: &WorktreeRequest{Repo: repo, Branch: "feat/session"},
+	})
+	if err != nil {
+		t.Fatalf("worktreeFor: %v", err)
+	}
+
+	if dir != filepath.Join(filepath.Dir(repo), filepath.Base(repo)+"-feat-session") {
+		t.Fatalf("session dir = %q, want the worktree beside the repository", dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".env")); err != nil {
+		t.Fatalf("the worktree is missing its included .env: %v", err)
+	}
+	if len(included) != 1 || len(skipped) != 0 {
+		t.Fatalf("included = %v, skipped = %v; want the one .env and nothing skipped", included, skipped)
+	}
+}
+
+// TestStartWithoutAWorktreeKeepsTheCallersDirectory keeps the simple case.
+func TestStartWithoutAWorktreeKeepsTheCallersDirectory(t *testing.T) {
+	dir, included, skipped, err := worktreeFor(context.Background(), StartRequest{
+		ID:  "sess-plain",
+		Dir: "/tmp/wherever",
+	})
+	if err != nil {
+		t.Fatalf("worktreeFor: %v", err)
+	}
+	if dir != "/tmp/wherever" || included != nil || skipped != nil {
+		t.Fatalf("worktreeFor = (%q, %v, %v), want the caller's directory untouched", dir, included, skipped)
 	}
 }

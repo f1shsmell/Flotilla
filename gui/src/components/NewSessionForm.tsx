@@ -12,6 +12,8 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [dir, setDir] = useState("");
+  const [repo, setRepo] = useState("");
+  const [branch, setBranch] = useState("");
   const [mode, setMode] = useState("acp");
   const [policy, setPolicy] = useState("supervised");
   const [busy, setBusy] = useState(false);
@@ -26,13 +28,19 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
     setBusy(true);
     setError(null);
     try {
+      const worktree =
+        repo.trim() !== "" && branch.trim() !== ""
+          ? { repo: repo.trim(), branch: branch.trim() }
+          : undefined;
+
       await onStart({
         id: `sess-${Date.now().toString(36)}`,
         mode,
         command: name,
         args: splitArgs(args),
-        dir: dir.trim(),
+        dir: worktree ? "" : dir.trim(),
         policy: mode === "acp" ? policy : undefined,
+        worktree,
       });
       setCommand("");
       setArgs("");
@@ -67,6 +75,16 @@ export function NewSessionForm({ onStart }: Props): React.ReactElement {
         value={dir}
         placeholder="working directory (optional)"
         onChange={(event) => setDir(event.target.value)}
+      />
+      <input
+        value={repo}
+        placeholder="worktree of repository (optional)"
+        onChange={(event) => setRepo(event.target.value)}
+      />
+      <input
+        value={branch}
+        placeholder="new branch for the worktree"
+        onChange={(event) => setBranch(event.target.value)}
       />
 
       <div className="row">

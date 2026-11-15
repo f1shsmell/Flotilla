@@ -128,10 +128,13 @@ export async function run(target: BrowserWindow): Promise<boolean> {
           element.dispatchEvent(new Event(
             element.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
         };
-        const [command, args, dir] = document.querySelectorAll(".new-session input");
+        const [command, args, dir, repo, branch] =
+          document.querySelectorAll(".new-session input");
         setValue(command, fields.command);
         setValue(args, fields.args ?? "");
         setValue(dir, fields.dir ?? "");
+        setValue(repo, fields.repo ?? "");
+        setValue(branch, fields.branch ?? "");
         if (fields.mode) {
           setValue(document.querySelector(".new-session select"), fields.mode);
         }
