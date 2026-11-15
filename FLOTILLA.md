@@ -36,7 +36,7 @@ protocol).
 ## Conventions
 
 - Monorepo: one Go module with `cmd/{flt,flt-daemon,flt-session-host}` and
-  `internal/`, plus `gui/` (Electron + TS), `adapters/`, `docs/`. Dependency
+  `internal/`, plus `gui/` (Electron + React + TS), `adapters/`, `docs/`. Dependency
   direction: `gui → daemon → session-host`; adapters are data loaded by the
   host engine. Contract types (IPC messages, adapter schema) live in one Go
   package; TS types are generated from it (tygo/go2ts) or held by a wire-parity
@@ -52,6 +52,10 @@ protocol).
   it; hosts outlive the daemon.
 - Electron baseline: renderer contextIsolation on, nodeIntegration off, preload
   bridge only; the pipe token lives in the main process.
+- GUI rendering: React over one store, and components project canonical state
+  rather than owning it. A streamed update flushes on a frame, never per chunk;
+  xterm.js is held by a ref and never re-created by a render; no component or
+  state library, so the UI stays dumb and the wire stays the only contract.
 - Errors carry identity — a typed code or sentinel, never a sentence. Whoever
   first knows why an operation failed owns its class; a later layer projects
   the class, never re-derives it from prose.
