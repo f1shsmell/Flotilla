@@ -47,3 +47,7 @@ jobs:
       - run: go build ./...
 
       - run: go test ./...
+
+      - name: coverage floor
+        shell: bash
+        run: bash scripts/check-coverage.sh

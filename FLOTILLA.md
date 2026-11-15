@@ -109,6 +109,7 @@ gofmt -l <changed Go files>           # formatting; empty output = clean
 go vet ./...
 golangci-lint run                     # at CI's pin
 go test <changed packages>            # plus the packages that import them
+bash scripts/check-coverage.sh        # sensitive paths, when they change
 # gui changes:
 pnpm --dir gui lint && pnpm --dir gui test
 ```
@@ -122,7 +123,8 @@ change as verified.
 
 A wrong change under these paths is a hole in a boundary, not a feature bug.
 Every change under them gets full review plus security review regardless of
-author, and holds a coverage floor that ratchets up, never down. The list
+author, and holds a coverage floor that ratchets up, never down: the floor per
+package lives in `coverage-floor.txt`, and CI fails below it. The list
 activates as the code lands:
 
 - sensitive: internal/ipc/** (named-pipe auth, token handling)
