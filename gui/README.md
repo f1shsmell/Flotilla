@@ -26,6 +26,31 @@ pnpm build    # tsc for electron/ and vite for the renderer
 pnpm start    # electron ., which loads dist/, so build first
 ```
 
+## Building an installer
+
+```bash
+pnpm dist     # tsc + vite, then the Go binaries, then electron-builder (NSIS)
+```
+
+`scripts/bundle-binaries.mjs` builds `flt-daemon` and `flt-session-host` into
+`resources/bin`, which electron-builder copies beside the app; the daemon looks
+for its session host in its own directory, so the two travel together. An
+installed window starts the daemon from `resources/bin` and only falls back to
+`PATH` when that is missing.
+
+Two things bite a first build:
+
+- electron-builder downloads NSIS and winCodeSign on first use. Behind a slow or
+  filtered network, point it at a mirror with
+  `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`.
+- pnpm 11 refuses to run a dependency's build script unless it is allowed;
+  `.npmrc` sets `strict-dep-builds=false`, which keeps `pnpm install` working
+  without an interactive approval.
+
+The installer is unsigned unless `CSC_LINK` and `CSC_KEY_PASSWORD` are set. An
+unsigned build is what CI produces today; `RELEASING.md` records what has to be
+true before a signed one ships.
+
 ## Environment
 
 | variable | meaning |

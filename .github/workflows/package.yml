@@ -1,0 +1,52 @@
+name: package
+
+# Building an installer needs the Electron binary and NSIS, which a pull request
+# should not pay for. It runs when asked, and on a release tag.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: installer (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: gui/pnpm-lock.yaml
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install
+        run: pnpm --dir gui install --frozen-lockfile
+
+      # The window, the Go binaries it spawns, and the NSIS installer.
+      - name: build the installer
+        run: pnpm --dir gui dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flotilla-installer
+          path: gui/release/*.exe
+          if-no-files-found: error

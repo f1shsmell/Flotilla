@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import { DaemonClient, type ClientHandlers } from "./client";
 import { endpoint, resolvePaths } from "./home";
@@ -57,13 +58,31 @@ async function start(binary: string, channel: string): Promise<void> {
   });
 }
 
+// bundledDaemon is the daemon an installed build ships beside the app, which is
+// what an installed copy must run: PATH belongs to the machine, not to us.
+async function bundledDaemon(): Promise<string | null> {
+  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!resources) {
+    return null;
+  }
+
+  const candidate = path.join(resources, "bin", process.platform === "win32" ? "flt-daemon.exe" : "flt-daemon");
+  try {
+    await fs.access(candidate);
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 // ensure returns a client, starting the daemon when nobody is listening. The
 // daemon outlives the window, so a failure to start is reported, never hidden.
 export async function ensure(options: EnsureOptions): Promise<DaemonClient> {
   try {
     return await connect(options.channel, options.handlers);
   } catch (first) {
-    const binary = options.binary ?? process.env.FLT_DAEMON_BIN ?? "flt-daemon";
+    const binary =
+      options.binary ?? process.env.FLT_DAEMON_BIN ?? (await bundledDaemon()) ?? "flt-daemon";
     await start(binary, options.channel);
 
     const deadline = Date.now() + (options.timeoutMs ?? 10000);
