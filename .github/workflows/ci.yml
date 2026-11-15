@@ -51,3 +51,43 @@ jobs:
       - name: coverage floor
         shell: bash
         run: bash scripts/check-coverage.sh
+
+  gui:
+    name: gui (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: gui/pnpm-lock.yaml
+
+      # The GUI is tested headlessly, so the Electron binary is not needed here.
+      - name: install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: pnpm --dir gui install --frozen-lockfile
+
+      - run: pnpm --dir gui lint
+
+      - run: pnpm --dir gui build
+
+      # The interop test needs a real daemon: it is the only check that the two
+      # sides of the wire agree on framing and handshake.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go build -o flt-daemon.exe ./cmd/flt-daemon
+
+      - name: test
+        env:
+          FLT_DAEMON_BIN: ${{ github.workspace }}/flt-daemon.exe
+        run: pnpm --dir gui test
