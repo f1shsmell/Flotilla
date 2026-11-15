@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -197,20 +198,25 @@ func (h *Host) Serve(ctx context.Context) error {
 			return fmt.Errorf("accept on %s: %w", h.addr, err)
 		}
 
-		conn, err := ipc.Serve(nc, ipc.Config{
-			Token:   h.cfg.Token,
-			Role:    "host",
-			Session: string(h.cfg.ID),
-			Handler: h.handleCall,
-			OnData:  h.handleData,
-		})
-		if err != nil {
-			h.log.Warn("rejected an ipc client", "session", h.cfg.ID, "err", err.Error())
-			continue
-		}
+		// The handshake runs off the loop: while it is being served the pipe has
+		// no pending instance, and a client dialling in that window is told the
+		// endpoint does not exist.
+		go func(nc net.Conn) {
+			conn, err := ipc.Serve(nc, ipc.Config{
+				Token:   h.cfg.Token,
+				Role:    "host",
+				Session: string(h.cfg.ID),
+				Handler: h.handleCall,
+				OnData:  h.handleData,
+			})
+			if err != nil {
+				h.log.Warn("rejected an ipc client", "session", h.cfg.ID, "err", err.Error())
+				return
+			}
 
-		h.attach(conn)
-		h.log.Info("client attached", "session", h.cfg.ID, "peer", conn.Peer())
+			h.attach(conn)
+			h.log.Info("client attached", "session", h.cfg.ID, "peer", conn.Peer())
+		}(nc)
 	}
 }
 

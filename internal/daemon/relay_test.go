@@ -395,3 +395,26 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+// TestTheDaemonTakesBackToBackClients pins the accept loop: a client dialling
+// while the previous handshake is being served must still find the endpoint,
+// not be told it does not exist.
+func TestTheDaemonTakesBackToBackClients(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	runDaemon(t, dir, token)
+
+	for i := 0; i < 25; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+		conn, err := ipc.Dial(ctx, ipc.Address{Channel: "test", Name: "daemon"}, dir, ipc.Config{
+			Token: token,
+			Role:  "cli",
+		})
+		cancel()
+		if err != nil {
+			t.Fatalf("dial %d of 25: %v", i+1, err)
+		}
+		conn.Close()
+	}
+}
