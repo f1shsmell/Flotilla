@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Handler serves one inbound method call. Returning an error sends the peer a
@@ -67,7 +68,7 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 	if err := c.authorize(hello); err != nil {
 		// Say why before closing: a silent drop is undiagnosable across a pipe.
 		_ = c.sendHandshake(Handshake{Version: ProtocolVersion, Role: c.role, Error: err.Error()})
-		c.Close()
+		c.closeAfterFlush(flushTimeout)
 		return nil, err
 	}
 	if err := c.sendHandshake(Handshake{Version: ProtocolVersion, Role: c.role, Session: c.session}); err != nil {
@@ -169,6 +170,25 @@ func (c *Conn) Alive() bool {
 // Close stops the connection. Queued frames are dropped: a closed connection
 // has nobody left to read them.
 func (c *Conn) Close() { c.shutdown(nil) }
+
+// flushTimeout bounds how long a final message may hold a closing connection
+// open. A peer that stopped reading must not block the caller.
+const flushTimeout = time.Second
+
+// closeAfterFlush lets the frames already queued reach the peer before the
+// transport goes away, which is what makes a rejection reason readable.
+func (c *Conn) closeAfterFlush(timeout time.Duration) {
+	c.w.Close()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-c.w.Done():
+	case <-timer.C:
+	}
+	c.shutdown(nil)
+}
 
 func (c *Conn) shutdown(cause error) {
 	c.shutdownOnce.Do(func() {

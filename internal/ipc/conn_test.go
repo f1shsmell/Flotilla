@@ -78,15 +78,11 @@ func writeHandshake(t *testing.T, nc net.Conn, h Handshake) {
 	w.Wait()
 }
 
-// serveRejectedPeer dials as a bare handshake writer and gives the accepted
-// side to Serve, so the rejection the server decided is the thing under test.
-// The handshake is written from a goroutine: a Windows named-pipe write blocks
-// until the peer reads, so both sides have to be live at once.
-func serveRejectedPeer(t *testing.T, hello Handshake, serverCfg Config) error {
+// dialPeer connects a bare peer to addr and returns its side of the pipe. The
+// dial runs in a goroutine because on Windows a pipe write blocks until the
+// peer reads, so both sides have to be live at once.
+func dialPeer(t *testing.T, addr Address, dir string) net.Conn {
 	t.Helper()
-
-	l, addr, dir := listenTest(t)
-	acceptc := asyncAccept(l)
 
 	peerc := make(chan net.Conn, 1)
 	go func() {
@@ -99,15 +95,31 @@ func serveRejectedPeer(t *testing.T, hello Handshake, serverCfg Config) error {
 		peerc <- nc
 	}()
 
-	accepted := finishAccept(t, acceptc)
-
-	peerConn, ok := <-peerc
+	nc, ok := <-peerc
 	if !ok {
 		t.Fatal("the peer never connected")
 	}
-	t.Cleanup(func() { _ = peerConn.Close() })
+	t.Cleanup(func() { _ = nc.Close() })
+	return nc
+}
+
+// serveRejectedPeer dials as a bare handshake writer and gives the accepted
+// side to Serve, so the rejection the server decided is the thing under test.
+func serveRejectedPeer(t *testing.T, hello Handshake, serverCfg Config) error {
+	t.Helper()
+
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	peerConn := dialPeer(t, addr, dir)
+	accepted := finishAccept(t, acceptc)
 
 	go writeHandshake(t, peerConn, hello)
+	// A real peer reads the answer; draining it here keeps the server's final
+	// flush from waiting on a reader that never comes.
+	go func() {
+		_, _ = NewReader(peerConn).ReadFrame()
+	}()
 
 	_, err := Serve(accepted, serverCfg)
 	if err == nil {
@@ -153,6 +165,41 @@ func TestServeRefusesToRunWithoutAToken(t *testing.T) {
 	)
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Serve without a configured token = %v, want ErrUnauthorized", err)
+	}
+}
+
+// TestServeTellsARejectedPeerWhy pins the rejection reason onto the wire: a
+// peer that is dropped without a word cannot tell a wrong token from a crash.
+func TestServeTellsARejectedPeerWhy(t *testing.T) {
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	peerConn := dialPeer(t, addr, dir)
+	accepted := finishAccept(t, acceptc)
+
+	go writeHandshake(t, peerConn, Handshake{Version: ProtocolVersion, Token: "wrong", Role: "gui"})
+
+	reasonc := make(chan string, 1)
+	go func() {
+		f, err := NewReader(peerConn).ReadFrame()
+		if err != nil {
+			reasonc <- "read: " + err.Error()
+			return
+		}
+		hello, err := decodeHandshake(f.Payload)
+		if err != nil {
+			reasonc <- "decode: " + err.Error()
+			return
+		}
+		reasonc <- hello.Error
+	}()
+
+	if _, err := Serve(accepted, Config{Token: "right", Role: "daemon"}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Serve with a wrong token = %v, want ErrUnauthorized", err)
+	}
+
+	if reason := <-reasonc; !strings.Contains(reason, "token mismatch") {
+		t.Fatalf("the rejected peer was told %q, want the token mismatch", reason)
 	}
 }
 
