@@ -43,6 +43,7 @@ func (d *Daemon) status() Status {
 		att := d.fleet.Attachments[i]
 		st.Sessions = append(st.Sessions, StatusEntry{
 			ID:       att.Record.ID,
+			Mode:     session.Mode(att.Info.Mode),
 			HostPID:  att.Info.PID,
 			Command:  att.Info.Command,
 			Dir:      att.Info.Dir,
@@ -77,9 +78,11 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
+		Mode:     req.Mode,
 		Command:  req.Command,
 		Args:     req.Args,
 		Dir:      req.Dir,
+		Policy:   req.Policy,
 		Cols:     req.Cols,
 		Rows:     req.Rows,
 		Channel:  d.cfg.Channel,

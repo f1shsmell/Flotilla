@@ -24,11 +24,15 @@ type SpawnRequest struct {
 	Binary string
 	// Session is the id the new host must hold.
 	Session session.ID
+	// Mode is "pty" or "acp"; empty means pty.
+	Mode session.Mode
 	// Command and Args name the agent the host must run.
 	Command string
 	Args    []string
 	// Dir is the agent's working directory.
 	Dir string
+	// Policy is the ACP permission policy, ignored for a PTY session.
+	Policy string
 	// Cols and Rows size the initial PTY.
 	Cols int
 	Rows int
@@ -50,8 +54,14 @@ func ExecSpawner(log *slog.Logger) Spawner {
 			return ipc.Address{}, errors.New("spawn: no session-host binary configured")
 		}
 
+		mode := req.Mode
+		if mode == "" {
+			mode = session.ModePTY
+		}
+
 		args := []string{
 			"--session", string(req.Session),
+			"--mode", string(mode),
 			"--command", req.Command,
 			"--channel", req.Channel,
 			"--cols", fmt.Sprint(req.Cols),
@@ -59,6 +69,9 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		}
 		if req.Dir != "" {
 			args = append(args, "--dir", req.Dir)
+		}
+		if req.Policy != "" {
+			args = append(args, "--policy", req.Policy)
 		}
 		if len(req.Args) > 0 {
 			args = append(args, "--")

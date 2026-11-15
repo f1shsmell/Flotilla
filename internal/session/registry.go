@@ -34,7 +34,10 @@ const MethodInfo = "session.info"
 // Info is what a host reports about the session it holds. It answers "is this
 // the same session I left?" without moving any process state.
 type Info struct {
-	ID      ID     `json:"id"`
+	ID ID `json:"id"`
+	// Mode is "pty" or "acp": a terminal has no structure to query, and the
+	// client renders the two differently.
+	Mode    string `json:"mode"`
 	PID     int    `json:"pid"`
 	Command string `json:"command"`
 	Dir     string `json:"dir"`

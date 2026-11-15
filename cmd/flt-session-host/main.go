@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/f1shsmell/flotilla/internal/acp"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/host"
 	"github.com/f1shsmell/flotilla/internal/ipc"
@@ -32,8 +33,10 @@ func run(args []string) error {
 
 	var (
 		sessionID  = fs.String("session", "", "session id this host holds")
-		command    = fs.String("command", "", "agent command to run under the PTY")
+		mode       = fs.String("mode", string(session.ModePTY), "how to talk to the agent: pty or acp")
+		command    = fs.String("command", "", "agent command to run")
 		dir        = fs.String("dir", "", "working directory for the agent")
+		policy     = fs.String("policy", acp.Supervised.String(), "ACP permission policy: supervised, accept-edits, auto or full-access")
 		cols       = fs.Int("cols", 80, "initial PTY columns")
 		rows       = fs.Int("rows", 24, "initial PTY rows")
 		channel    = fs.String("channel", version.Channel, "release channel this host serves")
@@ -63,6 +66,11 @@ func run(args []string) error {
 		return errors.New("--command is required")
 	}
 
+	parsedPolicy, err := parsePolicy(*policy)
+	if err != nil {
+		return err
+	}
+
 	paths, err := home.Resolve(*channel)
 	if err != nil {
 		return fmt.Errorf("resolve state paths: %w", err)
@@ -82,13 +90,15 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	h, err := host.Start(host.Config{
+	h, err := host.Start(ctx, host.Config{
 		ID:       session.ID(*sessionID),
+		Mode:     session.Mode(*mode),
 		Token:    token,
 		StateDir: paths.Sessions,
 		Command:  *command,
 		Args:     fs.Args(),
 		Dir:      *dir,
+		Policy:   parsedPolicy,
 		Cols:     *cols,
 		Rows:     *rows,
 	}, session.NewRegistry(paths.Sessions), logger)
@@ -101,6 +111,16 @@ func run(args []string) error {
 		return fmt.Errorf("serve session %q: %w", *sessionID, err)
 	}
 	return nil
+}
+
+// parsePolicy maps a flag value onto a policy.
+func parsePolicy(name string) (acp.Policy, error) {
+	for _, p := range []acp.Policy{acp.Supervised, acp.AcceptEdits, acp.Auto, acp.FullAccess} {
+		if p.String() == name {
+			return p, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown policy %q: use supervised, accept-edits, auto or full-access", name)
 }
 
 func newLogger(dir, name string) (*slog.Logger, func(), error) {

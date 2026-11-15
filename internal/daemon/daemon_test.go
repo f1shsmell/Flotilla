@@ -42,7 +42,7 @@ func newHost(t *testing.T, dir, id, token string) *host.Host {
 	t.Helper()
 
 	command, args := helperCommand(t)
-	h, err := host.Start(host.Config{
+	h, err := host.Start(context.Background(), host.Config{
 		ID:       session.ID(id),
 		Token:    token,
 		StateDir: dir,

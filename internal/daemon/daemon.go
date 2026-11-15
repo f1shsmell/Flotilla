@@ -43,22 +43,28 @@ type Status struct {
 
 // StatusEntry is one session in a status report.
 type StatusEntry struct {
-	ID       session.ID `json:"id"`
-	HostPID  int        `json:"host_pid"`
-	Command  string     `json:"command"`
-	Dir      string     `json:"dir"`
-	Attached bool       `json:"attached"`
+	ID session.ID `json:"id"`
+	// Mode is "pty" or "acp": the client renders the two differently.
+	Mode     session.Mode `json:"mode"`
+	HostPID  int          `json:"host_pid"`
+	Command  string       `json:"command"`
+	Dir      string       `json:"dir"`
+	Attached bool         `json:"attached"`
 }
 
 // StartRequest asks the daemon for a session.
 type StartRequest struct {
 	// ID is the session id. The caller chooses it, so a retry names one session.
 	ID session.ID `json:"id"`
-	// Command and Args name the agent to run under the PTY.
+	// Mode is "pty" or "acp". Empty means pty, the fallback that always works.
+	Mode session.Mode `json:"mode,omitempty"`
+	// Command and Args name the agent to run.
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
 	// Dir is the agent's working directory.
 	Dir string `json:"dir,omitempty"`
+	// Policy is the ACP permission policy. Empty means supervised.
+	Policy string `json:"policy,omitempty"`
 	// Cols and Rows size the initial PTY.
 	Cols int `json:"cols,omitempty"`
 	Rows int `json:"rows,omitempty"`

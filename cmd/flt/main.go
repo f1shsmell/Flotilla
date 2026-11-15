@@ -101,7 +101,11 @@ func status(channel string, asJSON bool, out io.Writer) error {
 		if s.Attached {
 			state = "attached"
 		}
-		if err := print(out, fmt.Sprintf("%s\t%s\tpid=%d\t%s", s.ID, state, s.HostPID, s.Command)); err != nil {
+		mode := string(s.Mode)
+		if mode == "" {
+			mode = "pty"
+		}
+		if err := print(out, fmt.Sprintf("%s\t%s\t%s\tpid=%d\t%s", s.ID, mode, state, s.HostPID, s.Command)); err != nil {
 			return err
 		}
 	}

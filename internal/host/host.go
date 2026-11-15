@@ -17,6 +17,7 @@ import (
 
 	"github.com/charmbracelet/x/xpty"
 
+	"github.com/f1shsmell/flotilla/internal/acp"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -25,6 +26,8 @@ import (
 type Config struct {
 	// ID is the session this host owns.
 	ID session.ID
+	// Mode is how this session talks to its agent: a ConPTY or ACP stdio.
+	Mode session.Mode
 	// Token authenticates both directions of the IPC connection.
 	Token string
 	// StateDir holds the socket file on Unix; Windows ignores it.
@@ -39,18 +42,25 @@ type Config struct {
 	// Cols and Rows size the initial PTY. Zero falls back to 80x24.
 	Cols int
 	Rows int
+	// Policy decides what an ACP agent may do without asking.
+	Policy acp.Policy
 	// Ctx is the parent context for the agent process. It is detached from the
 	// caller's cancellation, so a daemon restart never stops an agent.
 	Ctx context.Context
 }
 
-// Ctx is an optional parent context for the agent process. A nil Ctx means
-// context.Background, so tests need not thread one through.
-func (c Config) ctxFor() context.Context {
-	if c.Ctx != nil {
-		return c.Ctx
+// withDefaults fills in the values a caller may leave out.
+func (c Config) withDefaults() Config {
+	if c.Mode == "" {
+		c.Mode = session.ModePTY
 	}
-	return context.Background()
+	if c.Cols <= 0 || c.Rows <= 0 {
+		c.Cols, c.Rows = 80, 24
+	}
+	if c.Ctx == nil {
+		c.Ctx = context.Background()
+	}
+	return c
 }
 
 // Host is one running session: a PTY-backed agent plus the endpoint its client
@@ -60,6 +70,7 @@ type Host struct {
 	log    *slog.Logger
 	pty    xpty.Pty
 	cmd    *exec.Cmd
+	acp    *acpSession
 	reg    session.Registry
 	addr   ipc.Address
 	donec  chan struct{}
@@ -70,39 +81,47 @@ type Host struct {
 	conn *ipc.Conn
 }
 
-// Start spawns the agent under a PTY and publishes the host record. The host is
-// not listening yet: Serve opens the endpoint.
-func Start(cfg Config, reg session.Registry, log *slog.Logger) (*Host, error) {
+// Start spawns the agent and publishes the host record. The host is not
+// listening yet: Serve opens the endpoint.
+func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logger) (*Host, error) {
+	cfg = cfg.withDefaults()
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("start host: empty session id: %w", session.ErrNoRecord)
 	}
 	if cfg.Command == "" {
 		return nil, fmt.Errorf("start host %q: empty command", cfg.ID)
 	}
-
-	cols, rows := cfg.Cols, cfg.Rows
-	if cols <= 0 || rows <= 0 {
-		cols, rows = 80, 24
-	}
-
-	ptmx, err := xpty.NewPty(cols, rows)
-	if err != nil {
-		return nil, fmt.Errorf("create pty: %w", err)
+	if !cfg.Mode.Valid() {
+		return nil, fmt.Errorf("start host %q: unknown mode %q", cfg.ID, cfg.Mode)
 	}
 
 	h := &Host{
 		cfg:   cfg,
 		log:   log,
-		pty:   ptmx,
 		reg:   reg,
 		addr:  ipc.Address{Channel: string(cfg.ID), Name: "host"},
 		donec: make(chan struct{}),
 		exitc: make(chan error, 1),
 	}
 
+	if cfg.Mode == session.ModeACP {
+		if err := h.startACP(ctx); err != nil {
+			return nil, fmt.Errorf("start the acp session: %w", err)
+		}
+		log.Info("session host started", "session", cfg.ID, "pid", os.Getpid(),
+			"mode", string(cfg.Mode), "command", cfg.Command)
+		return h, nil
+	}
+
+	ptmx, err := xpty.NewPty(cfg.Cols, cfg.Rows)
+	if err != nil {
+		return nil, fmt.Errorf("create pty: %w", err)
+	}
+	h.pty = ptmx
+
 	// The agent's lifetime is the host's, not the caller's: a cancelled context
 	// stops Serve, and Close is what stops the agent afterwards.
-	cmd := exec.CommandContext(context.WithoutCancel(cfg.ctxFor()), cfg.Command, cfg.Args...)
+	cmd := exec.CommandContext(context.WithoutCancel(cfg.Ctx), cfg.Command, cfg.Args...)
 	cmd.Dir = cfg.Dir
 	cmd.Env = cfg.Env
 
@@ -114,8 +133,8 @@ func Start(cfg Config, reg session.Registry, log *slog.Logger) (*Host, error) {
 
 	go h.pumpOutput()
 
-	log.Info("session host started",
-		"session", cfg.ID, "pid", os.Getpid(), "command", cfg.Command)
+	log.Info("session host started", "session", cfg.ID, "pid", os.Getpid(),
+		"mode", string(cfg.Mode), "command", cfg.Command)
 
 	return h, nil
 }
@@ -159,7 +178,11 @@ func (h *Host) Serve(ctx context.Context) error {
 		}
 	}()
 
-	go h.watchAgent(ctx)
+	// A PTY session has a child process to reap; an ACP session's agent is
+	// waited on by the ACP layer, so there is nothing to watch here.
+	if h.cmd != nil {
+		go h.watchAgent(ctx)
+	}
 
 	for {
 		nc, err := l.Accept()
@@ -203,6 +226,9 @@ func (h *Host) attach(conn *ipc.Conn) {
 		previous.Close()
 	}
 
+	// A client that arrives after a gap sees what it missed while detached.
+	h.replayBuffered(conn)
+
 	go func() {
 		<-conn.Done()
 		h.mu.Lock()
@@ -214,27 +240,52 @@ func (h *Host) attach(conn *ipc.Conn) {
 	}()
 }
 
-func (h *Host) handleCall(_ context.Context, method string, _ json.RawMessage) (any, error) {
-	if method != session.MethodInfo {
+func (h *Host) handleCall(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	switch method {
+	case session.MethodInfo:
+		return h.info(), nil
+	case session.MethodPrompt:
+		req, err := decodeParams[session.PromptRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		return h.promptACP(ctx, req)
+	case session.MethodCancel:
+		return struct{}{}, h.cancelACP(ctx)
+	case session.MethodPermissionReply:
+		reply, err := decodeParams[session.PermissionReply](params)
+		if err != nil {
+			return nil, err
+		}
+		h.answerPermission(reply)
+		return struct{}{}, nil
+	default:
 		return nil, ipc.ErrNoHandler
 	}
+}
 
-	cols, rows, err := h.pty.Size()
-	if err != nil {
-		cols, rows = 0, 0
+// info reports what this host holds.
+func (h *Host) info() session.Info {
+	cols, rows := h.cfg.Cols, h.cfg.Rows
+	if h.pty != nil {
+		if w, hgt, err := h.pty.Size(); err == nil {
+			cols, rows = w, hgt
+		}
 	}
+
 	return session.Info{
 		ID:      h.cfg.ID,
 		PID:     os.Getpid(),
+		Mode:    string(h.cfg.Mode),
 		Command: h.cfg.Command,
 		Dir:     h.cfg.Dir,
 		Cols:    cols,
 		Rows:    rows,
-	}, nil
+	}
 }
 
 func (h *Host) handleData(stream uint32, payload []byte) {
-	if stream != session.StreamInput {
+	if stream != session.StreamInput || h.pty == nil {
 		return
 	}
 	if _, err := h.pty.Write(payload); err != nil {
@@ -242,7 +293,7 @@ func (h *Host) handleData(stream uint32, payload []byte) {
 	}
 }
 
-// Close stops the agent, removes the host record and releases the PTY.
+// Close stops the agent, removes the host record and releases its handles.
 func (h *Host) Close() error {
 	var errs []error
 
@@ -262,9 +313,13 @@ func (h *Host) Close() error {
 				errs = append(errs, fmt.Errorf("kill the agent: %w", err))
 			}
 		}
-		if err := h.pty.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close the pty: %w", err))
+		if h.pty != nil {
+			if err := h.pty.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close the pty: %w", err))
+			}
 		}
+		errs = append(errs, h.closeACP()...)
+
 		if err := h.reg.Unpublish(h.cfg.ID); err != nil {
 			errs = append(errs, err)
 		}

@@ -38,7 +38,7 @@ func TestHostHoldsThePtyAndAnswersInfo(t *testing.T) {
 	dir := t.TempDir()
 	command, args := helperCommand(t)
 
-	h, err := Start(Config{
+	h, err := Start(context.Background(), Config{
 		ID:       "sess-1",
 		Token:    "shared",
 		StateDir: dir,
@@ -93,7 +93,7 @@ func TestHostPipesClientInputToTheAgent(t *testing.T) {
 	dir := t.TempDir()
 	command, args := helperCommand(t)
 
-	h, err := Start(Config{
+	h, err := Start(context.Background(), Config{
 		ID:       "sess-echo",
 		Token:    "shared",
 		StateDir: dir,
