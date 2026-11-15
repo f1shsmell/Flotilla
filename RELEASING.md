@@ -10,6 +10,10 @@
 - 逐一确认 PR 的合并状态;未合并功能不算已发布能力。
 - 同步版本:内部 version 包、`gui/package.json`、electron-builder 配置、
   CHANGELOG 版本段、SECURITY 支持版本。
+- 生成第三方许可:`bash scripts/third-party-notices.sh`,脚本会把模块图里每个
+  依赖的许可写进 `THIRD-PARTY-NOTICES.md`。Apache-2.0 依赖(当前是
+  `coder/acp-go-sdk`)必须保留其许可文本;脚本报出「no license file」时停下,
+  先把该依赖查清再继续。
 - 冻结最终 SHA;此后任何补修或改版本产生新 SHA,都要重新取得验证证据。
 
 ## 2. 验证冻结提交
@@ -40,6 +44,8 @@ git push origin "refs/tags/v$VERSION"
 
 - `v*` 标签触发发布工作流(工具链落地后):构建、签名、创建 Release。工作流不
   代替第 3 节验收——必须先验收再打标签。
+- `THIRD-PARTY-NOTICES.md` 随 Release 资产发布,并随安装包分发;它是第 1 节
+  生成的那份,不要手改。
 
 ## 5. 发布后
 
