@@ -31,6 +31,14 @@ func TestKnownAgentsAreWellFormed(t *testing.T) {
 			t.Fatalf("agent %q does not say what login it needs", agent.Name)
 		}
 	}
+
+	seen := make(map[string]bool, len(known))
+	for _, agent := range known {
+		if seen[agent.Name] {
+			t.Fatalf("agent %q is listed twice, so a name would resolve to two commands", agent.Name)
+		}
+		seen[agent.Name] = true
+	}
 }
 
 // TestLookupFindsAKnownNameAndRejectsTheRest covers the one path a user hits when
