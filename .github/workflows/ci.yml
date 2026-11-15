@@ -55,6 +55,9 @@ jobs:
   gui:
     name: gui (windows)
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gui
     steps:
       - uses: actions/checkout@v7
 
@@ -69,14 +72,16 @@ jobs:
           cache-dependency-path: gui/pnpm-lock.yaml
 
       # The GUI is tested headlessly, so the Electron binary is not needed here.
+      # pnpm reads its settings from gui/pnpm-workspace.yaml, which is why this
+      # job runs inside gui/ rather than with --dir.
       - name: install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: pnpm --dir gui install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
-      - run: pnpm --dir gui lint
+      - run: pnpm lint
 
-      - run: pnpm --dir gui build
+      - run: pnpm build
 
       # The interop test needs a real daemon: it is the only check that the two
       # sides of the wire agree on framing and handshake.
@@ -85,9 +90,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - run: go build -o flt-daemon.exe ./cmd/flt-daemon
+      - name: build the daemon
+        working-directory: ${{ github.workspace }}
+        run: go build -o flt-daemon.exe ./cmd/flt-daemon
 
       - name: test
         env:
           FLT_DAEMON_BIN: ${{ github.workspace }}/flt-daemon.exe
-        run: pnpm --dir gui test
+        run: pnpm test
