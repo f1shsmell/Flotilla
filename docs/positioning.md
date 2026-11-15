@@ -17,8 +17,8 @@ diff 审查、一键 commit/push/开 PR 不离开应用。
 
 - **ACP-first**：协议是一等公民，PTY 是底线而非主路径。
 - **会话比应用活得久**：GUI 重启、daemon 重启不丢会话。诚实边界：session host
-  崩溃时 PTY 会话丢失、ACP 会话在 agent 支持 resume 时恢复；OS 重启只恢复布局
-  与历史。不承诺进程级复活。
+  崩溃即会话丢失（PTY 与 ACP 一样——agent 句柄与 ACP 会话 id 都在 host 里，
+  崩溃后的 resume 尚未接入）；OS 重启只恢复布局与历史。不承诺进程级复活。
 - **BYO 订阅**：不转售 token、不做网关、不锁模型。凭证是你自己的。
 - **适配器是数据**：多数新 agent = 一个 JSON 定义，社区可贡献覆盖。
 
