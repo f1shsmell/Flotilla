@@ -154,6 +154,18 @@ func (c *Conn) Err() error {
 	return ErrConnClosed
 }
 
+// Alive reports whether the connection is still carrying traffic. A peer that
+// went away is not an error to report, so this answers the question a status
+// view actually asks.
+func (c *Conn) Alive() bool {
+	select {
+	case <-c.closed:
+		return false
+	default:
+		return true
+	}
+}
+
 // Close stops the connection. Queued frames are dropped: a closed connection
 // has nobody left to read them.
 func (c *Conn) Close() { c.shutdown(nil) }
