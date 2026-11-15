@@ -56,13 +56,14 @@ type Agent struct {
 	NeedsCredential string
 }
 
-// Known lists the agents the first milestone's support matrix names, plus the
-// generic form. A user's own agent is `--command`.
-//
-// The list is a convenience, not a capability claim: what a session host can do
-// still depends on the agent's own ACP dialect, which the probe measures.
+// Known lists the agents this build has a name for. The list is a convenience,
+// not a capability claim: what a session host can do still depends on the
+// agent's own ACP dialect, which the probe measures. `docs/support-matrix.md`
+// records which of them were actually driven, and when.
 func Known() []Agent {
 	return []Agent{
+		{Name: "reasonix", Command: "reasonix", Args: []string{"acp"}, NeedsCredential: "a logged-in Reasonix Studio"},
+		{Name: "opencode", Command: "opencode", Args: []string{"acp"}, NeedsCredential: "an opencode provider that accepts this machine's token"},
 		{Name: "claude", Command: "claude-agent-acp", NeedsCredential: "a logged-in Claude Code CLI"},
 		{Name: "gemini", Command: "gemini", Args: []string{"--acp"}, NeedsCredential: "a logged-in Gemini CLI"},
 	}
