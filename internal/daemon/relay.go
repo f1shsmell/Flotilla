@@ -139,7 +139,7 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 		d.relay.forget(peer)
 	}()
 
-	d.cfg.Log.Info("client attached to a session", "session", req.ID, "peer", peer.Role())
+	d.cfg.Log.Info("client attached to a session", "session", req.ID, "peer", peer.Peer())
 
 	return session.AttachResponse{ID: req.ID, Info: att.Info}, nil
 }
@@ -149,7 +149,8 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 // have got by dialling the host itself.
 func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, params json.RawMessage) (any, error) {
 	switch method {
-	case session.MethodPrompt, session.MethodCancel, session.MethodPermissionReply:
+	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
+		session.MethodPermissionReply, session.MethodResize:
 	default:
 		return nil, ipc.ErrNoHandler
 	}

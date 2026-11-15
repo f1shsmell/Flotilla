@@ -252,6 +252,12 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		return h.promptACP(ctx, req)
 	case session.MethodCancel:
 		return struct{}{}, h.cancelACP(ctx)
+	case session.MethodResize:
+		req, err := decodeParams[session.ResizeRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		return struct{}{}, h.resize(req)
 	case session.MethodPermissionReply:
 		reply, err := decodeParams[session.PermissionReply](params)
 		if err != nil {
@@ -282,6 +288,21 @@ func (h *Host) info() session.Info {
 		Cols:    cols,
 		Rows:    rows,
 	}
+}
+
+// resize sizes the terminal. A structured session has no terminal, so it is the
+// same refusal as a prompt sent to a PTY session.
+func (h *Host) resize(req session.ResizeRequest) error {
+	if h.pty == nil {
+		return fmt.Errorf("session %q has no terminal: %w", h.cfg.ID, errWrongMode)
+	}
+	if req.Cols <= 0 || req.Rows <= 0 {
+		return fmt.Errorf("session %q: resize to %dx%d: %w", h.cfg.ID, req.Cols, req.Rows, errBadSize)
+	}
+	if err := h.pty.Resize(req.Cols, req.Rows); err != nil {
+		return fmt.Errorf("resize the pty: %w", err)
+	}
+	return nil
 }
 
 func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {

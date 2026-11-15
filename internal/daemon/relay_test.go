@@ -304,6 +304,43 @@ func TestPTYBytesCrossTheDaemon(t *testing.T) {
 	}
 }
 
+// TestResizeCrossesTheDaemon keeps the terminal honest about its size: the
+// window's own dimensions have to reach the PTY through the relay.
+func TestResizeCrossesTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	newHost(t, dir, "sess-size", token)
+	if _, err := waitRecord(t, session.NewRegistry(dir), "sess-size"); err != nil {
+		t.Fatalf("the PTY host never published a record: %v", err)
+	}
+	runDaemon(t, dir, token)
+
+	client := dialDaemon(t, dir, token, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-size"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := client.Call(ctx, session.MethodResize, session.ResizeRequest{Cols: 132, Rows: 43}); err != nil {
+		t.Fatalf("resize through the daemon: %v", err)
+	}
+
+	raw, err := client.Call(ctx, session.MethodInfo, struct{}{})
+	if err != nil {
+		t.Fatalf("info through the daemon: %v", err)
+	}
+	var info session.Info
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("decode info: %v", err)
+	}
+	if info.Cols != 132 || info.Rows != 43 {
+		t.Fatalf("info reports %dx%d, want 132x43", info.Cols, info.Rows)
+	}
+}
+
 // TestASessionEndsWhenItsHostDies pins the honest failure: the client holding a
 // session learns it is over instead of waiting on a stream that cannot come.
 func TestASessionEndsWhenItsHostDies(t *testing.T) {

@@ -152,6 +152,64 @@ func TestHostPipesClientInputToTheAgent(t *testing.T) {
 	}
 }
 
+// TestPTYHostResizesItsTerminal pins the one call a terminal view needs beyond
+// keystrokes: the size the client's window actually has.
+func TestPTYHostResizesItsTerminal(t *testing.T) {
+	dir := t.TempDir()
+	command, args := helperCommand(t)
+
+	h, err := Start(context.Background(), Config{
+		ID:       "sess-resize",
+		Token:    "shared",
+		StateDir: dir,
+		Command:  command,
+		Args:     args,
+		Env:      append(os.Environ(), helperEnv+"=1"),
+		Cols:     80,
+		Rows:     24,
+	}, session.NewRegistry(dir), discardLogger())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	go func() { _ = h.Serve(ctx) }()
+
+	rec, err := waitForRecord(t, session.NewRegistry(dir), "sess-resize")
+	if err != nil {
+		t.Fatalf("the host never published a record: %v", err)
+	}
+
+	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{Token: "shared", Role: "test"})
+	if err != nil {
+		t.Fatalf("dial the host: %v", err)
+	}
+	t.Cleanup(conn.Close)
+
+	if _, err := conn.Call(ctx, session.MethodResize, session.ResizeRequest{Cols: 120, Rows: 40}); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+
+	raw, err := conn.Call(ctx, session.MethodInfo, struct{}{})
+	if err != nil {
+		t.Fatalf("call session.info: %v", err)
+	}
+	var info session.Info
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("decode info: %v", err)
+	}
+	if info.Cols != 120 || info.Rows != 40 {
+		t.Fatalf("info reports %dx%d, want 120x40", info.Cols, info.Rows)
+	}
+
+	if _, err := conn.Call(ctx, session.MethodResize, session.ResizeRequest{}); err == nil {
+		t.Fatal("a resize without a size was accepted")
+	}
+}
+
 func waitForRecord(t *testing.T, reg session.Registry, id session.ID) (session.Record, error) {
 	t.Helper()
 
