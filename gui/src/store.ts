@@ -1,0 +1,201 @@
+// The renderer's model of the wire. Everything here is pure: components project
+// these values, they never reshape them, so what the daemon said stays the only
+// source of truth.
+
+export interface StatusEntry {
+  id: string;
+  mode: string;
+  host_pid: number;
+  command: string;
+  dir: string;
+  reachable: boolean;
+}
+
+export interface Status {
+  channel: string;
+  pid: number;
+  ready: boolean;
+  sessions: StatusEntry[];
+  failures: string[];
+}
+
+export type EntryKind = "message" | "thought" | "tool" | "plan" | "other";
+
+export interface Entry {
+  key: string;
+  kind: EntryKind;
+  text: string;
+  toolTitle?: string;
+  toolStatus?: string;
+}
+
+export interface Permission {
+  id: string;
+  title: string;
+  kind: string;
+  options: string[];
+}
+
+export type Turn = "idle" | "working" | "ended" | "lost";
+
+export interface SessionState {
+  id: string;
+  mode: string;
+  entries: Entry[];
+  permissions: Permission[];
+  turn: Turn;
+  stopReason?: string;
+  error?: string;
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+// parseStatus reads the daemon's answer without trusting it: a field the daemon
+// did not send becomes a visible default rather than `undefined` in the UI.
+export function parseStatus(raw: unknown): Status {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const sessions = Array.isArray(value.sessions) ? value.sessions : [];
+
+  return {
+    channel: asString(value.channel),
+    pid: typeof value.pid === "number" ? value.pid : 0,
+    ready: asBoolean(value.ready),
+    failures: Array.isArray(value.failures)
+      ? value.failures.filter((f): f is string => typeof f === "string")
+      : [],
+    sessions: sessions.map((entry) => {
+      const session = (entry ?? {}) as Record<string, unknown>;
+      return {
+        id: asString(session.id),
+        mode: asString(session.mode, "pty"),
+        host_pid: typeof session.host_pid === "number" ? session.host_pid : 0,
+        command: asString(session.command),
+        dir: asString(session.dir),
+        reachable: asBoolean(session.reachable),
+      };
+    }),
+  };
+}
+
+export function summarise(status: Status): { total: number; reachable: number } {
+  return {
+    total: status.sessions.length,
+    reachable: status.sessions.filter((session) => session.reachable).length,
+  };
+}
+
+export function newSession(id: string, mode: string): SessionState {
+  return { id, mode, entries: [], permissions: [], turn: "idle" };
+}
+
+// applyUpdate folds one agent update into the log. A tool call arrives twice —
+// once started, once finished — so it is keyed by its id and updated in place
+// instead of appended twice.
+export function applyUpdate(state: SessionState, raw: unknown): SessionState {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const kind = asString(value.kind, "other") as EntryKind;
+  const text = asString(value.text);
+  const toolCallId = asString(value.tool_call_id);
+  const toolTitle = asString(value.tool_title);
+  const toolStatus = asString(value.tool_status);
+
+  if (kind === "tool" && toolCallId !== "") {
+    const index = state.entries.findIndex((entry) => entry.key === toolCallId);
+    if (index >= 0) {
+      const entries = state.entries.slice();
+      const previous = entries[index];
+      entries[index] = {
+        ...previous,
+        toolTitle: toolTitle || previous.toolTitle,
+        toolStatus: toolStatus || previous.toolStatus,
+      };
+      return { ...state, entries };
+    }
+    return {
+      ...state,
+      entries: [
+        ...state.entries,
+        { key: toolCallId, kind, text, toolTitle, toolStatus },
+      ],
+    };
+  }
+
+  // An update that carries nothing is noise: an agent's command list or a plan
+  // it has not filled in yet would otherwise render as a blank line.
+  if (text === "" && kind !== "plan") {
+    return state;
+  }
+
+  // An agent streams one message in pieces. They belong in one paragraph, so a
+  // chunk of the same kind as the last entry extends it instead of starting a
+  // new one; anything else (a thought after a message, a tool call) breaks the
+  // run.
+  const last = state.entries[state.entries.length - 1];
+  if (last && last.kind === kind && (kind === "message" || kind === "thought")) {
+    const entries = state.entries.slice();
+    entries[entries.length - 1] = { ...last, text: last.text + text };
+    return { ...state, entries };
+  }
+
+  return {
+    ...state,
+    entries: [
+      ...state.entries,
+      { key: `${kind}-${state.entries.length}`, kind, text },
+    ],
+  };
+}
+
+export function addPermission(state: SessionState, raw: unknown): SessionState {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const id = asString(value.id);
+  if (id === "" || state.permissions.some((permission) => permission.id === id)) {
+    return state;
+  }
+
+  const options = Array.isArray(value.options)
+    ? value.options.filter((option): option is string => typeof option === "string")
+    : [];
+
+  return {
+    ...state,
+    permissions: [
+      ...state.permissions,
+      {
+        id,
+        title: asString(value.title),
+        kind: asString(value.kind),
+        options,
+      },
+    ],
+  };
+}
+
+export function answerPermission(state: SessionState, id: string): SessionState {
+  return {
+    ...state,
+    permissions: state.permissions.filter((permission) => permission.id !== id),
+  };
+}
+
+export function startTurn(state: SessionState): SessionState {
+  return { ...state, turn: "working", stopReason: undefined, error: undefined };
+}
+
+export function endTurn(state: SessionState, stopReason: string): SessionState {
+  return { ...state, turn: "idle", stopReason };
+}
+
+export function failTurn(state: SessionState, error: string): SessionState {
+  return { ...state, turn: "idle", error };
+}
+
+export function loseSession(state: SessionState, error?: string): SessionState {
+  return { ...state, turn: "lost", error };
+}
