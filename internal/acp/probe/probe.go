@@ -68,6 +68,16 @@ func Known() []Agent {
 	}
 }
 
+// Names lists the agents a user can name on the command line.
+func Names() []string {
+	known := Known()
+	names := make([]string, 0, len(known))
+	for _, a := range known {
+		names = append(names, a.Name)
+	}
+	return names
+}
+
 // Lookup finds a known agent by name.
 func Lookup(name string) (Agent, error) {
 	for _, a := range Known() {
@@ -75,16 +85,15 @@ func Lookup(name string) (Agent, error) {
 			return a, nil
 		}
 	}
-	names := make([]string, 0, len(Known()))
-	for _, a := range Known() {
-		names = append(names, a.Name)
-	}
-	return Agent{}, fmt.Errorf("unknown agent %q: known names are %s", name, strings.Join(names, ", "))
+	return Agent{}, fmt.Errorf("unknown agent %q: known names are %s", name, strings.Join(Names(), ", "))
 }
 
 // Available reports whether the agent's command is on PATH.
 func (a Agent) Available() error {
 	if _, err := exec.LookPath(a.Command); err != nil {
+		if a.NeedsCredential == "" {
+			return fmt.Errorf("%s is not on PATH: %w", a.Command, err)
+		}
 		return fmt.Errorf("%s is not on PATH (%s): %w", a.Command, a.NeedsCredential, err)
 	}
 	return nil
