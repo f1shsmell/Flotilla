@@ -121,6 +121,21 @@ func TestReadTextFileSlicesLines(t *testing.T) {
 	}
 }
 
+// TestReadTextFileRefusesAFileBeyondOneFrame keeps the client from asking for
+// content the transport can never carry back to the agent.
+func TestReadTextFileRefusesAFileBeyondOneFrame(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "big.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxReadBytes+1)), 0o600); err != nil {
+		t.Fatalf("write the fixture: %v", err)
+	}
+
+	c := NewClient(Config{Workspace: root})
+	if _, err := c.ReadTextFile(context.Background(), sdk.ReadTextFileRequest{Path: path}); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("ReadTextFile of an oversized file = %v, want ErrFileTooLarge", err)
+	}
+}
+
 func TestWriteTextFileCreatesParentDirectories(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "deep", "nested", "file.txt")

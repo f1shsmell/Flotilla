@@ -13,4 +13,7 @@ var (
 	ErrNoHandler = errors.New("ipc: unknown method")
 	// ErrTimeout reports an operation whose context expired.
 	ErrTimeout = errors.New("ipc: timed out")
+	// ErrResponseTooLarge reports a reply that does not fit one frame, so it
+	// could never reach the caller.
+	ErrResponseTooLarge = errors.New("ipc: response exceeds the frame limit")
 )

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -309,6 +310,25 @@ func TestAFailedCallLeavesTheConnectionUsable(t *testing.T) {
 	}
 	if _, err := client.Call(ctx, "second", nil); err != nil {
 		t.Fatalf("the second call failed after one error: %v", err)
+	}
+}
+
+// TestAnOversizedReplyFailsInsteadOfHanging pins the frame limit against a
+// handler whose reply cannot fit one frame: the caller must learn why, because
+// a silent drop is indistinguishable from a slow peer.
+func TestAnOversizedReplyFailsInsteadOfHanging(t *testing.T) {
+	_, client := servePair(t,
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, _ json.RawMessage) (any, error) {
+			return strings.Repeat("x", MaxFrameSize), nil
+		}},
+		Config{Token: "shared", Role: "cli"},
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	if _, err := client.Call(ctx, "big.reply", nil); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("call with an oversized reply = %v, want ErrResponseTooLarge", err)
 	}
 }
 

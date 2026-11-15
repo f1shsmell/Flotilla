@@ -314,7 +314,7 @@ func (c *Conn) handleControl(payload []byte) bool {
 func (c *Conn) dispatch(msg rpcMessage) {
 	if c.handler == nil {
 		if msg.ID != nil {
-			_ = c.replyError(msg.ID, ErrNoHandler.Error())
+			_ = c.replyError(msg.ID, codeMethodFailed, ErrNoHandler.Error())
 		}
 		return
 	}
@@ -324,28 +324,34 @@ func (c *Conn) dispatch(msg rpcMessage) {
 		return
 	}
 	if err != nil {
-		_ = c.replyError(msg.ID, err.Error())
+		_ = c.replyError(msg.ID, codeMethodFailed, err.Error())
 		return
 	}
 
 	raw, err := json.Marshal(result)
 	if err != nil {
-		_ = c.replyError(msg.ID, fmt.Sprintf("encode result: %v", err))
+		_ = c.replyError(msg.ID, codeMethodFailed, fmt.Sprintf("encode result: %v", err))
 		return
 	}
 	payload, err := json.Marshal(rpcMessage{Version: "2.0", ID: msg.ID, Result: raw})
 	if err != nil {
-		_ = c.replyError(msg.ID, fmt.Sprintf("encode response: %v", err))
+		_ = c.replyError(msg.ID, codeMethodFailed, fmt.Sprintf("encode response: %v", err))
+		return
+	}
+	if len(payload) > MaxFrameSize {
+		// The writer would refuse this frame and drop it, leaving the caller to
+		// wait for a timeout it cannot tell from a slow peer.
+		_ = c.replyError(msg.ID, codeResponseTooLarge, ErrResponseTooLarge.Error())
 		return
 	}
 	_ = c.w.WriteControl(payload)
 }
 
-func (c *Conn) replyError(id *int64, message string) error {
+func (c *Conn) replyError(id *int64, code int, message string) error {
 	payload, err := json.Marshal(rpcMessage{
 		Version: "2.0",
 		ID:      id,
-		Error:   &rpcError{Code: codeMethodFailed, Message: message},
+		Error:   &rpcError{Code: code, Message: message},
 	})
 	if err != nil {
 		return fmt.Errorf("encode error reply: %w", err)
@@ -399,9 +405,24 @@ func (e *CallError) Error() string {
 	return fmt.Sprintf("%s failed (%d): %s", e.Method, e.Code, e.Message)
 }
 
-// codeMethodFailed is the JSON-RPC server-error code used for a handler that
-// returned an error; the reason travels in the message.
-const codeMethodFailed = -32000
+// Unwrap maps the peer's code onto the sentinel a caller branches on, so a
+// failure is identified by what it was, not by the peer's wording.
+func (e *CallError) Unwrap() error {
+	switch e.Code {
+	case codeResponseTooLarge:
+		return ErrResponseTooLarge
+	default:
+		return nil
+	}
+}
+
+const (
+	// codeMethodFailed is the JSON-RPC server-error code used for a handler
+	// that returned an error; the reason travels in the message.
+	codeMethodFailed = -32000
+	// codeResponseTooLarge reports a reply the wire cannot carry in one frame.
+	codeResponseTooLarge = -32001
+)
 
 type rpcMessage struct {
 	Version string          `json:"jsonrpc"`

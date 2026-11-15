@@ -8,12 +8,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	sdk "github.com/coder/acp-go-sdk"
 )
+
+// maxReadBytes bounds one file reply. A reply rides one transport frame, so a
+// larger file is refused before it is loaded rather than after it fails to send.
+const maxReadBytes = 1 << 20
 
 // Policy decides what an agent may do without asking. It answers the same
 // question for every permission request, so a session's autonomy is one setting
@@ -132,9 +137,18 @@ func (c *Client) ReadTextFile(_ context.Context, params sdk.ReadTextFileRequest)
 		return sdk.ReadTextFileResponse{}, err
 	}
 
-	content, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	content, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
+	if err != nil {
+		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	if len(content) > maxReadBytes {
+		return sdk.ReadTextFileResponse{}, fmt.Errorf("read %q: over %d bytes: %w", path, maxReadBytes, ErrFileTooLarge)
 	}
 
 	return sdk.ReadTextFileResponse{Content: sliceLines(string(content), params.Line, params.Limit)}, nil

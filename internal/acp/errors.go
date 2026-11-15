@@ -27,6 +27,9 @@ var ErrUnsupported = errors.New("acp: capability not advertised")
 // ErrProtocol reports a response that does not match what this build speaks.
 var ErrProtocol = errors.New("acp: protocol violation")
 
+// ErrFileTooLarge reports a read whose reply cannot fit one transport frame.
+var ErrFileTooLarge = errors.New("acp: file too large to return in one reply")
+
 // Kinds used by Update.Kind and by a permission request's tool kind.
 const (
 	kindMessage = "message"
