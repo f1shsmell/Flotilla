@@ -19,6 +19,47 @@ export interface Status {
   failures: string[];
 }
 
+export interface StartRequest {
+  id: string;
+  mode: string;
+  command: string;
+  args: string[];
+  dir: string;
+  policy?: string;
+}
+
+// splitArgs turns the form's argument line into argv: spaces separate, double
+// quotes group, and a quote with nothing in it still makes an empty argument.
+export function splitArgs(line: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quoted = false;
+  let started = false;
+
+  for (const character of line) {
+    if (character === '"') {
+      quoted = !quoted;
+      started = true;
+      continue;
+    }
+    if (!quoted && /\s/.test(character)) {
+      if (started) {
+        args.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += character;
+    started = true;
+  }
+
+  if (started) {
+    args.push(current);
+  }
+  return args;
+}
+
 export type EntryKind = "message" | "thought" | "tool" | "plan" | "other";
 
 export interface Entry {

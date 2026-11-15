@@ -2,12 +2,16 @@ import { useState } from "react";
 
 import type { Entry, SessionState } from "../store";
 import { PermissionCard } from "./PermissionCard";
+import { Terminal } from "./Terminal";
 
 interface Props {
   state: SessionState;
   onPrompt: (text: string) => void;
   onCancel: () => void;
   onAnswer: (questionId: string, optionId: string) => void;
+  onTerminalReady: (write: (bytes: Uint8Array) => void) => void;
+  onInput: (data: string) => void;
+  onResize: (cols: number, rows: number) => void;
 }
 
 function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
@@ -32,7 +36,15 @@ function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
   }
 }
 
-export function SessionView({ state, onPrompt, onCancel, onAnswer }: Props): React.ReactElement {
+export function SessionView({
+  state,
+  onPrompt,
+  onCancel,
+  onAnswer,
+  onTerminalReady,
+  onInput,
+  onResize,
+}: Props): React.ReactElement {
   const [draft, setDraft] = useState("");
   const working = state.turn === "working";
 
@@ -70,13 +82,17 @@ export function SessionView({ state, onPrompt, onCancel, onAnswer }: Props): Rea
         />
       ))}
 
-      <div className="log">
-        {state.entries.length === 0 ? (
-          <p className="empty">Nothing yet. Send a prompt.</p>
-        ) : (
-          state.entries.map((entry) => <EntryLine key={entry.key} entry={entry} />)
-        )}
-      </div>
+      {state.mode === "pty" ? (
+        <Terminal onInput={onInput} onResize={onResize} onReady={onTerminalReady} />
+      ) : (
+        <div className="log">
+          {state.entries.length === 0 ? (
+            <p className="empty">Nothing yet. Send a prompt.</p>
+          ) : (
+            state.entries.map((entry) => <EntryLine key={entry.key} entry={entry} />)
+          )}
+        </div>
+      )}
 
       {state.mode === "acp" ? (
         <div className="composer">
@@ -95,12 +111,7 @@ export function SessionView({ state, onPrompt, onCancel, onAnswer }: Props): Rea
             {working ? "Working…" : "Send"}
           </button>
         </div>
-      ) : (
-        <p className="muted">
-          A PTY session has no prompt box: the terminal view arrives with the PTY
-          slice.
-        </p>
-      )}
+      ) : null}
     </div>
   );
 }

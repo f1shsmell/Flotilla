@@ -109,6 +109,41 @@ button.primary {
   font-family: var(--mono);
 }
 
+.new-session {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.new-session p {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.new-session input,
+.new-session select {
+  font: inherit;
+  color: var(--text);
+  background: #101216;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+
+.new-session .row {
+  display: flex;
+  gap: 6px;
+}
+
+.new-session .row select {
+  flex: 1;
+}
+
 .sessions {
   list-style: none;
   margin: 0;
@@ -178,6 +213,20 @@ button.primary {
 
 .entry.other {
   font-size: 13px;
+}
+
+.terminal {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  background: #101216;
+  overflow: hidden;
+}
+
+.terminal .xterm {
+  height: 100%;
 }
 
 .composer {

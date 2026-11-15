@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { decodeBase64 } from "./base64";
 import { FleetList } from "./components/FleetList";
+import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionView } from "./components/SessionView";
 import {
   addPermission,
@@ -14,6 +16,7 @@ import {
   startTurn,
   summarise,
   type SessionState,
+  type StartRequest,
   type Status,
 } from "./store";
 
@@ -22,6 +25,7 @@ interface WireEvent {
   session: string;
   update?: unknown;
   question?: unknown;
+  base64?: string;
   error?: string;
 }
 
@@ -36,6 +40,11 @@ export function App(): React.ReactElement {
   // the whole log at the agent's token rate, so they queue and flush on a frame.
   const queue = useRef<WireEvent[]>([]);
   const frame = useRef<number | null>(null);
+
+  // Terminal bytes bypass the store: xterm keeps its own scrollback and writes
+  // are already cheap, so they go straight to the view that owns them.
+  const terminalWrite = useRef<((bytes: Uint8Array) => void) | null>(null);
+  const selectedId = useRef<string | null>(null);
 
   const flush = useCallback(() => {
     frame.current = null;
@@ -78,7 +87,16 @@ export function App(): React.ReactElement {
 
   useEffect(() => {
     return window.flotilla.onEvent((payload) => {
-      queue.current.push(payload as WireEvent);
+      const event = payload as WireEvent;
+
+      if (event.type === "data") {
+        if (event.session === selectedId.current && event.base64) {
+          terminalWrite.current?.(decodeBase64(event.base64));
+        }
+        return;
+      }
+
+      queue.current.push(event);
       schedule();
     });
   }, [schedule]);
@@ -110,6 +128,8 @@ export function App(): React.ReactElement {
 
   const open = useCallback(async (id: string) => {
     setSelected(id);
+    selectedId.current = id;
+    terminalWrite.current = null;
     setOpenError(null);
     try {
       const attached = (await window.flotilla.open(id)) as {
@@ -175,6 +195,17 @@ export function App(): React.ReactElement {
     [session],
   );
 
+  const start = useCallback(
+    async (request: StartRequest) => {
+      const started = (await window.flotilla.start(request)) as { id?: string };
+      await refresh(true);
+      if (started?.id) {
+        await open(started.id);
+      }
+    },
+    [open, refresh],
+  );
+
   const counts = fleet ? summarise(fleet) : { total: 0, reachable: 0 };
 
   return (
@@ -198,6 +229,8 @@ export function App(): React.ReactElement {
           </p>
         ))}
 
+        <NewSessionForm onStart={start} />
+
         <FleetList
           sessions={fleet?.sessions ?? []}
           selected={selected}
@@ -213,12 +246,17 @@ export function App(): React.ReactElement {
             onPrompt={(text) => void prompt(text)}
             onCancel={() => void cancel()}
             onAnswer={(questionId, optionId) => void answer(questionId, optionId)}
+            onTerminalReady={(write) => {
+              terminalWrite.current = write;
+            }}
+            onInput={(data) => void window.flotilla.input(session.id, data)}
+            onResize={(cols, rows) => void window.flotilla.resize(session.id, cols, rows)}
           />
         ) : (
           <p className="empty">
             {fleet && fleet.sessions.length > 0
               ? "Pick a session to watch it work."
-              : "No sessions yet. Start one with `flt` once the CLI grows that command."}
+              : "No sessions yet. Start one on the left."}
           </p>
         )}
       </main>

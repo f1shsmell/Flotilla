@@ -51,10 +51,61 @@ async function sendPrompt(target: BrowserWindow, text: string): Promise<void> {
   })()`);
 }
 
+// terminalText reads xterm's buffer, which never reaches the DOM.
+const terminalText = `(() => {
+  const term = window.__fltTerminal;
+  if (!term) { return ""; }
+  const buffer = term.buffer.active;
+  let text = "";
+  for (let i = 0; i < buffer.length; i += 1) {
+    const line = buffer.getLine(i);
+    if (line) { text += line.translateToString(true) + "\\n"; }
+  }
+  return text;
+})()`;
+
+async function finish(
+  target: BrowserWindow,
+  expect: string,
+  expectTerminal: string,
+  deadline: number,
+): Promise<boolean> {
+  if (expectTerminal !== "") {
+    const screen = await waitForTerminal(target, expectTerminal, deadline);
+    console.log(`smoke: ok (terminal: ${expectTerminal})`);
+    console.log(screen);
+    return true;
+  }
+
+  const text = await waitFor(target, expect, deadline);
+  console.log(`smoke: ok (${expect || "rendered"})`);
+  console.log(text);
+  return true;
+}
+
+async function waitForTerminal(
+  target: BrowserWindow,
+  needle: string,
+  deadline: number,
+): Promise<string> {
+  let text = "";
+  while (Date.now() < deadline) {
+    text = (await target.webContents.executeJavaScript(terminalText)) as string;
+    if (text.includes(needle)) {
+      return text;
+    }
+    await step();
+  }
+  throw new Error(`${needle} never reached the terminal; screen was:\n${text}`);
+}
+
 export async function run(target: BrowserWindow): Promise<boolean> {
   const expect = process.env.FLT_GUI_SMOKE_EXPECT ?? "";
+  const expectTerminal = process.env.FLT_GUI_SMOKE_TERMINAL ?? "";
   const open = process.env.FLT_GUI_SMOKE_OPEN ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
+  const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
+  const form = process.env.FLT_GUI_SMOKE_FORM ?? "";
   const deadline = Date.now() + 120000;
 
   target.webContents.on("render-process-gone", (_event, details) => {
@@ -65,6 +116,47 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   });
 
   try {
+    if (form !== "") {
+      await waitFor(target, "Start", deadline);
+      await target.webContents.executeJavaScript(`(() => {
+        const fields = ${form};
+        const setValue = (element, value) => {
+          const proto = element.tagName === "SELECT"
+            ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+          setter.call(element, value);
+          element.dispatchEvent(new Event(
+            element.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+        };
+        const [command, args, dir] = document.querySelectorAll(".new-session input");
+        setValue(command, fields.command);
+        setValue(args, fields.args ?? "");
+        setValue(dir, fields.dir ?? "");
+        if (fields.mode) {
+          setValue(document.querySelector(".new-session select"), fields.mode);
+        }
+        document.querySelector(".new-session").requestSubmit();
+      })()`);
+      // The form's submit opens the new session, so the composer appears only
+      // once the start and the attach have both come back.
+      await waitFor(target, "Cancel turn", deadline);
+      console.log("smoke: submitted the form");
+    }
+
+    if (startRequest !== "") {
+      const started = (await target.webContents.executeJavaScript(
+        `window.flotilla.start(${startRequest})`,
+      )) as { id?: string };
+      if (!started?.id) {
+        throw new Error("the start request returned no session id");
+      }
+      console.log(`smoke: started ${started.id}`);
+      await waitFor(target, started.id, deadline);
+      if (open === "") {
+        return finish(target, started.id, expectTerminal, deadline);
+      }
+    }
+
     if (open !== "") {
       await waitFor(target, open, deadline);
       await clickSession(target, open);
@@ -75,10 +167,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
       await sendPrompt(target, prompt);
     }
 
-    const text = await waitFor(target, expect, deadline);
-    console.log(`smoke: ok (${expect || "rendered"})`);
-    console.log(text);
-    return true;
+    return finish(target, expect, expectTerminal, deadline);
   } catch (error) {
     console.error(`smoke: ${error instanceof Error ? error.message : String(error)}`);
     return false;

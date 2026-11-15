@@ -87,6 +87,14 @@ function register(): void {
     }
   });
 
+  ipcMain.handle("flotilla:start", async (_event, request: unknown) => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel });
+    }
+    // Starting a session spawns a host, which spawns an agent: give it room.
+    return control.call("session.start", request, 60000);
+  });
+
   ipcMain.handle("flotilla:open", async (event, sessionId: string) =>
     openLink(sessionId, event.sender),
   );
@@ -112,6 +120,13 @@ function register(): void {
   ipcMain.handle("flotilla:input", async (_event, sessionId: string, text: string) => {
     link(sessionId).sendData(2, Buffer.from(text, "utf8"));
   });
+
+  ipcMain.handle(
+    "flotilla:resize",
+    async (_event, sessionId: string, cols: number, rows: number) => {
+      await link(sessionId).call("session.resize", { cols, rows });
+    },
+  );
 }
 
 function createWindow(): void {

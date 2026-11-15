@@ -8,6 +8,7 @@ import {
   loseSession,
   newSession,
   parseStatus,
+  splitArgs,
   startTurn,
   summarise,
 } from "../src/store";
@@ -57,6 +58,28 @@ describe("parseStatus", () => {
       sessions: [],
       failures: [],
     });
+  });
+});
+
+describe("splitArgs", () => {
+  it("splits on spaces", () => {
+    expect(splitArgs("acp --verbose")).toEqual(["acp", "--verbose"]);
+  });
+
+  it("keeps a quoted argument together", () => {
+    expect(splitArgs('/c "echo hello & ping -n 3 127.0.0.1"')).toEqual([
+      "/c",
+      "echo hello & ping -n 3 127.0.0.1",
+    ]);
+  });
+
+  it("ignores the spaces around the line", () => {
+    expect(splitArgs("   acp   ")).toEqual(["acp"]);
+    expect(splitArgs("")).toEqual([]);
+  });
+
+  it("keeps an empty quoted argument", () => {
+    expect(splitArgs('--name ""')).toEqual(["--name", ""]);
   });
 });
 
