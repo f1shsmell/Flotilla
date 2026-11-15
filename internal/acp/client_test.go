@@ -59,6 +59,41 @@ func TestResolveAllowsOutsidePathsOnlyWithFullAccess(t *testing.T) {
 	}
 }
 
+// TestResolveAcceptsAFileThatDoesNotExistYet pins the CI failure this build
+// shipped once: a workspace reached through a short 8.3 name resolves to its
+// long name, so a candidate that skipped resolution looked like an escape.
+func TestResolveAcceptsAFileThatDoesNotExistYet(t *testing.T) {
+	root := t.TempDir()
+	c := NewClient(Config{Workspace: root})
+
+	future := filepath.Join(root, "deep", "nested", "not-created.txt")
+	got, err := c.resolve(future)
+	if err != nil {
+		t.Fatalf("resolve(%q): %v", future, err)
+	}
+	if filepath.Base(got) != "not-created.txt" {
+		t.Fatalf("resolve kept %q as the base name, want the tail the agent asked for", filepath.Base(got))
+	}
+	if len(got) == 0 || !filepath.IsAbs(got) {
+		t.Fatalf("resolve returned %q, want an absolute path", got)
+	}
+}
+
+// TestResolveNormalisesBothSidesAlike covers the other half: however the
+// workspace is written, a path inside it compares equal to it.
+func TestResolveNormalisesBothSidesAlike(t *testing.T) {
+	root := t.TempDir()
+	c := NewClient(Config{Workspace: root})
+
+	got, err := c.resolve(filepath.Join(root, "file.txt"))
+	if err != nil {
+		t.Fatalf("resolve inside the workspace: %v", err)
+	}
+	if !inside(resolveExistingAncestor(root), got) {
+		t.Fatalf("resolved %q is not under the resolved workspace %q", got, resolveExistingAncestor(root))
+	}
+}
+
 func TestReadTextFileSlicesLines(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "notes.txt")

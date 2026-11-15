@@ -254,8 +254,7 @@ func (c *Client) decide(req PermissionRequest) decision {
 }
 
 // resolve turns an agent's path into one inside the workspace, refusing
-// anything that escapes it. Symlinks are resolved before the check, so a link
-// cannot be used to step outside.
+// anything that escapes it.
 func (c *Client) resolve(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("empty path: %w", ErrOutsideWorkspace)
@@ -265,26 +264,35 @@ func (c *Client) resolve(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve the workspace: %w", err)
 	}
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
-	}
+	root = resolveExistingAncestor(root)
 
 	candidate := path
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(root, candidate)
 	}
-	candidate = filepath.Clean(candidate)
-
-	// The file itself need not exist yet; its directory might, and that is the
-	// link a path could use to escape.
-	if resolved, err := filepath.EvalSymlinks(filepath.Dir(candidate)); err == nil {
-		candidate = filepath.Join(resolved, filepath.Base(candidate))
-	}
+	candidate = resolveExistingAncestor(filepath.Clean(candidate))
 
 	if inside(root, candidate) || c.cfg.Policy == FullAccess {
 		return candidate, nil
 	}
 	return "", fmt.Errorf("%q: %w", path, ErrOutsideWorkspace)
+}
+
+// resolveExistingAncestor resolves the deepest ancestor of path that exists and
+// re-appends the rest. EvalSymlinks needs its argument to exist, and an agent
+// routinely names a file it is about to create; skipping the resolution there
+// would compare a short 8.3 name against a long one and report a false escape.
+func resolveExistingAncestor(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+
+	dir := filepath.Dir(path)
+	if dir == path {
+		// Reached a volume root that does not resolve; leave it as it is.
+		return path
+	}
+	return filepath.Join(resolveExistingAncestor(dir), filepath.Base(path))
 }
 
 // inside reports whether path is root or below it.
