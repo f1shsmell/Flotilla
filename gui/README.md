@@ -43,9 +43,10 @@ Two things bite a first build:
 - electron-builder downloads NSIS and winCodeSign on first use. Behind a slow or
   filtered network, point it at a mirror with
   `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`.
-- pnpm 11 refuses to run a dependency's build script unless it is allowed;
-  `.npmrc` sets `strict-dep-builds=false`, which keeps `pnpm install` working
-  without an interactive approval.
+- pnpm 11 refuses to run a dependency's build script unless it is allowed; the
+  repository's `.npmrc` sets `strict-dep-builds=false`, which keeps
+  `pnpm --dir gui install` working from the repository root without an
+  interactive approval.
 
 The installer is unsigned unless `CSC_LINK` and `CSC_KEY_PASSWORD` are set. An
 unsigned build is what CI produces today; `RELEASING.md` records what has to be
