@@ -19,7 +19,7 @@ agent sessions live in [FLOTILLA.md](FLOTILLA.md).
 | `cmd/flt` | CLI entry point |
 | `cmd/flt-daemon` + `internal/` | Control plane: session routing, worktrees, orchestration, state store |
 | `cmd/flt-session-host` | Per-session handle holder: ConPTY / ACP stdio, survives daemon restart |
-| `gui/` | Electron + TS client; never spawns agents |
+| `gui/` | Electron + React + TS client; never spawns agents |
 | `adapters/` | JSON adapter definitions (data, not code) |
 | `docs/` | Engineering docs |
 
