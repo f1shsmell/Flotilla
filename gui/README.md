@@ -38,6 +38,11 @@ for its session host in its own directory, so the two travel together. An
 installed window starts the daemon from `resources/bin` and only falls back to
 `PATH` when that is missing.
 
+`dependencies` is empty on purpose: the renderer's packages are bundled by Vite
+into `dist/renderer`, so shipping them again in the asar would only make the
+installer bigger. A package the **main process** loads at run time has to be in
+`dependencies` or it will not travel.
+
 Two things bite a first build:
 
 - electron-builder downloads NSIS and winCodeSign on first use. Behind a slow or
