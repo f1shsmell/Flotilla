@@ -203,6 +203,36 @@ func TestServeTellsARejectedPeerWhy(t *testing.T) {
 	}
 }
 
+// TestServeDropsAPeerThatNeverSendsAHandshake pins the accept loop against a
+// client that connects and then says nothing: without a deadline it holds the
+// loop, and the process stops accepting everyone else.
+func TestServeDropsAPeerThatNeverSendsAHandshake(t *testing.T) {
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	_ = dialPeer(t, addr, dir)
+	accepted := finishAccept(t, acceptc)
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := Serve(accepted, Config{
+			Token:            "shared",
+			Role:             "daemon",
+			HandshakeTimeout: 100 * time.Millisecond,
+		})
+		errc <- err
+	}()
+
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("Serve accepted a peer that never sent a handshake")
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("Serve waited on a silent peer instead of giving up")
+	}
+}
+
 func TestCallRoundTrips(t *testing.T) {
 	served, client := servePair(t,
 		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, method string, params json.RawMessage) (any, error) {

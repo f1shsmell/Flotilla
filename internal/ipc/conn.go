@@ -32,6 +32,20 @@ type Config struct {
 	Handler Handler
 	// OnData receives inbound terminal bytes; nil drops them.
 	OnData DataSink
+	// HandshakeTimeout bounds the wait for the peer's handshake. Zero uses the
+	// default: a peer that connects and then says nothing must not hold an
+	// accept loop.
+	HandshakeTimeout time.Duration
+}
+
+// handshakeTimeout is the default bound on the wait for a peer's handshake.
+const handshakeTimeout = 10 * time.Second
+
+func (c Config) handshakeTimeout() time.Duration {
+	if c.HandshakeTimeout > 0 {
+		return c.HandshakeTimeout
+	}
+	return handshakeTimeout
 }
 
 // Conn is one authenticated connection carrying both planes.
@@ -60,6 +74,11 @@ type Conn struct {
 func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 	c := newConn(nc, cfg)
 
+	if err := nc.SetReadDeadline(time.Now().Add(cfg.handshakeTimeout())); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("set the handshake deadline: %w", err)
+	}
+
 	hello, err := c.readHandshake()
 	if err != nil {
 		c.Close()
@@ -74,6 +93,10 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 	if err := c.sendHandshake(Handshake{Version: ProtocolVersion, Role: c.role, Session: c.session}); err != nil {
 		c.Close()
 		return nil, err
+	}
+	if err := nc.SetReadDeadline(time.Time{}); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("clear the handshake deadline: %w", err)
 	}
 
 	c.peer = hello.Role
@@ -91,6 +114,10 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 	}
 
 	c := newConn(nc, cfg)
+	if err := nc.SetReadDeadline(time.Now().Add(cfg.handshakeTimeout())); err != nil {
+		_ = nc.Close()
+		return nil, fmt.Errorf("set the handshake deadline: %w", err)
+	}
 	if err := c.sendHandshake(Handshake{
 		Version: ProtocolVersion,
 		Token:   cfg.Token,
@@ -113,6 +140,10 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 	if hello.Version != ProtocolVersion {
 		_ = nc.Close()
 		return nil, fmt.Errorf("peer speaks protocol %d, this build speaks %d: %w", hello.Version, ProtocolVersion, ErrProtocol)
+	}
+	if err := nc.SetReadDeadline(time.Time{}); err != nil {
+		_ = nc.Close()
+		return nil, fmt.Errorf("clear the handshake deadline: %w", err)
 	}
 
 	c.peer = hello.Role
