@@ -215,6 +215,124 @@ button.primary {
   font-size: 13px;
 }
 
+.session-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+
+.diff-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.diff-bar select {
+  font: inherit;
+  color: var(--text);
+  background: #101216;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.diff-body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.diff-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.diff-file {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 6px 8px;
+}
+
+.diff-file.selected {
+  background: var(--panel);
+}
+
+.diff-path {
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-status {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.diff-counts {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.diff-patch {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101216;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 8px 0;
+}
+
+.diff-patch .line {
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-patch .add {
+  background: rgba(74, 222, 128, 0.12);
+  color: #b9f6ca;
+}
+
+.diff-patch .del {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.diff-patch .hunk {
+  color: var(--accent);
+}
+
+.diff-patch .meta {
+  color: var(--muted);
+}
+
 .terminal {
   flex: 1;
   min-height: 0;

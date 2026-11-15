@@ -74,7 +74,9 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
 function link(sessionId: string): DaemonClient {
   const held = links.get(sessionId);
   if (!held) {
-    throw new Error(`session ${sessionId} is not open in this window`);
+    throw new Error(
+      `session ${sessionId} is not open in this window (open: ${[...links.keys()].join(", ") || "none"})`,
+    );
   }
   return held.client;
 }
@@ -128,6 +130,13 @@ function register(): void {
   ipcMain.handle("flotilla:input", async (_event, sessionId: string, text: string) => {
     link(sessionId).sendData(STREAM_INPUT, Buffer.from(text, "utf8"));
   });
+
+  ipcMain.handle(
+    "flotilla:diff",
+    async (_event, sessionId: string, scope: string, path?: string) =>
+      // git can be slow on a large repository; this is a read, not a turn.
+      link(sessionId).call("session.diff", { scope, path }, 30000),
+  );
 
   ipcMain.handle(
     "flotilla:resize",

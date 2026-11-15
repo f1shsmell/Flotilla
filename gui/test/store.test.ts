@@ -7,6 +7,7 @@ import {
   endTurn,
   loseSession,
   newSession,
+  parsePatch,
   parseStatus,
   splitArgs,
   startTurn,
@@ -81,6 +82,35 @@ describe("splitArgs", () => {
 
   it("keeps an empty quoted argument", () => {
     expect(splitArgs('--name ""')).toEqual(["--name", ""]);
+  });
+});
+
+describe("parsePatch", () => {
+  it("classifies the lines a renderer colours", () => {
+    const patch = [
+      "diff --git a/readme.md b/readme.md",
+      "--- a/readme.md",
+      "+++ b/readme.md",
+      "@@ -1 +1,2 @@",
+      " hello",
+      "+world",
+      "-gone",
+    ].join("\n");
+
+    expect(parsePatch(patch).map((line) => line.kind)).toEqual([
+      "meta",
+      "meta",
+      "meta",
+      "hunk",
+      "context",
+      "add",
+      "del",
+    ]);
+    expect(parsePatch(patch)[5].text).toBe("world");
+  });
+
+  it("drops the trailing newline git leaves", () => {
+    expect(parsePatch("+one\n")).toHaveLength(1);
   });
 });
 

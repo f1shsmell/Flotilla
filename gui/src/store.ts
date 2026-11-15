@@ -81,6 +81,55 @@ export function splitArgs(line: string): string[] {
   return args;
 }
 
+export interface DiffFile {
+  path: string;
+  old_path?: string;
+  status: string;
+  added: number;
+  removed: number;
+  binary?: boolean;
+  untracked?: boolean;
+}
+
+export type DiffLineKind = "add" | "del" | "hunk" | "meta" | "context";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+}
+
+// parsePatch classifies a unified diff line by line, which is all a renderer
+// needs: git's own prefixes carry the meaning.
+export function parsePatch(patch: string): DiffLine[] {
+  return patch
+    .split("\n")
+    .filter((line, index, all) => !(index === all.length - 1 && line === ""))
+    .map((line) => {
+      if (line.startsWith("@@")) {
+        return { kind: "hunk" as const, text: line };
+      }
+      if (
+        line.startsWith("+++") ||
+        line.startsWith("---") ||
+        line.startsWith("diff --git") ||
+        line.startsWith("index ") ||
+        line.startsWith("new file") ||
+        line.startsWith("deleted file") ||
+        line.startsWith("similarity") ||
+        line.startsWith("rename ")
+      ) {
+        return { kind: "meta" as const, text: line };
+      }
+      if (line.startsWith("+")) {
+        return { kind: "add" as const, text: line.slice(1) };
+      }
+      if (line.startsWith("-")) {
+        return { kind: "del" as const, text: line.slice(1) };
+      }
+      return { kind: "context" as const, text: line.startsWith(" ") ? line.slice(1) : line };
+    });
+}
+
 export type EntryKind = "message" | "thought" | "tool" | "plan" | "other";
 
 export interface Entry {

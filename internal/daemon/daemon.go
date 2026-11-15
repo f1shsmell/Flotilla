@@ -128,16 +128,20 @@ type Daemon struct {
 	mu    sync.Mutex
 	fleet Fleet
 	relay *relay
+	// baselines is the commit each session started at, which is what the turn
+	// scope compares against. It is memory only: a daemon restart forgets it.
+	baselines map[session.ID]string
 }
 
 // New builds a daemon. Call Run to serve.
 func New(cfg Config, spawn Spawner) *Daemon {
 	return &Daemon{
-		cfg:   cfg,
-		reg:   session.NewRegistry(cfg.StateDir),
-		addr:  ipc.Address{Channel: cfg.Channel, Name: "daemon"},
-		spawn: spawn,
-		relay: newRelay(),
+		cfg:       cfg,
+		reg:       session.NewRegistry(cfg.StateDir),
+		addr:      ipc.Address{Channel: cfg.Channel, Name: "daemon"},
+		spawn:     spawn,
+		relay:     newRelay(),
+		baselines: make(map[session.ID]string),
 	}
 }
 

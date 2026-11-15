@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("flotilla", {
     ipcRenderer.invoke("flotilla:input", sessionId, text),
   resize: (sessionId: string, cols: number, rows: number) =>
     ipcRenderer.invoke("flotilla:resize", sessionId, cols, rows),
+  diff: (sessionId: string, scope: string, path?: string) =>
+    ipcRenderer.invoke("flotilla:diff", sessionId, scope, path),
   onEvent: (handler: (event: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => handler(payload);
     ipcRenderer.on("flotilla:event", listener);

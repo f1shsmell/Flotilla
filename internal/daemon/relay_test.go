@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
+	"github.com/f1shsmell/flotilla/internal/gittest"
 	"github.com/f1shsmell/flotilla/internal/host"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -420,48 +421,10 @@ func TestTheDaemonTakesBackToBackClients(t *testing.T) {
 	}
 }
 
-// initGitRepo makes a repository with one commit, a .gitignore that keeps .env
-// out of git, and a .worktreeinclude that asks for it anyway.
-func initGitRepo(t *testing.T) string {
-	t.Helper()
-
-	dir := t.TempDir()
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, output)
-		}
-	}
-
-	git("init", "-b", "main")
-	for name, content := range map[string]string{
-		"readme.md":        "hello\n",
-		".gitignore":       ".env\n",
-		".worktreeinclude": ".env\n",
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	git("add", ".")
-	git("commit", "-m", "init")
-
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
-		t.Fatalf("write .env: %v", err)
-	}
-	return dir
-}
-
 // TestStartRunsTheSessionInAWorktree pins the daemon's half of the slice: a
 // request for a worktree becomes the directory the agent runs in.
 func TestStartRunsTheSessionInAWorktree(t *testing.T) {
-	repo := initGitRepo(t)
+	repo := gittest.Init(t)
 
 	dir, included, skipped, err := worktreeFor(context.Background(), StartRequest{
 		ID:       "sess-wt",
@@ -493,5 +456,118 @@ func TestStartWithoutAWorktreeKeepsTheCallersDirectory(t *testing.T) {
 	}
 	if dir != "/tmp/wherever" || included != nil || skipped != nil {
 		t.Fatalf("worktreeFor = (%q, %v, %v), want the caller's directory untouched", dir, included, skipped)
+	}
+}
+
+// TestTheDaemonRemembersWhereASessionStarted pins the turn scope's input: the
+// commit is taken when the session starts, before the agent touches anything.
+func TestTheDaemonRemembersWhereASessionStarted(t *testing.T) {
+	d := New(Config{Channel: "test", Token: "shared", StateDir: t.TempDir(), Log: discardLogger()}, nil)
+
+	if d.baseline("sess-a") != "" {
+		t.Fatal("a session the daemon never started has a baseline")
+	}
+
+	d.remember("sess-a", "abc123")
+	if got := d.baseline("sess-a"); got != "abc123" {
+		t.Fatalf("baseline = %q, want abc123", got)
+	}
+
+	d.remember("sess-b", "")
+	if d.baseline("sess-b") != "" {
+		t.Fatal("an empty baseline was recorded")
+	}
+}
+
+// startHostIn takes a session whose agent runs in workDir, so a diff has a
+// repository to read.
+func startHostIn(t *testing.T, stateDir, id, token, workDir string) {
+	t.Helper()
+
+	command, args := helperCommand(t)
+	h, err := host.Start(context.Background(), host.Config{
+		ID:       session.ID(id),
+		Token:    token,
+		StateDir: stateDir,
+		Command:  command,
+		Args:     args,
+		Env:      append(os.Environ(), helperEnv+"=1"),
+		Dir:      workDir,
+	}, session.NewRegistry(stateDir), discardLogger())
+	if err != nil {
+		t.Fatalf("start the host: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = h.Serve(ctx) }()
+
+	if _, err := waitRecord(t, session.NewRegistry(stateDir), session.ID(id)); err != nil {
+		t.Fatalf("the host never published a record: %v", err)
+	}
+}
+
+// TestDiffCrossesTheDaemon pins the review path: a client asks the daemon what
+// changed in the session's checkout and gets the files and one patch back.
+func TestDiffCrossesTheDaemon(t *testing.T) {
+	stateDir := t.TempDir()
+	const token = "shared"
+	repo := gittest.Init(t)
+
+	startHostIn(t, stateDir, "sess-diff", token, repo)
+	runDaemon(t, stateDir, token)
+
+	client := dialDaemon(t, stateDir, token, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-diff"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	// The agent edits a file; the review has to see it.
+	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hello\nworld\n"), 0o600); err != nil {
+		t.Fatalf("edit the file: %v", err)
+	}
+
+	raw, err := client.Call(ctx, session.MethodDiff, session.DiffRequest{Scope: "unstaged"})
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	var listed session.DiffResponse
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("decode the diff: %v", err)
+	}
+	if len(listed.Files) != 1 || listed.Files[0].Path != "readme.md" {
+		t.Fatalf("files = %+v, want the edited readme", listed.Files)
+	}
+
+	raw, err = client.Call(ctx, session.MethodDiff, session.DiffRequest{Scope: "unstaged", Path: "readme.md"})
+	if err != nil {
+		t.Fatalf("diff of one file: %v", err)
+	}
+	var patched session.DiffResponse
+	if err := json.Unmarshal(raw, &patched); err != nil {
+		t.Fatalf("decode the patch: %v", err)
+	}
+	if !strings.Contains(patched.Patch, "+world") {
+		t.Fatalf("patch does not carry the edit:/n%s", patched.Patch)
+	}
+
+	// A session the daemon did not start has no recorded baseline, so the turn
+	// scope asks the caller for the commit it began at.
+	baseline := strings.TrimSpace(gittest.Run(t, repo, "rev-parse", "HEAD"))
+	raw, err = client.Call(ctx, session.MethodDiff, session.DiffRequest{Scope: "turn", Base: baseline})
+	if err != nil {
+		t.Fatalf("turn diff: %v", err)
+	}
+	var turn session.DiffResponse
+	if err := json.Unmarshal(raw, &turn); err != nil {
+		t.Fatalf("decode the turn diff: %v", err)
+	}
+	if len(turn.Files) != 1 || turn.Files[0].Path != "readme.md" {
+		t.Fatalf("turn files = %+v, want the edit since the session started", turn.Files)
 	}
 }

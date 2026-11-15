@@ -3,8 +3,11 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -102,6 +105,12 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		kept = fmt.Sprintf(" (its worktree is at %q)", dir)
 	}
 
+	// The turn scope compares against where the session started, so the commit
+	// is taken now, before the agent touches anything.
+	if head, err := gitHead(ctx, dir); err == nil {
+		d.remember(req.ID, head)
+	}
+
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
@@ -140,6 +149,21 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		Included: included,
 		Skipped:  skipped,
 	}, nil
+}
+
+// gitHead reports the commit a directory is on, or an empty string when it is
+// not a repository.
+func gitHead(ctx context.Context, dir string) (string, error) {
+	if dir == "" {
+		return "", errors.New("no directory")
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("read the commit of %q: %w", dir, err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // worktreeFor creates the worktree a request asks for and reports where the
