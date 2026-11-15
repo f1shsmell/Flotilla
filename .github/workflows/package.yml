@@ -45,6 +45,14 @@ jobs:
       - name: build the installer
         run: pnpm --dir gui dist
 
+      # An installer without the binaries the window spawns looks complete and
+      # is useless; the check is one path away from the artefact.
+      - name: the app carries the binaries it spawns
+        shell: pwsh
+        run: |
+          $bin = "gui/release/win-unpacked/resources/bin/flt-daemon.exe"
+          if (-not (Test-Path $bin)) { throw "the installer is missing $bin" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: flotilla-installer
