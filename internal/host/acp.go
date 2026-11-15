@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	sdk "github.com/coder/acp-go-sdk"
 
@@ -62,7 +63,9 @@ func (h *Host) startACP(ctx context.Context) error {
 }
 
 // forwardUpdate pushes one agent update to the attached client. With no client
-// it is buffered, so a reattach shows what happened while nobody listened.
+// it is buffered, so a reattach shows what happened while nobody listened. An
+// update too large for one frame is split: a streaming client already renders
+// pieces of one message, so dropping it would lose what splitting keeps.
 func (h *Host) forwardUpdate(u acp.Update) {
 	msg := session.UpdateMessage{
 		Kind:       u.Kind,
@@ -72,6 +75,14 @@ func (h *Host) forwardUpdate(u acp.Update) {
 		ToolStatus: u.ToolStatus,
 	}
 
+	for _, part := range chunkUpdate(msg, updateTextBudget) {
+		h.deliverUpdate(part)
+	}
+}
+
+// deliverUpdate pushes one update to the client, or buffers it when nobody is
+// listening.
+func (h *Host) deliverUpdate(msg session.UpdateMessage) {
 	h.mu.Lock()
 	conn := h.conn
 	h.mu.Unlock()
@@ -89,6 +100,42 @@ func (h *Host) forwardUpdate(u acp.Update) {
 	if err := conn.Notify(session.MethodUpdate, msg); err != nil {
 		h.log.Debug("forward an update failed", "session", h.cfg.ID, "err", err.Error())
 	}
+}
+
+// updateTextBudget bounds the text one update carries. A frame holds
+// ipc.MaxFrameSize bytes, JSON escaping can cost six bytes per byte, and the
+// envelope needs room of its own.
+const updateTextBudget = ipc.MaxFrameSize / 8
+
+// chunkUpdate splits an update whose text does not fit the budget into
+// consecutive updates of the same kind, cutting on rune boundaries so a split
+// never breaks a character.
+func chunkUpdate(msg session.UpdateMessage, budget int) []session.UpdateMessage {
+	if budget <= 0 || len(msg.Text) <= budget {
+		return []session.UpdateMessage{msg}
+	}
+
+	parts := make([]session.UpdateMessage, 0, len(msg.Text)/budget+1)
+	text := msg.Text
+
+	for len(text) > budget {
+		cut := budget
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		if cut == 0 {
+			cut = budget
+		}
+
+		part := msg
+		part.Text = text[:cut]
+		parts = append(parts, part)
+		text = text[cut:]
+	}
+
+	part := msg
+	part.Text = text
+	return append(parts, part)
 }
 
 // askClient sends a permission question and waits for the answer. A client that
