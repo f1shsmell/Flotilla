@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -105,6 +106,7 @@ type Daemon struct {
 
 	mu    sync.Mutex
 	fleet Fleet
+	relay *relay
 }
 
 // New builds a daemon. Call Run to serve.
@@ -114,6 +116,7 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		reg:   session.NewRegistry(cfg.StateDir),
 		addr:  ipc.Address{Channel: cfg.Channel, Name: "daemon"},
 		spawn: spawn,
+		relay: newRelay(),
 	}
 }
 
@@ -156,23 +159,29 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return fmt.Errorf("accept on %s: %w", d.addr, err)
 		}
 
-		conn, err := ipc.Serve(nc, ipc.Config{
-			Token:   d.cfg.Token,
-			Role:    "daemon",
-			Handler: d.handleCall,
-		})
-		if err != nil {
-			d.cfg.Log.Warn("rejected an ipc client", "err", err.Error())
-			continue
-		}
-		d.cfg.Log.Info("client connected", "peer", conn.Peer())
+		// The handshake runs off the loop: while it is being served the pipe has
+		// no pending instance, and a client dialling in that window is told the
+		// endpoint does not exist.
+		go func(nc net.Conn) {
+			conn, err := ipc.Serve(nc, ipc.Config{
+				Token:   d.cfg.Token,
+				Role:    "daemon",
+				Handler: d.handleCall,
+				OnData:  d.clientData,
+			})
+			if err != nil {
+				d.cfg.Log.Warn("rejected an ipc client", "err", err.Error())
+				return
+			}
+			d.cfg.Log.Info("client connected", "peer", conn.Peer())
+		}(nc)
 	}
 }
 
 // Reattach rebuilds the fleet from the records on disk. A daemon restart costs
 // nothing but this scan: the hosts were never waiting on the daemon.
 func (d *Daemon) Reattach(ctx context.Context) error {
-	fleet, err := Attach(ctx, d.reg, d.cfg.Token, d.cfg.StateDir, d.cfg.Log, d.cfg.attachTimeout())
+	fleet, err := Attach(ctx, d.reg, d.cfg.Token, d.cfg.StateDir, d.cfg.Log, d.cfg.attachTimeout(), d.hostHooks)
 	if err != nil {
 		return err
 	}
@@ -180,6 +189,10 @@ func (d *Daemon) Reattach(ctx context.Context) error {
 	d.mu.Lock()
 	d.fleet = fleet
 	d.mu.Unlock()
+
+	for _, att := range fleet.Attachments {
+		d.watch(att)
+	}
 
 	d.cfg.Log.Info("fleet reattached",
 		"sessions", len(fleet.Attachments), "failures", len(fleet.Failures))

@@ -17,7 +17,7 @@ func echoOnce(ctx context.Context, rec session.Record, stateDir, token, line str
 	conn, err := ipc.Dial(ctx, rec.Endpoint, stateDir, ipc.Config{
 		Token: token,
 		Role:  "test",
-		OnData: func(stream uint32, payload []byte) {
+		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			if stream == session.StreamOutput {
 				output <- string(payload)
 			}

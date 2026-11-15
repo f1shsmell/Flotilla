@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -197,20 +198,25 @@ func (h *Host) Serve(ctx context.Context) error {
 			return fmt.Errorf("accept on %s: %w", h.addr, err)
 		}
 
-		conn, err := ipc.Serve(nc, ipc.Config{
-			Token:   h.cfg.Token,
-			Role:    "host",
-			Session: string(h.cfg.ID),
-			Handler: h.handleCall,
-			OnData:  h.handleData,
-		})
-		if err != nil {
-			h.log.Warn("rejected an ipc client", "session", h.cfg.ID, "err", err.Error())
-			continue
-		}
+		// The handshake runs off the loop: while it is being served the pipe has
+		// no pending instance, and a client dialling in that window is told the
+		// endpoint does not exist.
+		go func(nc net.Conn) {
+			conn, err := ipc.Serve(nc, ipc.Config{
+				Token:   h.cfg.Token,
+				Role:    "host",
+				Session: string(h.cfg.ID),
+				Handler: h.handleCall,
+				OnData:  h.handleData,
+			})
+			if err != nil {
+				h.log.Warn("rejected an ipc client", "session", h.cfg.ID, "err", err.Error())
+				return
+			}
 
-		h.attach(conn)
-		h.log.Info("client attached", "session", h.cfg.ID, "peer", conn.Peer())
+			h.attach(conn)
+			h.log.Info("client attached", "session", h.cfg.ID, "peer", conn.Peer())
+		}(nc)
 	}
 }
 
@@ -240,7 +246,7 @@ func (h *Host) attach(conn *ipc.Conn) {
 	}()
 }
 
-func (h *Host) handleCall(ctx context.Context, method string, params json.RawMessage) (any, error) {
+func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
 	switch method {
 	case session.MethodInfo:
 		return h.info(), nil
@@ -252,6 +258,12 @@ func (h *Host) handleCall(ctx context.Context, method string, params json.RawMes
 		return h.promptACP(ctx, req)
 	case session.MethodCancel:
 		return struct{}{}, h.cancelACP(ctx)
+	case session.MethodResize:
+		req, err := decodeParams[session.ResizeRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		return struct{}{}, h.resize(req)
 	case session.MethodPermissionReply:
 		reply, err := decodeParams[session.PermissionReply](params)
 		if err != nil {
@@ -284,7 +296,22 @@ func (h *Host) info() session.Info {
 	}
 }
 
-func (h *Host) handleData(stream uint32, payload []byte) {
+// resize sizes the terminal. A structured session has no terminal, so it is the
+// same refusal as a prompt sent to a PTY session.
+func (h *Host) resize(req session.ResizeRequest) error {
+	if h.pty == nil {
+		return fmt.Errorf("session %q has no terminal: %w", h.cfg.ID, errWrongMode)
+	}
+	if req.Cols <= 0 || req.Rows <= 0 {
+		return fmt.Errorf("session %q: resize to %dx%d: %w", h.cfg.ID, req.Cols, req.Rows, errBadSize)
+	}
+	if err := h.pty.Resize(req.Cols, req.Rows); err != nil {
+		return fmt.Errorf("resize the pty: %w", err)
+	}
+	return nil
+}
+
+func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {
 	if stream != session.StreamInput || h.pty == nil {
 		return
 	}

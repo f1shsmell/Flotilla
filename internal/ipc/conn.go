@@ -14,12 +14,14 @@ import (
 
 // Handler serves one inbound method call. Returning an error sends the peer a
 // failure reply; a notification has no reply channel, so its error is dropped.
-// Calls run concurrently; notifications run in arrival order on one goroutine,
-// so a notification handler that blocks stalls the stream behind it.
-type Handler func(ctx context.Context, method string, params json.RawMessage) (any, error)
+// peer is the connection the call arrived on, which is how a server binds state
+// to one client. Calls run concurrently; notifications run in arrival order on
+// one goroutine, so a notification handler that blocks stalls the stream.
+type Handler func(ctx context.Context, peer *Conn, method string, params json.RawMessage) (any, error)
 
-// DataSink receives terminal bytes for one stream.
-type DataSink func(stream uint32, payload []byte)
+// DataSink receives terminal bytes for one stream, and the connection they
+// arrived on.
+type DataSink func(peer *Conn, stream uint32, payload []byte)
 
 // Config is what either side needs to start a connection.
 type Config struct {
@@ -340,7 +342,7 @@ func (c *Conn) readLoop() {
 		switch f.Kind {
 		case KindData:
 			if c.onData != nil {
-				c.onData(f.Stream, f.Payload)
+				c.onData(c, f.Stream, f.Payload)
 			}
 		case KindControl:
 			if !c.handleControl(f.Payload) {
@@ -409,7 +411,7 @@ func (c *Conn) dispatch(msg rpcMessage) {
 		return
 	}
 
-	result, err := c.handler(context.Background(), msg.Method, msg.Params)
+	result, err := c.handler(context.Background(), c, msg.Method, msg.Params)
 	if msg.ID == nil {
 		return
 	}

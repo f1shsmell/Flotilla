@@ -266,7 +266,7 @@ func TestNotificationsKeepTheirOrder(t *testing.T) {
 
 	seen := make(chan int, count)
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, params json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, _ string, params json.RawMessage) (any, error) {
 			var n int
 			if err := json.Unmarshal(params, &n); err != nil {
 				return nil, err
@@ -300,7 +300,7 @@ func TestNotificationsKeepTheirOrder(t *testing.T) {
 
 func TestCallRoundTrips(t *testing.T) {
 	served, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, method string, params json.RawMessage) (any, error) {
 			var in struct {
 				N int `json:"n"`
 			}
@@ -338,7 +338,7 @@ func TestCallRoundTrips(t *testing.T) {
 
 func TestCallSurfacesAHandlerError(t *testing.T) {
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
 			return nil, errors.New("no such session")
 		}},
 		Config{Token: "shared", Role: "cli"},
@@ -383,7 +383,7 @@ func TestNotificationReachesTheHandler(t *testing.T) {
 	seen := make(chan string, 1)
 
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "host", Handler: func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "host", Handler: func(_ context.Context, _ *Conn, method string, _ json.RawMessage) (any, error) {
 			seen <- method
 			return nil, nil
 		}},
@@ -408,7 +408,7 @@ func TestDataPlaneReachesTheSink(t *testing.T) {
 	received := make(chan string, 1)
 
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "host", OnData: func(stream uint32, payload []byte) {
+		Config{Token: "shared", Role: "host", OnData: func(_ *Conn, stream uint32, payload []byte) {
 			if stream != 7 {
 				return
 			}
@@ -434,7 +434,7 @@ func TestDataPlaneReachesTheSink(t *testing.T) {
 func TestAFailedCallLeavesTheConnectionUsable(t *testing.T) {
 	calls := 0
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
 			calls++
 			if calls == 1 {
 				return nil, errors.New("first call fails")
@@ -460,7 +460,7 @@ func TestAFailedCallLeavesTheConnectionUsable(t *testing.T) {
 // a silent drop is indistinguishable from a slow peer.
 func TestAnOversizedReplyFailsInsteadOfHanging(t *testing.T) {
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
 			return strings.Repeat("x", MaxFrameSize), nil
 		}},
 		Config{Token: "shared", Role: "cli"},
@@ -476,7 +476,7 @@ func TestAnOversizedReplyFailsInsteadOfHanging(t *testing.T) {
 
 func TestCloseUnblocksAPendingCall(t *testing.T) {
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(ctx context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}},
@@ -503,7 +503,7 @@ func TestCloseUnblocksAPendingCall(t *testing.T) {
 
 func TestCallRespectsItsDeadline(t *testing.T) {
 	_, client := servePair(t,
-		Config{Token: "shared", Role: "daemon", Handler: func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+		Config{Token: "shared", Role: "daemon", Handler: func(ctx context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}},

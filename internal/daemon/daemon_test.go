@@ -200,7 +200,7 @@ func TestAttachPrunesARecordWhoseHostIsGone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
-	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger(), attachTimeout)
+	fleet, err := Attach(ctx, reg, "shared", dir, discardLogger(), attachTimeout, nil)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -356,7 +356,7 @@ func talkToHost(ctx context.Context, t *testing.T, dir, token, line string) (str
 	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{
 		Token: token,
 		Role:  "test",
-		OnData: func(stream uint32, payload []byte) {
+		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			if stream == session.StreamOutput {
 				output <- string(payload)
 			}
@@ -402,3 +402,33 @@ func waitRecord(t *testing.T, reg session.Registry, id session.ID) (session.Reco
 
 // errNoEcho reports an agent that never answered.
 var errNoEcho = errors.New("the agent never echoed")
+
+// TestSpawnFailsWhenTheHostDiesFirst pins the wait: a host that cannot start
+// says so at once instead of leaving the caller to its deadline with no reason.
+func TestSpawnFailsWhenTheHostDiesFirst(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate the test binary: %v", err)
+	}
+
+	spawn := ExecSpawner(discardLogger())
+	started := time.Now()
+	_, err = spawn(context.Background(), SpawnRequest{
+		Binary:   exe,
+		Session:  "sess-dead",
+		Mode:     session.ModePTY,
+		Command:  "unused",
+		Args:     []string{"-test.run=TestNoSuchTestRuns"},
+		Channel:  "test",
+		StateDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("a host that exits before publishing was reported as started")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("the spawn waited %s on a host that was already gone", elapsed)
+	}
+	if !strings.Contains(err.Error(), "exited before it published") {
+		t.Fatalf("error %q does not say the host died", err)
+	}
+}

@@ -29,6 +29,9 @@ const permissionWait = 5 * time.Minute
 // errWrongMode reports a call that does not fit this session's mode.
 var errWrongMode = errors.New("host: wrong session mode")
 
+// errBadSize reports a resize that names no terminal size.
+var errBadSize = errors.New("host: a terminal needs positive columns and rows")
+
 // acpSession is the ACP half of a host: the agent conversation plus the pending
 // permission questions the client has not answered yet.
 type acpSession struct {

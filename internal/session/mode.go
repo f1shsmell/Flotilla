@@ -31,6 +31,32 @@ const (
 	MethodPermissionReply = "session.permission.reply"
 )
 
+// MethodResize sets the terminal's size. A PTY session serves it; a structured
+// session has no terminal to size.
+const MethodResize = "session.resize"
+
+// ResizeRequest is one terminal resize, in columns and rows.
+type ResizeRequest struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
+}
+
+// MethodAttach binds one client connection to one session. The daemon serves it,
+// not the host: after it succeeds, that connection carries the session's calls,
+// its updates and its terminal bytes.
+const MethodAttach = "session.attach"
+
+// AttachRequest names the session a client wants to drive.
+type AttachRequest struct {
+	ID ID `json:"id"`
+}
+
+// AttachResponse reports what the session holds once the client is bound.
+type AttachResponse struct {
+	ID   ID   `json:"id"`
+	Info Info `json:"info"`
+}
+
 // PromptRequest is one turn's input.
 type PromptRequest struct {
 	// Text is the user's message.
