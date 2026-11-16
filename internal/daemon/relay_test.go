@@ -390,6 +390,71 @@ func TestAttachRefusesAnUnknownSession(t *testing.T) {
 	}
 }
 
+// TestAWindowSeesTheScreenFromBeforeItWatched pins the bug this replay exists
+// for: the daemon attaches to a host when the session starts, before any window
+// exists, so the agent's first output reaches the daemon with nobody to forward
+// it to. A window that attaches later must still be shown that screen.
+func TestAWindowSeesTheScreenFromBeforeItWatched(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	newHost(t, dir, "sess-early", token)
+	if _, err := waitRecord(t, session.NewRegistry(dir), "sess-early"); err != nil {
+		t.Fatalf("the host never published a record: %v", err)
+	}
+
+	// A daemon that is already running attaches as it starts, the same way the
+	// session start path does. No window exists yet.
+	d := runDaemon(t, dir, token)
+	defer d.Detach()
+
+	att := d.lookup("sess-early")
+	if att == nil {
+		t.Fatal("the daemon did not attach to the session")
+	}
+
+	// Output produced while the daemon is the only client: this is the state
+	// every session reaches before its first window opens.
+	if err := att.Conn.SendData(session.StreamInput, []byte("echo produced-before-the-window\r\n")); err != nil {
+		t.Fatalf("send the marker: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// The window attaches now. What the daemon already lost must come back.
+	var (
+		mu   sync.Mutex
+		seen strings.Builder
+	)
+	conn := dialDaemon(t, dir, token, nil, func(_ *ipc.Conn, stream uint32, payload []byte) {
+		if stream == session.StreamOutput {
+			mu.Lock()
+			seen.Write(payload)
+			mu.Unlock()
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+	if _, err := conn.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-early"}); err != nil {
+		t.Fatalf("attach the window: %v", err)
+	}
+
+	deadline := time.Now().Add(waitFor)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := seen.String()
+		mu.Unlock()
+		if strings.Contains(got, "produced-before-the-window") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("the window never received the screen the session already had; saw %q", seen.String())
+}
+
 func contains(values []string, want string) bool {
 	for _, v := range values {
 		if v == want {

@@ -4,6 +4,8 @@ interface FlotillaBridge {
   smoke: boolean;
   fleet(): Promise<unknown>;
   start(request: unknown): Promise<unknown>;
+  stop(sessionId: string): Promise<unknown>;
+  detach(sessionId: string): Promise<unknown>;
   open(sessionId: string): Promise<unknown>;
   prompt(sessionId: string, text: string): Promise<unknown>;
   cancel(sessionId: string): Promise<unknown>;
@@ -14,6 +16,8 @@ interface FlotillaBridge {
   comments(sessionId: string): Promise<unknown>;
   addComment(sessionId: string, comment: unknown): Promise<unknown>;
   removeComment(sessionId: string, id: string): Promise<unknown>;
+  layout(): Promise<unknown>;
+  saveLayout(patch: unknown): Promise<unknown>;
   onEvent(handler: (event: unknown) => void): () => void;
 }
 

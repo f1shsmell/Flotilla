@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/diff"
@@ -141,9 +142,30 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 		d.relay.forget(peer)
 	}()
 
+	// A host writes its scrollback to whoever is attached when the output
+	// arrives, and its only client is this daemon. The daemon attached at
+	// start time, before any window existed, so those bytes went to the daemon
+	// with nobody to forward them to. Asking the host for a replay now is what
+	// makes the first window see the screen the session already had.
+	go d.requestReplay(req.ID, att.Conn)
+
 	d.cfg.Log.Info("client attached to a session", "session", req.ID, "peer", peer.Peer())
 
 	return session.AttachResponse{ID: req.ID, Info: att.Info}, nil
+}
+
+// requestReplay asks a host to resend what it is holding for a client that has
+// just started watching. The host answers on its own connection, so the bytes
+// arrive as ordinary data frames and reach every subscriber like live output.
+func (d *Daemon) requestReplay(id session.ID, conn *ipc.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), replayTimeout)
+	defer cancel()
+
+	if _, err := conn.Call(ctx, session.MethodReplay, struct{}{}); err != nil {
+		// A session with nothing buffered, or one whose host is going away, is
+		// not a failure the user needs to see: the screen simply starts empty.
+		d.cfg.Log.Debug("replay request failed", "session", id, "err", err.Error())
+	}
 }
 
 // relayCall forwards one call from an attached client to its host. The host's
@@ -165,7 +187,7 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
-		session.MethodPermissionReply, session.MethodResize:
+		session.MethodPermissionReply, session.MethodResize, session.MethodStop:
 	default:
 		return nil, ipc.ErrNoHandler
 	}
@@ -325,10 +347,120 @@ func (d *Daemon) watch(att Attachment) {
 	}()
 }
 
-// dropSession tells every client of a session that it is over: the host died, so
-// the connection they were holding has nothing behind it.
+// dropSession forgets a session whose host connection stopped and tells every
+// client it is over: the connection they were holding has nothing behind it. A
+// status report must not keep listing a host that is gone, so the attachment
+// goes too.
+//
+// Nothing here reads the record to decide: a host publishes before it listens
+// and removes its record after it closes the pipes, so at the moment this runs
+// both orders are possible. The record's own state is not what makes the session
+// gone — the connection is. A host that is merely wedged is still attached and
+// never reaches this path; one whose record survives a crash is pruned by the
+// next scan, which has the pid to check.
 func (d *Daemon) dropSession(id session.ID) {
+	d.end(id, false)
+
 	for _, peer := range d.relay.drop(id) {
 		peer.Close()
 	}
+}
+
+// end forgets a session and removes its record. An explicit stop takes the
+// record unconditionally: the user asked for the session to be gone, and the
+// host may still be alive while it winds down. A host that went on its own
+// keeps its record unless nothing stands behind its pid, because a merely
+// wedged host deserves another attempt on the next scan.
+func (d *Daemon) end(id session.ID, explicit bool) {
+	d.forget(id)
+
+	rec, err := d.reg.Read(id)
+	if err != nil {
+		return
+	}
+	switch {
+	case explicit:
+		d.prune(id, rec.PID, "stopped")
+	case !processAlive(rec.PID):
+		d.prune(id, rec.PID, "dead")
+	}
+}
+
+// prune removes a session record. A record that cannot be deleted is reported,
+// not fatal: a host that is still shutting down keeps it for the next scan.
+func (d *Daemon) prune(id session.ID, pid int, why string) {
+	if err := d.reg.Unpublish(id); err != nil {
+		d.cfg.Log.Warn("cannot prune a "+why+" host record", "session", id, "err", err.Error())
+		return
+	}
+	d.cfg.Log.Info("pruned a "+why+" host record", "session", id, "pid", pid)
+}
+
+// forget removes a session from the fleet this daemon reports.
+func (d *Daemon) forget(id session.ID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// A new slice, not a compaction in place: lookup hands out pointers into
+	// this slice, and overwriting an element would silently retarget one.
+	kept := make([]Attachment, 0, len(d.fleet.Attachments))
+	for _, att := range d.fleet.Attachments {
+		if att.Record.ID != id {
+			kept = append(kept, att)
+		}
+	}
+	d.fleet.Attachments = kept
+	delete(d.baselines, id)
+}
+
+// stopTimeout bounds the request that asks a host to end its session. A host
+// that is going away closes the pipe quickly; one that does not answer is
+// treated as gone anyway, so the wait must be short enough not to look hung.
+const stopTimeout = 5 * time.Second
+
+// replayTimeout bounds the request for scrollback. A large buffer is a few
+// hundred kilobytes; a host that cannot answer that quickly has nothing worth
+// waiting for.
+const replayTimeout = 5 * time.Second
+
+// stopSession ends a session on request. It asks the host to stop, then drops
+// the session whatever the host answered: a host that cannot take the call is
+// one that is not there, and the user asked for it to be gone.
+func (d *Daemon) stopSession(ctx context.Context, params json.RawMessage) (any, error) {
+	var req session.StopRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", MethodSessionStop, err)
+	}
+	if req.ID == "" {
+		return nil, fmt.Errorf("%s: empty session id: %w", MethodSessionStop, session.ErrNoRecord)
+	}
+
+	att := d.lookup(req.ID)
+	if att == nil {
+		// Not serving it is not an error for a caller that wants it gone.
+		return struct{}{}, nil
+	}
+	// forget rebuilds the fleet slice, so the connection is read out first.
+	conn := att.Conn
+
+	// A host closes its connection as it stops, so this call usually fails with
+	// the pipe gone. That is the intended result, not a reason to keep going.
+	// The bound matters: a wedged host that never answers must not keep the
+	// caller from clearing the row, and the caller's own context may be the
+	// background one with no deadline of its own.
+	stopCtx, cancel := context.WithTimeout(ctx, stopTimeout)
+	defer cancel()
+	_, _ = conn.Call(stopCtx, session.MethodStop, struct{}{})
+
+	// The user asked for this session to be gone, so its record goes even if the
+	// host has not finished exiting yet.
+	d.end(req.ID, true)
+
+	for _, peer := range d.relay.drop(req.ID) {
+		peer.Close()
+	}
+	conn.Close()
+
+	d.cfg.Log.Info("session stopped", "session", req.ID)
+	return struct{}{}, nil
 }

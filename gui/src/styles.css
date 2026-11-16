@@ -93,6 +93,8 @@ button.primary {
   gap: 12px;
   min-height: 0;
   height: 100%;
+  /* Anchors .terminal-pane-behind, which stays laid out while the diff shows. */
+  position: relative;
 }
 
 .session-header {
@@ -152,6 +154,13 @@ button.primary {
   gap: 4px;
 }
 
+.session-row-wrap {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+
 .session-row {
   width: 100%;
   text-align: left;
@@ -160,6 +169,21 @@ button.primary {
   gap: 2px 8px;
   background: transparent;
   border-color: transparent;
+}
+
+/* The stop button is deliberately quiet: ending a session is rare and should
+   not read as the row's primary action. */
+.session-stop {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.session-stop:hover {
+  border-color: var(--line);
+  color: inherit;
 }
 
 .session-row.selected {
@@ -414,6 +438,21 @@ button.primary {
 
 .diff-patch .meta {
   color: var(--muted);
+}
+
+.terminal-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Kept laid out but out of sight while the diff panel shows: xterm measures its
+   container, so display:none would leave it with no size and no scrollback. */
+.terminal-pane-behind {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .terminal {

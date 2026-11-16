@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/session"
 )
 
 // Client is a CLI or GUI's handle on a running daemon. It holds one connection
@@ -57,4 +58,14 @@ func (c *Client) StartSession(ctx context.Context, req StartRequest) (StartRespo
 		return StartResponse{}, fmt.Errorf("decode session start: %w", err)
 	}
 	return resp, nil
+}
+
+// StopSession asks the daemon to end a session. Stopping one that is already
+// gone succeeds: the caller asked for it to be gone.
+func (c *Client) StopSession(ctx context.Context, id session.ID) error {
+	req := session.StopRequest{ID: id}
+	if _, err := c.conn.Call(ctx, MethodSessionStop, req); err != nil {
+		return fmt.Errorf("ask the daemon to stop session %q: %w", id, err)
+	}
+	return nil
 }

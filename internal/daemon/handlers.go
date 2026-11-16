@@ -20,6 +20,9 @@ const (
 	MethodStatus = "daemon.status"
 	// MethodSessionStart spawns a session host.
 	MethodSessionStart = "session.start"
+	// MethodSessionStop ends a session from the control plane. A client that
+	// already attached asks its own connection instead; both reach the same end.
+	MethodSessionStop = session.MethodStop
 )
 
 func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, params json.RawMessage) (any, error) {
@@ -34,6 +37,8 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 		return d.status(), nil
 	case MethodSessionStart:
 		return d.startSession(ctx, params)
+	case MethodSessionStop:
+		return d.stopSession(ctx, params)
 	case session.MethodAttach:
 		return d.attachClient(peer, params)
 	default:

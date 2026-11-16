@@ -5,8 +5,13 @@ import { app, BrowserWindow, ipcMain, type WebContents } from "electron";
 import { DaemonClient } from "./client";
 import { STREAM_INPUT } from "./wire";
 import { ensure } from "./daemon";
+import { readUiState, saveUiState, type UiState } from "./uiState";
 
 const channel = process.env.FLT_CHANNEL ?? "stable";
+
+function userData(): string {
+  return app.getPath("userData");
+}
 
 // A turn can run for minutes, so a prompt call must not inherit the default
 // call timeout.
@@ -105,6 +110,26 @@ function register(): void {
     return control.call("session.start", request, 60000);
   });
 
+  ipcMain.handle("flotilla:stop", async (_event, sessionId: string) => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel });
+    }
+    // The window may hold a link to this session; stopping ends it too, so the
+    // link is dropped here rather than left pointing at a closed pipe.
+    links.get(sessionId)?.client.close();
+    links.delete(sessionId);
+    return control.call("session.stop", { id: sessionId }, 30000);
+  });
+
+  ipcMain.handle("flotilla:detach", async (_event, sessionId: string) => {
+    // Closing the link is what lets the host know nobody is watching: a PTY
+    // session then keeps its recent output for the next visit instead of
+    // streaming it to a view that no longer exists. The session itself keeps
+    // running, which is the whole point of the two-process model.
+    links.get(sessionId)?.client.close();
+    links.delete(sessionId);
+  });
+
   ipcMain.handle("flotilla:open", async (event, sessionId: string) =>
     openLink(sessionId, event.sender),
   );
@@ -160,12 +185,23 @@ function register(): void {
       await link(sessionId).call("session.resize", { cols, rows });
     },
   );
+
+  // Layout is the renderer's to name and the main process's to store: the
+  // renderer has no filesystem, and the file has to survive the window.
+  ipcMain.handle("flotilla:layout:read", async () => readUiState(userData()));
+  ipcMain.handle("flotilla:layout:write", async (_event, patch: UiState) => {
+    saveUiState(userData(), patch);
+  });
 }
 
 function createWindow(): void {
+  const saved = readUiState(userData());
+  const width = saved.window?.width ?? 1180;
+  const height = saved.window?.height ?? 780;
+
   window = new BrowserWindow({
-    width: 1180,
-    height: 780,
+    width,
+    height,
     backgroundColor: "#14161a",
     show: false,
     webPreferences: {
@@ -174,6 +210,15 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
     },
+  });
+
+  // Size is remembered on close rather than on every resize event: a drag emits
+  // hundreds of them, and only the size the user settled on matters.
+  window.on("close", () => {
+    const bounds = window?.getNormalBounds();
+    if (bounds) {
+      saveUiState(userData(), { window: { width: bounds.width, height: bounds.height } });
+    }
   });
 
   window.once("ready-to-show", () => window?.show());
