@@ -14,6 +14,7 @@ cancel、fs 能力探测——这些要另外取证,不能拿这张表冒充。
 |---|---|---|---|
 | Reasonix Studio | `reasonix acp` | **全会话绿**,advertise resume | 2026-11-16 · Windows 11 · reasonix 本机安装 |
 | opencode | `opencode acp` | ACP 握手与会话建立通过,回合被 provider 鉴权拒绝 | 2026-11-16 · Windows 11 · opencode 本机安装 |
+| claude-agent-acp | `claude-agent-acp` | ACP 握手与会话建立通过,回合被 agent 自身的登录检查拒绝 | 2026-11-17 · Windows 10 19045 · `claude-agent-acp@0.100.3` |
 
 证据原文(可直接复现):
 
@@ -27,23 +28,37 @@ $ flt probe --command "opencode acp" --dir <空目录>
 flt: probe opencode: probe opencode: prompt the agent: {"code":-32603,"message":"Internal error: Provider request failed with HTTP 400: checking third-party user token: bad request: Personal Access Tokens are not supported for this endpoint", ...}
 ```
 
+```
+$ flt probe --command "claude-agent-acp" --dir <空目录>
+[session/create] sessionId=... phase=sdk-initialize durationMs=1061 totalMs=1144
+[session/create] sessionId=... phase=register durationMs=2 totalMs=1159
+flt: probe claude-agent-acp: probe claude-agent-acp: prompt the agent: {"code":-32000,"message":"Authentication required"}
+```
+
 opencode 这一条说明的是:我们的 ACP 客户端与它握手、建会话都成立,失败发生在
 agent 自己的 provider 调用里(该端点不接受本机的 PAT)。换成可用凭据后应当重跑,
 重跑通过才把结论改成「全会话绿」。
+
+claude-agent-acp 同理,而且这一条比 opencode 更进一步:它的会话创建**完整跑完**
+了 `validate-cwd → settings → prepare-query → sdk-initialize → models → modes → agents →
+register` 八个阶段,失败发生在 prompt 阶段它自己的 `Authentication required`。这说明我们
+的客户端能驱动一个**非 Reasonix Studio 的 ACP 实现**走完会话建立;回合内容仍未被证明。
+本机没有 `ANTHROPIC_API_KEY`,也没有 Claude 的 OAuth 凭据,所以补不上这一刀。
 
 ## 未取证
 
 | agent | 为什么没写结论 |
 |---|---|
-| claude-agent-acp | 本机未安装,`flt probe claude` 在 PATH 检查处失败 |
-| Gemini CLI | 本机未安装,同上 |
+| Gemini CLI | 本机未安装;`.gemini` 只有 hooks 配置,没有 `oauth_creds.json`,装上也要先登录 |
 | Codex / Pi | 它们的 CLI 不暴露 ACP 子命令(`--help` 里没有),要走适配器层,不在 ACP 路径上 |
 
 ## 一条诚实的注脚
 
 Reasonix Studio 是维护者自己的产品。它跑通证明的是「我们的 ACP 客户端能驱动一个
-真实 agent」,不能证明「第三方 agent 生态已被验证」。第三方证据要等 claude-agent-acp
-或 Gemini CLI 在本机装上后补。
+真实 agent」,不能证明「第三方 agent 生态已被验证」。claude-agent-acp 把「非 Reasonix Studio
+的 ACP 实现能握手、建会话」这一半补上了,但**回合内容**仍待有可用凭据的机器重跑。
+在那之前,首发话术只能写「已验证客户端能驱动第三方 ACP agent 建立会话」,不能写
+「第三方 agent 全会话绿」。
 
 ## 复现
 
