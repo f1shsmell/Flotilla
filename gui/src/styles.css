@@ -239,6 +239,13 @@ button.primary {
   min-height: 0;
 }
 
+/* The note that the log starts after the session did. It sits above the first
+   entry and is deliberately quiet: it is a correction, not an error. */
+.log-more {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
 .entry {
   margin: 0 0 8px;
   white-space: pre-wrap;

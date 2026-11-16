@@ -239,6 +239,14 @@ export interface SessionState {
   turn: Turn;
   stopReason?: string;
   error?: string;
+  // lastSeq is the newest stored update this log holds. The daemon numbers
+  // every update as it stores it, so a live update that arrives after the
+  // attach history is applied can be told apart from one already folded in.
+  lastSeq: number;
+  // moreHistory is true when the daemon kept older updates back. The log then
+  // starts mid-turn, and saying so is the difference between a short log and a
+  // lie about where the session began.
+  moreHistory: boolean;
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -316,14 +324,54 @@ export function needsAttention(lifecycle: Lifecycle): boolean {
 }
 
 export function newSession(id: string, mode: string): SessionState {
-  return { id, mode, entries: [], permissions: [], turn: "idle" };
+  return {
+    id,
+    mode,
+    entries: [],
+    permissions: [],
+    turn: "idle",
+    lastSeq: 0,
+    moreHistory: false,
+  };
+}
+
+// applyHistory folds the updates the daemon kept for a client that has just
+// attached. They are the log the session already had, so they go in before any
+// live update and in the order the daemon numbered them.
+//
+// An update arrives twice on a reattach: once in this history and once as live
+// traffic if it was produced while the attach was in flight. The sequence is
+// what tells them apart, which is why the log remembers the newest one it holds.
+export function applyHistory(state: SessionState, raw: unknown): SessionState {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const updates = Array.isArray(value.updates) ? value.updates : [];
+
+  let next = { ...state, moreHistory: value.more === true };
+  for (const update of updates) {
+    next = applyUpdate(next, update);
+  }
+  return next;
 }
 
 // applyUpdate folds one agent update into the log. A tool call arrives twice —
 // once started, once finished — so it is keyed by its id and updated in place
 // instead of appended twice.
+//
+// An update the log already holds is dropped rather than folded again: a
+// reattach replays the recent past, and appending it would show the same
+// paragraph twice with its text doubled.
 export function applyUpdate(state: SessionState, raw: unknown): SessionState {
   const value = (raw ?? {}) as Record<string, unknown>;
+  const seq = typeof value.seq === "number" ? value.seq : 0;
+  if (seq > 0 && seq <= state.lastSeq) {
+    return state;
+  }
+
+  const folded = foldUpdate(state, value);
+  return { ...folded, lastSeq: Math.max(folded.lastSeq, seq) };
+}
+
+function foldUpdate(state: SessionState, value: Record<string, unknown>): SessionState {
   const kind = asString(value.kind, "other") as EntryKind;
   const text = asString(value.text);
   const toolCallId = asString(value.tool_call_id);

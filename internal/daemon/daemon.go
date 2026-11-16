@@ -17,6 +17,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
+	"github.com/f1shsmell/flotilla/internal/transcript"
 )
 
 // errUnknownMethod reports a call this daemon does not serve.
@@ -141,18 +142,24 @@ type Daemon struct {
 	// beside the session records: both are the daemon's per-session state, and
 	// the registry skips a directory when it scans for records.
 	comments comments.Store
+	// transcripts are the agent updates of every session this daemon has seen,
+	// kept on disk. They are the daemon's because it is the only process that
+	// sees each update exactly once, and because a log has to outlive the host
+	// that produced it.
+	transcripts *transcript.Store
 }
 
 // New builds a daemon. Call Run to serve.
 func New(cfg Config, spawn Spawner) *Daemon {
 	return &Daemon{
-		cfg:       cfg,
-		reg:       session.NewRegistry(cfg.StateDir),
-		addr:      ipc.Address{Channel: cfg.Channel, Name: "daemon"},
-		spawn:     spawn,
-		relay:     newRelay(),
-		baselines: make(map[session.ID]string),
-		comments:  comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
+		cfg:         cfg,
+		reg:         session.NewRegistry(cfg.StateDir),
+		addr:        ipc.Address{Channel: cfg.Channel, Name: "daemon"},
+		spawn:       spawn,
+		relay:       newRelay(),
+		baselines:   make(map[session.ID]string),
+		comments:    comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
+		transcripts: transcript.NewStore(filepath.Join(cfg.StateDir, "transcripts")),
 	}
 }
 
@@ -244,4 +251,11 @@ func (d *Daemon) Detach() {
 	d.mu.Unlock()
 
 	fleet.Close()
+
+	// The transcript handles go with the daemon. On Windows a file still open
+	// when the process exits is left to the cleanup of a machine that may not
+	// come back; the logs themselves stay, which is the point of writing them.
+	if err := d.transcripts.Close(); err != nil {
+		d.cfg.Log.Debug("cannot close the transcripts", "err", err.Error())
+	}
 }

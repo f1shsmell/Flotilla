@@ -7,6 +7,7 @@ import { SessionView } from "./components/SessionView";
 import {
   addPermission,
   answerPermission,
+  applyHistory,
   applyUpdate,
   endTurn,
   failTurn,
@@ -224,8 +225,19 @@ export function App(): React.ReactElement {
     try {
       const attached = (await window.flotilla.open(id)) as {
         info?: { mode?: string; state?: unknown };
+        history?: unknown;
+        history_more?: boolean;
       };
-      setSession(newSession(id, attached.info?.mode ?? "pty"));
+
+      // The log the daemon kept for this session goes in with the state, before
+      // any live update: a window that opens a turn an hour old should show how
+      // the agent got there, not start at its own arrival.
+      setSession(
+        applyHistory(newSession(id, attached.info?.mode ?? "pty"), {
+          updates: attached.history,
+          more: attached.history_more === true,
+        }),
+      );
 
       // Opening a session is looking at it, which is what separates done from
       // idle. Only a finished turn is marked: marking a working session seen

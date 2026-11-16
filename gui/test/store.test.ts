@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addPermission,
   answerPermission,
+  applyHistory,
   applyUpdate,
   endTurn,
   loseSession,
@@ -288,6 +289,58 @@ describe("session log", () => {
 
     state = loseSession(state, "host gone");
     expect(state).toMatchObject({ turn: "lost", error: "host gone" });
+  });
+
+  it("folds the history a window is given when it attaches", () => {
+    const state = applyHistory(newSession("s", "acp"), {
+      updates: [
+        { seq: 1, kind: "message", text: "reading" },
+        { seq: 2, kind: "tool", tool_call_id: "call-1", tool_title: "grep" },
+      ],
+      more: false,
+    });
+
+    expect(state.entries.map((entry) => entry.kind)).toEqual(["message", "tool"]);
+    expect(state.lastSeq).toBe(2);
+    expect(state.moreHistory).toBe(false);
+  });
+
+  it("says so when the history starts after the session did", () => {
+    const state = applyHistory(newSession("s", "acp"), {
+      updates: [{ seq: 40, kind: "message", text: "still working" }],
+      more: true,
+    });
+
+    expect(state.moreHistory).toBe(true);
+    expect(state.lastSeq).toBe(40);
+  });
+
+  it("folds a replayed update once", () => {
+    // A reattach hands the window the stored log and then live traffic from
+    // before it attached. Folding both would double the paragraph.
+    let state = applyHistory(newSession("s", "acp"), {
+      updates: [{ seq: 1, kind: "message", text: "hel" }],
+    });
+    state = applyUpdate(state, { seq: 1, kind: "message", text: "hel" });
+    state = applyUpdate(state, { seq: 2, kind: "message", text: "lo" });
+
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0].text).toBe("hello");
+    // The fold is not ordered by arrival: an update older than the newest one
+    // already in the log is one the window has.
+    state = applyUpdate(state, { seq: 1, kind: "thought", text: "old" });
+    expect(state.entries).toHaveLength(1);
+  });
+
+  it("keeps folding updates that carry no sequence", () => {
+    // The host says nothing about sequence; only the daemon numbers an update.
+    // A window talking to a host directly must still show the log.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "message", text: "a" });
+    state = applyUpdate(state, { kind: "message", text: "b" });
+
+    expect(state.entries[0].text).toBe("ab");
+    expect(state.lastSeq).toBe(0);
   });
 });
 

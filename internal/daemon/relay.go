@@ -150,9 +150,23 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 	// makes the first window see the screen the session already had.
 	go d.requestReplay(req.ID, att.Conn)
 
+	// The agent's own log is the daemon's, not the host's: this is what shows a
+	// window the work that happened before it opened, and it survives the host.
+	history, more, err := d.readHistory(req.ID, session.HistoryRequest{})
+	if err != nil {
+		// A transcript that cannot be read is worth a warning, not a refusal:
+		// the live stream still works, and the window starts with what arrives.
+		d.cfg.Log.Warn("cannot read a session transcript", "session", req.ID, "err", err.Error())
+	}
+
 	d.cfg.Log.Info("client attached to a session", "session", req.ID, "peer", peer.Peer())
 
-	return session.AttachResponse{ID: req.ID, Info: att.Info}, nil
+	return session.AttachResponse{
+		ID:          req.ID,
+		Info:        att.Info,
+		History:     history,
+		HistoryMore: more,
+	}, nil
 }
 
 // requestReplay asks a host to resend what it is holding for a client that has
@@ -190,6 +204,10 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 		return d.push(ctx, id)
 	case session.MethodPullRequest:
 		return d.pullRequest(ctx, id, params)
+	case session.MethodHistory:
+		// The transcript is the daemon's own record of the session, not the
+		// agent's current state: the host it came from may already be gone.
+		return d.history(id, params)
 	}
 
 	switch method {
@@ -401,8 +419,17 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 				}
 			}
 
+			// An agent update is stored before it is forwarded, so a window that
+			// attaches later can be told what it missed. What goes out carries
+			// the sequence the store gave it, which is how a client discards an
+			// update it already has from its attach history.
+			forwarded := params
+			if method == session.MethodUpdate {
+				forwarded = d.recordUpdate(id, params)
+			}
+
 			for _, peer := range d.relay.subscribers(id) {
-				if err := peer.Notify(method, params); err != nil {
+				if err := peer.Notify(method, forwarded); err != nil {
 					d.cfg.Log.Debug("forward a session notification failed", "session", id, "err", err.Error())
 				}
 			}
@@ -468,6 +495,9 @@ func (d *Daemon) dropSession(id session.ID) {
 // wedged host deserves another attempt on the next scan.
 func (d *Daemon) end(id session.ID, explicit bool) {
 	d.forget(id)
+	// The handle a finished session wrote through goes; the file it wrote stays,
+	// because "the agent is gone" is not "what the agent did did not happen".
+	d.releaseTranscript(id)
 
 	// An explicit stop does not read the record first. On Windows a read that
 	// races the host's own removal fails with a sharing violation rather than

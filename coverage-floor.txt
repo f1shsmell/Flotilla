@@ -11,3 +11,6 @@ internal/comments 75
 # gitops writes to a user's repository and pushes to their remote. The floor is
 # where it is because a wrong path here is a commit on someone else's branch.
 internal/gitops 75
+# transcript is the only copy of what an agent did once its host is gone. A bug
+# here does not lose a run, it loses the record of one.
+internal/transcript 75
