@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -35,8 +35,8 @@ export async function connect(
 // start spawns the daemon detached and resolves once the process exists. A
 // missing binary reports as an error event, not as a throw, so the event is what
 // this waits on: an unhandled one would take the whole main process down.
-async function start(binary: string, channel: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+async function start(binary: string, channel: string): Promise<ChildProcess> {
+  return new Promise<ChildProcess>((resolve, reject) => {
     const child = spawn(binary, ["--channel", channel], {
       detached: true,
       stdio: "ignore",
@@ -53,9 +53,65 @@ async function start(binary: string, channel: string): Promise<void> {
 
     child.once("spawn", () => {
       child.unref();
-      resolve();
+      resolve(child);
     });
   });
+}
+
+// started remembers the daemon this process has running per channel, and
+// starting covers the window before one exists. A cold window has more than one
+// caller -- the fleet poll and the first start -- and both find no daemon, so
+// both used to spawn one; the second lost the pipe and exited, which is wasted
+// work and a log line that reads like a failure.
+const started = new Map<string, ChildProcess>();
+const starting = new Map<string, Promise<ChildProcess>>();
+
+// alive asks the OS, not the child object: the exit event arrives a tick after
+// the process is gone, and ensure must not hand out a daemon that already died.
+function alive(child: ChildProcess): boolean {
+  if (child.pid === undefined) {
+    return false;
+  }
+  try {
+    process.kill(child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startOnce(binary: string, channel: string): Promise<ChildProcess> {
+  const key = `${channel}\u0000${binary}`;
+
+  const pending = starting.get(key);
+  if (pending) {
+    return pending;
+  }
+
+  const running = started.get(key);
+  if (running && alive(running)) {
+    return Promise.resolve(running);
+  }
+
+  const attempt = start(binary, channel).then((child) => {
+    started.set(key, child);
+    child.once("exit", () => {
+      if (started.get(key) === child) {
+        started.delete(key);
+      }
+    });
+    return child;
+  });
+
+  starting.set(key, attempt);
+  const settle = (): void => {
+    if (starting.get(key) === attempt) {
+      starting.delete(key);
+    }
+  };
+  void attempt.then(settle, settle);
+
+  return attempt;
 }
 
 // bundledDaemon is the daemon an installed build ships beside the app, which is
@@ -83,7 +139,7 @@ export async function ensure(options: EnsureOptions): Promise<DaemonClient> {
   } catch (first) {
     const binary =
       options.binary ?? process.env.FLT_DAEMON_BIN ?? (await bundledDaemon()) ?? "flt-daemon";
-    await start(binary, options.channel);
+    await startOnce(binary, options.channel);
 
     const deadline = Date.now() + (options.timeoutMs ?? 10000);
     let last: unknown = first;
