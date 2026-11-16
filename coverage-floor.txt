@@ -7,3 +7,4 @@ internal/ipc 75
 internal/host 75
 internal/worktree 75
 internal/diff 75
+internal/comments 75

@@ -7,6 +7,8 @@ import {
   endTurn,
   loseSession,
   newSession,
+  commentPrompt,
+  commentsOn,
   parsePatch,
   parseStatus,
   splitArgs,
@@ -111,6 +113,45 @@ describe("parsePatch", () => {
 
   it("drops the trailing newline git leaves", () => {
     expect(parsePatch("+one\n")).toHaveLength(1);
+  });
+
+  it("numbers the lines a comment can anchor to", () => {
+    const patch = [
+      "diff --git a/readme.md b/readme.md",
+      "@@ -10,3 +20,4 @@",
+      " context",
+      "+added",
+      "-removed",
+      " context again",
+    ].join("\n");
+
+    const lines = parsePatch(patch).filter((line) => line.kind !== "meta" && line.kind !== "hunk");
+    expect(lines.map((line) => [line.kind, line.side, line.line])).toEqual([
+      ["context", "new", 20],
+      ["add", "new", 21],
+      ["del", "old", 11],
+      ["context", "new", 22],
+    ]);
+  });
+});
+
+describe("comments", () => {
+  const notes = [
+    { id: "1", path: "a.txt", line: 2, side: "new", text: "first", author: "user", at: "" },
+    { id: "2", path: "a.txt", line: 2, side: "old", text: "second", author: "user", at: "" },
+    { id: "3", path: "a.txt", line: 3, side: "new", text: "third", author: "user", at: "" },
+  ];
+
+  it("keeps the notes of one line apart from the other side's", () => {
+    expect(commentsOn(notes, "a.txt", "new", 2).map((note) => note.id)).toEqual(["1"]);
+    expect(commentsOn(notes, "a.txt", "old", 2).map((note) => note.id)).toEqual(["2"]);
+    expect(commentsOn(notes, "b.txt", "new", 2)).toEqual([]);
+  });
+
+  it("renders notes as the text a prompt can carry", () => {
+    expect(commentPrompt(notes)).toBe(
+      ["a.txt:2 (new) — first", "a.txt:2 (old) — second", "a.txt:3 (new) — third"].join("\n"),
+    );
   });
 });
 

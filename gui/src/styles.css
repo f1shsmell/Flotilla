@@ -310,9 +310,92 @@ button.primary {
   padding: 8px 0;
 }
 
-.diff-patch .line {
+.patch-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
   padding: 0 10px;
+}
+
+.line-no {
+  min-width: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: right;
+  cursor: pointer;
+}
+
+.line-no:hover {
+  color: var(--accent);
+}
+
+.line-text {
   white-space: pre;
+  flex: 1;
+}
+
+.patch-line.add .line-text {
+  background: rgba(74, 222, 128, 0.12);
+  color: #b9f6ca;
+}
+
+.patch-line.del .line-text {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.patch-line.hunk .line-text {
+  color: var(--accent);
+}
+
+.patch-line.meta .line-text {
+  color: var(--muted);
+}
+
+.note {
+  flex-basis: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 2px 0 2px 52px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--warn);
+  background: #1f1a10;
+  border-radius: 0 6px 6px 0;
+}
+
+.note-text {
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+.note-remove {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.note-compose {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 4px 52px;
+}
+
+.note-compose input {
+  flex: 1;
+  font: inherit;
+  color: var(--text);
+  background: #101216;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
 }
 
 .diff-patch .add {

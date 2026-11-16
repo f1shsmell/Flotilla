@@ -96,38 +96,101 @@ export type DiffLineKind = "add" | "del" | "hunk" | "meta" | "context";
 export interface DiffLine {
   kind: DiffLineKind;
   text: string;
+  // line is the number on side, which is what a comment anchors to; 0 for a
+  // line that belongs to neither version (a header or a hunk marker).
+  line: number;
+  side: "new" | "old";
+}
+
+export interface Comment {
+  id: string;
+  path: string;
+  line: number;
+  side: string;
+  text: string;
+  author: string;
+  at: string;
 }
 
 // parsePatch classifies a unified diff line by line, which is all a renderer
 // needs: git's own prefixes carry the meaning.
 export function parsePatch(patch: string): DiffLine[] {
-  return patch
-    .split("\n")
-    .filter((line, index, all) => !(index === all.length - 1 && line === ""))
-    .map((line) => {
-      if (line.startsWith("@@")) {
-        return { kind: "hunk" as const, text: line };
-      }
-      if (
-        line.startsWith("+++") ||
-        line.startsWith("---") ||
-        line.startsWith("diff --git") ||
-        line.startsWith("index ") ||
-        line.startsWith("new file") ||
-        line.startsWith("deleted file") ||
-        line.startsWith("similarity") ||
-        line.startsWith("rename ")
-      ) {
-        return { kind: "meta" as const, text: line };
-      }
-      if (line.startsWith("+")) {
-        return { kind: "add" as const, text: line.slice(1) };
-      }
-      if (line.startsWith("-")) {
-        return { kind: "del" as const, text: line.slice(1) };
-      }
-      return { kind: "context" as const, text: line.startsWith(" ") ? line.slice(1) : line };
+  const out: DiffLine[] = [];
+  const lines = patch.split("\n");
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const [index, line] of lines.entries()) {
+    // git ends the patch with a newline; the empty tail is not a line.
+    if (index === lines.length - 1 && line === "") {
+      continue;
+    }
+
+    if (line.startsWith("@@")) {
+      const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      oldLine = match ? Number(match[1]) : 0;
+      newLine = match ? Number(match[2]) : 0;
+      out.push({ kind: "hunk", text: line, line: 0, side: "new" });
+      continue;
+    }
+
+    if (
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("diff --git") ||
+      line.startsWith("index ") ||
+      line.startsWith("new file") ||
+      line.startsWith("deleted file") ||
+      line.startsWith("similarity") ||
+      line.startsWith("rename ")
+    ) {
+      out.push({ kind: "meta", text: line, line: 0, side: "new" });
+      continue;
+    }
+
+    if (line.startsWith("+")) {
+      out.push({ kind: "add", text: line.slice(1), line: newLine, side: "new" });
+      newLine += 1;
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      out.push({ kind: "del", text: line.slice(1), line: oldLine, side: "old" });
+      oldLine += 1;
+      continue;
+    }
+
+    out.push({
+      kind: "context",
+      text: line.startsWith(" ") ? line.slice(1) : line,
+      line: newLine,
+      side: "new",
     });
+    oldLine += 1;
+    newLine += 1;
+  }
+
+  return out;
+}
+
+// commentsOn returns the notes anchored to one line.
+export function commentsOn(
+  list: Comment[],
+  path: string,
+  side: string,
+  line: number,
+): Comment[] {
+  return list.filter(
+    (comment) => comment.path === path && comment.side === side && comment.line === line,
+  );
+}
+
+// commentPrompt renders notes as the text a reviewer pastes into a prompt, which
+// is what makes a comment worth keeping.
+export function commentPrompt(list: Comment[]): string {
+  return list
+    .map((comment) => `${comment.path}:${comment.line} (${comment.side}) — ${comment.text}`)
+    .join("\n");
 }
 
 export type EntryKind = "message" | "thought" | "tool" | "plan" | "other";

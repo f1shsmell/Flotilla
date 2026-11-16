@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/diff"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -149,10 +150,17 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 // reply is handed back untouched, so the client decodes the same shape it would
 // have got by dialling the host itself.
 func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, params json.RawMessage) (any, error) {
-	// The diff belongs to the checkout, not to the agent: the daemon answers it
-	// itself instead of forwarding it to a host that has no repository.
-	if method == session.MethodDiff {
+	// The diff and its notes belong to the checkout, not to the agent: the daemon
+	// answers them itself instead of forwarding to a host with no repository.
+	switch method {
+	case session.MethodDiff:
 		return d.readDiff(ctx, id, params)
+	case session.MethodCommentList:
+		return d.listComments(id)
+	case session.MethodCommentAdd:
+		return d.addComment(id, params)
+	case session.MethodCommentRemove:
+		return d.removeComment(id, params)
 	}
 
 	switch method {
@@ -209,6 +217,47 @@ func (d *Daemon) readDiff(ctx context.Context, id session.ID, params json.RawMes
 		return nil, fmt.Errorf("%s on session %q: %w", session.MethodDiff, id, err)
 	}
 	return session.DiffResponse{Files: files}, nil
+}
+
+// listComments returns a session's notes, oldest first.
+func (d *Daemon) listComments(id session.ID) (any, error) {
+	list, err := d.comments.List(string(id))
+	if err != nil {
+		return nil, fmt.Errorf("list the comments of session %q: %w", id, err)
+	}
+	return session.CommentListResponse{Comments: list}, nil
+}
+
+// addComment stores one note on a diff line.
+func (d *Daemon) addComment(id session.ID, params json.RawMessage) (any, error) {
+	var req session.CommentAddRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", session.MethodCommentAdd, err)
+	}
+
+	added, err := d.comments.Add(string(id), comments.Comment{
+		Path: req.Path,
+		Line: req.Line,
+		Side: comments.Side(req.Side),
+		Text: req.Text,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentAdd, id, err)
+	}
+	return added, nil
+}
+
+// removeComment deletes one note.
+func (d *Daemon) removeComment(id session.ID, params json.RawMessage) (any, error) {
+	var req session.CommentRemoveRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", session.MethodCommentRemove, err)
+	}
+
+	if err := d.comments.Remove(string(id), req.ID); err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentRemove, id, err)
+	}
+	return struct{}{}, nil
 }
 
 // baseline reports the commit a session started at, if the daemon watched it
