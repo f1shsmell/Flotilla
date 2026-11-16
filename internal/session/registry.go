@@ -43,6 +43,10 @@ type Info struct {
 	Dir     string `json:"dir"`
 	Cols    int    `json:"cols"`
 	Rows    int    `json:"rows"`
+	// State is the lifecycle the session is in when this was asked. A client
+	// that attaches gets it in one round trip instead of racing a separate
+	// query against a state change.
+	State State `json:"state"`
 }
 
 // Record is what a host publishes about itself. It holds no secrets: the

@@ -93,6 +93,11 @@ type Host struct {
 	// supersede one mid-replay: the old replay must not clear the new one's
 	// state or push its stale bytes into the new client's queue.
 	replayConn *ipc.Conn
+	// state is the session's lifecycle as this host knows it. The host is the
+	// only place that can tell working from blocked: it sees the turn start,
+	// the permission question go out, and the turn end. Anything it cannot
+	// classify is unknown, never done.
+	state session.State
 }
 
 // ptyBufferLimit bounds the terminal output held for the next client. It is a
@@ -178,6 +183,48 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 		"mode", string(cfg.Mode), "command", cfg.Command)
 
 	return h, nil
+}
+
+// stateLocked reports the lifecycle, defaulting to unknown. A host that has not
+// classified itself is not idle: idle would claim it is ready for input.
+func (h *Host) stateLocked() session.State {
+	if h.state == "" {
+		return session.StateUnknown
+	}
+	return h.state
+}
+
+// setState records a lifecycle change and tells the attached client. A state
+// that did not change is not announced: the UI must not repaint for nothing,
+// and a duplicate would read as new activity.
+func (h *Host) setState(next session.State) {
+	h.mu.Lock()
+	previous := h.stateLocked()
+	if previous == next {
+		h.mu.Unlock()
+		return
+	}
+	h.state = next
+	conn := h.conn
+	h.mu.Unlock()
+
+	h.log.Info("session state", "session", h.cfg.ID, "from", string(previous), "to", string(next))
+
+	if conn == nil {
+		return
+	}
+	// A failed notify means this client is gone; the state stays on the host
+	// and the next attach reads it from Info.
+	if err := conn.Notify(session.MethodState, session.StateUpdate{ID: h.cfg.ID, State: next}); err != nil {
+		h.log.Debug("forward a state change failed", "session", h.cfg.ID, "err", err.Error())
+	}
+}
+
+// CurrentState reports the lifecycle without touching process state.
+func (h *Host) CurrentState() session.State {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stateLocked()
 }
 
 // SessionID reports the session this host holds.
@@ -291,6 +338,11 @@ func (h *Host) attach(conn *ipc.Conn) {
 		h.replayBuffered(conn)
 	}
 
+	// The state the session is in now goes to the new client at once: waiting
+	// for the next change would leave a blocked session looking idle until the
+	// user answered the question that is waiting for them.
+	h.notifyState(conn)
+
 	go func() {
 		<-conn.Done()
 		h.mu.Lock()
@@ -300,6 +352,14 @@ func (h *Host) attach(conn *ipc.Conn) {
 		h.mu.Unlock()
 		h.log.Info("client detached", "session", h.cfg.ID)
 	}()
+}
+
+// notifyState sends the current lifecycle to one client.
+func (h *Host) notifyState(conn *ipc.Conn) {
+	state := h.CurrentState()
+	if err := conn.Notify(session.MethodState, session.StateUpdate{ID: h.cfg.ID, State: state}); err != nil {
+		h.log.Debug("send the state to a new client failed", "session", h.cfg.ID, "err", err.Error())
+	}
 }
 
 func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
@@ -330,6 +390,12 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 	case session.MethodReplay:
 		h.sendScrollback()
 		return struct{}{}, nil
+	case session.MethodSeen:
+		// The client has looked at the finished work, which is what separates
+		// done from idle. Seen is per client: one window looking must not
+		// clear another window's badge.
+		h.setState(session.StateIdle)
+		return struct{}{}, nil
 	case session.MethodStop:
 		// Stopping closes this connection too, so it runs off the handler: a
 		// Close inside the call would pull the pipe out from under its own
@@ -358,6 +424,7 @@ func (h *Host) info() session.Info {
 		Dir:     h.cfg.Dir,
 		Cols:    cols,
 		Rows:    rows,
+		State:   h.CurrentState(),
 	}
 }
 

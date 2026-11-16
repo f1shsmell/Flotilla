@@ -2,12 +2,28 @@
 // these values, they never reshape them, so what the daemon said stays the only
 // source of truth.
 
+// Lifecycle is the state the daemon reports for a session. The five values are
+// a closed set (FLOTILLA.md); a value this build does not recognise becomes
+// unknown, never done, because done would claim there is something to look at.
+export type Lifecycle = "working" | "blocked" | "done" | "idle" | "unknown";
+
+const lifecycles: readonly Lifecycle[] = ["working", "blocked", "done", "idle", "unknown"];
+
+function asLifecycle(value: unknown): Lifecycle {
+  return typeof value === "string" && (lifecycles as readonly string[]).includes(value)
+    ? (value as Lifecycle)
+    : "unknown";
+}
+
 export interface StatusEntry {
   id: string;
   mode: string;
   host_pid: number;
   command: string;
   dir: string;
+  // lifecycle is what the host last reported. It is not derived from reachable:
+  // a reachable session can be blocked, and an unreachable one is unknown.
+  lifecycle: Lifecycle;
   reachable: boolean;
 }
 
@@ -254,6 +270,7 @@ export function parseStatus(raw: unknown): Status {
         host_pid: typeof session.host_pid === "number" ? session.host_pid : 0,
         command: asString(session.command),
         dir: asString(session.dir),
+        lifecycle: asLifecycle(session.state),
         reachable: asBoolean(session.reachable),
       };
     }),
@@ -265,6 +282,37 @@ export function summarise(status: Status): { total: number; reachable: number } 
     total: status.sessions.length,
     reachable: status.sessions.filter((session) => session.reachable).length,
   };
+}
+
+// withLifecycle folds one reported lifecycle change into the fleet. A session
+// this fleet does not list is ignored rather than added: a state for a session
+// that is gone would resurrect a row with nothing behind it.
+export function withLifecycle(
+  status: Status | null,
+  id: string,
+  raw: unknown,
+): Status | null {
+  if (status === null) {
+    return status;
+  }
+  const lifecycle = asLifecycle(raw);
+  let changed = false;
+  const sessions = status.sessions.map((session) => {
+    if (session.id !== id || session.lifecycle === lifecycle) {
+      return session;
+    }
+    changed = true;
+    return { ...session, lifecycle };
+  });
+  // Returning the same object keeps React from re-rendering the fleet for a
+  // state that did not change, which is most of them.
+  return changed ? { ...status, sessions } : status;
+}
+
+// needsAttention is true for the states a user has to act on or should look at.
+// It is the one place that decides, so the list and any badge cannot disagree.
+export function needsAttention(lifecycle: Lifecycle): boolean {
+  return lifecycle === "blocked" || lifecycle === "done";
 }
 
 export function newSession(id: string, mode: string): SessionState {

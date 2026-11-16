@@ -59,13 +59,24 @@ func (d *Daemon) status() Status {
 
 	for i := range d.fleet.Attachments {
 		att := d.fleet.Attachments[i]
+		reachable := att.Conn.Alive()
+
+		// A host this daemon cannot reach has no lifecycle it can vouch for.
+		// Reporting the last state it sent would be a stale label, which
+		// FLOTILLA.md forbids: an unreachable session is unknown, never done.
+		state := att.Info.State
+		if !reachable || !state.Valid() {
+			state = session.StateUnknown
+		}
+
 		st.Sessions = append(st.Sessions, StatusEntry{
 			ID:        att.Record.ID,
 			Mode:      session.Mode(att.Info.Mode),
 			HostPID:   att.Info.PID,
 			Command:   att.Info.Command,
 			Dir:       att.Info.Dir,
-			Reachable: att.Conn.Alive(),
+			State:     state,
+			Reachable: reachable,
 		})
 	}
 

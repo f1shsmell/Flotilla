@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("flotilla", {
   open: (sessionId: string) => ipcRenderer.invoke("flotilla:open", sessionId),
   prompt: (sessionId: string, text: string) =>
     ipcRenderer.invoke("flotilla:prompt", sessionId, text),
+  seen: (sessionId: string) => ipcRenderer.invoke("flotilla:seen", sessionId),
   cancel: (sessionId: string) => ipcRenderer.invoke("flotilla:cancel", sessionId),
   answer: (sessionId: string, questionId: string, optionId: string) =>
     ipcRenderer.invoke("flotilla:answer", sessionId, questionId, optionId),

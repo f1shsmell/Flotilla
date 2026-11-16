@@ -209,6 +209,26 @@ button.primary {
   color: var(--down);
 }
 
+/* Lifecycle badges. blocked and done are the two states that ask something of
+   the user, so they are the only ones that get colour; working is a quiet
+   accent and idle/unknown stay muted rather than claiming attention. */
+.badge.blocked {
+  color: var(--warn);
+}
+
+.badge.done {
+  color: var(--ok);
+}
+
+.badge.working {
+  color: var(--accent);
+}
+
+.badge.idle,
+.badge.unknown {
+  color: var(--muted);
+}
+
 .log {
   flex: 1;
   overflow-y: auto;

@@ -187,7 +187,8 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
-		session.MethodPermissionReply, session.MethodResize, session.MethodStop:
+		session.MethodPermissionReply, session.MethodResize, session.MethodStop,
+		session.MethodSeen:
 	default:
 		return nil, ipc.ErrNoHandler
 	}
@@ -323,6 +324,17 @@ func (d *Daemon) clientData(peer *ipc.Conn, stream uint32, payload []byte) {
 func (d *Daemon) hostHooks(id session.ID) HostHooks {
 	return HostHooks{
 		Handler: func(_ context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
+			// A state change is also the daemon's own business: status reports
+			// read it, so it is recorded before being fanned out. A daemon that
+			// only forwarded it would answer "unknown" for a session the host
+			// had already classified.
+			if method == session.MethodState {
+				var update session.StateUpdate
+				if err := json.Unmarshal(params, &update); err == nil {
+					d.rememberState(id, update.State)
+				}
+			}
+
 			for _, peer := range d.relay.subscribers(id) {
 				if err := peer.Notify(method, params); err != nil {
 					d.cfg.Log.Debug("forward a session notification failed", "session", id, "err", err.Error())
@@ -335,6 +347,23 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 				_ = peer.SendData(stream, payload)
 			}
 		},
+	}
+}
+
+// rememberState records the lifecycle a host reported, so a status poll answers
+// with what the host last said rather than with the state it had at attach.
+func (d *Daemon) rememberState(id session.ID, state session.State) {
+	if !state.Valid() {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.fleet.Attachments {
+		if d.fleet.Attachments[i].Record.ID == id {
+			d.fleet.Attachments[i].Info.State = state
+			return
+		}
 	}
 }
 

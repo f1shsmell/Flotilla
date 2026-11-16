@@ -8,6 +8,7 @@ interface FlotillaBridge {
   detach(sessionId: string): Promise<unknown>;
   open(sessionId: string): Promise<unknown>;
   prompt(sessionId: string, text: string): Promise<unknown>;
+  seen(sessionId: string): Promise<unknown>;
   cancel(sessionId: string): Promise<unknown>;
   answer(sessionId: string, questionId: string, optionId: string): Promise<unknown>;
   input(sessionId: string, text: string): Promise<unknown>;

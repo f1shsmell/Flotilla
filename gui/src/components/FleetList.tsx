@@ -1,10 +1,27 @@
-import type { StatusEntry } from "../store";
+import type { Lifecycle, StatusEntry } from "../store";
 
 interface Props {
   sessions: StatusEntry[];
   selected: string | null;
   onSelect: (id: string) => void;
   onStop: (id: string) => void;
+}
+
+// lifecycleClass maps a state to the class that colours it. Unknown and idle
+// are quiet on purpose: only the states that need the user should draw the eye.
+function lifecycleClass(lifecycle: Lifecycle): string {
+  switch (lifecycle) {
+    case "blocked":
+      return "badge blocked";
+    case "done":
+      return "badge done";
+    case "working":
+      return "badge working";
+    case "idle":
+      return "badge idle";
+    default:
+      return "badge unknown";
+  }
 }
 
 export function FleetList({
@@ -29,11 +46,12 @@ export function FleetList({
             onClick={() => onSelect(session.id)}
           >
             <span className="session-id">{session.id}</span>
-            <span className={`badge ${session.reachable ? "ok" : "down"}`}>
-              {session.reachable ? "reachable" : "unreachable"}
-            </span>
+            <span className={lifecycleClass(session.lifecycle)}>{session.lifecycle}</span>
             <span className="muted">{session.mode}</span>
             <span className="muted mono">{session.command}</span>
+            {session.reachable ? null : (
+              <span className="badge down">unreachable</span>
+            )}
           </button>
           <button
             type="button"

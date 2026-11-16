@@ -67,6 +67,10 @@ type StatusEntry struct {
 	HostPID int          `json:"host_pid"`
 	Command string       `json:"command"`
 	Dir     string       `json:"dir"`
+	// State is the lifecycle the host last reported: working, blocked, done,
+	// idle or unknown. A session this daemon cannot classify is unknown, and
+	// unknown is never read as complete.
+	State session.State `json:"state"`
 	// Reachable is true while this daemon still holds its connection to the
 	// session's host. A session whose host died, or that another client
 	// attached to directly, reports false.
