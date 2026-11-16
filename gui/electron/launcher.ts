@@ -18,8 +18,9 @@ export function taskName(channel: string): string {
   return `${taskFolder}\\daemon-${channel}`;
 }
 
-// createTaskArgs builds the task that runs the daemon. It is created disabled:
-// nothing should start a daemon at midnight, and `/run` starts it on demand.
+// createTaskArgs builds the task that runs the daemon. It is created enabled
+// because `/run` refuses a disabled task, and disabled again once it has run, so
+// its own schedule never starts a second daemon.
 export function createTaskArgs(binary: string, channel: string): string[] {
   return [
     "/create",
@@ -35,7 +36,7 @@ export function createTaskArgs(binary: string, channel: string): string[] {
   ];
 }
 
-// disableTaskArgs keeps the task from firing on its own schedule.
+// disableTaskArgs keeps the task from firing on its own schedule after the run.
 export function disableTaskArgs(channel: string): string[] {
   return ["/change", "/tn", taskName(channel), "/disable"];
 }
@@ -78,9 +79,11 @@ export async function startDaemon(options: StartOptions): Promise<StartResult> {
 
   if (platform === "win32") {
     try {
+      // Enabled to be run, then disabled: `/run` refuses a disabled task, and a
+      // schedule nobody wants must not start a second daemon later.
       await scheduler(createTaskArgs(options.binary, options.channel));
-      await scheduler(disableTaskArgs(options.channel));
       await scheduler(runTaskArgs(options.channel));
+      await scheduler(disableTaskArgs(options.channel));
       return { how: "task" };
     } catch (error) {
       // A locked-down machine may refuse a task; the spawn below is the old path.

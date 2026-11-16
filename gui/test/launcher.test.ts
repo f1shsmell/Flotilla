@@ -59,7 +59,8 @@ describe("startDaemon", () => {
     });
 
     expect(started.how).toBe("task");
-    expect(calls.map((args) => args[0])).toEqual(["/create", "/change", "/run"]);
+    // Enabled to be run, then disabled so its schedule never fires.
+    expect(calls.map((args) => args[0])).toEqual(["/create", "/run", "/change"]);
   });
 
   it("falls back to a spawn when the scheduler refuses", async () => {
