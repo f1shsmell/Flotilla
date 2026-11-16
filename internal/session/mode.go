@@ -36,6 +36,22 @@ const (
 	MethodPermissionReply = "session.permission.reply"
 )
 
+// MethodStop ends a session: the host kills its agent, removes its record and
+// stops serving. The daemon answers it on the control plane; on a bound
+// connection it forwards to the host, which reaches the same end.
+const MethodStop = "session.stop"
+
+// StopRequest names the session to end.
+type StopRequest struct {
+	ID ID `json:"id"`
+}
+
+// MethodReplay asks a host to resend the terminal output it is holding. The
+// daemon calls it when a window starts watching a session the daemon has been
+// attached to all along: those bytes went to the daemon with no subscriber, and
+// this is what brings them back.
+const MethodReplay = "session.replay"
+
 // MethodResize sets the terminal's size. A PTY session serves it; a structured
 // session has no terminal to size.
 const MethodResize = "session.resize"

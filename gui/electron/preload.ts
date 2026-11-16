@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("flotilla", {
   smoke: process.env.FLT_GUI_SMOKE === "1",
   fleet: () => ipcRenderer.invoke("flotilla:fleet"),
   start: (request: unknown) => ipcRenderer.invoke("flotilla:start", request),
+  stop: (sessionId: string) => ipcRenderer.invoke("flotilla:stop", sessionId),
+  detach: (sessionId: string) => ipcRenderer.invoke("flotilla:detach", sessionId),
   open: (sessionId: string) => ipcRenderer.invoke("flotilla:open", sessionId),
   prompt: (sessionId: string, text: string) =>
     ipcRenderer.invoke("flotilla:prompt", sessionId, text),
@@ -25,6 +27,8 @@ contextBridge.exposeInMainWorld("flotilla", {
     ipcRenderer.invoke("flotilla:comment:add", sessionId, comment),
   removeComment: (sessionId: string, id: string) =>
     ipcRenderer.invoke("flotilla:comment:remove", sessionId, id),
+  layout: () => ipcRenderer.invoke("flotilla:layout:read"),
+  saveLayout: (patch: unknown) => ipcRenderer.invoke("flotilla:layout:write", patch),
   onEvent: (handler: (event: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => handler(payload);
     ipcRenderer.on("flotilla:event", listener);

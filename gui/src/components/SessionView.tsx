@@ -8,6 +8,8 @@ import { Terminal } from "./Terminal";
 
 interface Props {
   state: SessionState;
+  view: "stream" | "diff";
+  onView: (view: "stream" | "diff") => void;
   onPrompt: (text: string) => void;
   onCancel: () => void;
   onAnswer: (questionId: string, optionId: string) => void;
@@ -40,6 +42,8 @@ function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
 
 export function SessionView({
   state,
+  view,
+  onView,
   onPrompt,
   onCancel,
   onAnswer,
@@ -48,7 +52,6 @@ export function SessionView({
   onResize,
 }: Props): React.ReactElement {
   const [draft, setDraft] = useState("");
-  const [view, setView] = useState<"stream" | "diff">("stream");
   const working = state.turn === "working";
 
   const submit = (): void => {
@@ -74,14 +77,14 @@ export function SessionView({
           <button
             type="button"
             className={view === "stream" ? "primary" : ""}
-            onClick={() => setView("stream")}
+            onClick={() => onView("stream")}
           >
             {state.mode === "pty" ? "Terminal" : "Log"}
           </button>
           <button
             type="button"
             className={view === "diff" ? "primary" : ""}
-            onClick={() => setView("diff")}
+            onClick={() => onView("diff")}
           >
             Diff
           </button>
@@ -101,11 +104,32 @@ export function SessionView({
         />
       ))}
 
+      {/* The terminal is keyed by session: a reused xterm would keep the
+          previous session's screen and never call onReady again, so the next
+          session's replay would wait in the renderer forever. It also stays
+          mounted while the diff panel shows, because unmounting it would throw
+          away scrollback the host has no way to replay without an attach.
+          The pane is moved out of the way rather than hidden: xterm measures
+          its container, and display:none would leave it with no size. */}
+      {state.mode === "pty" ? (
+        <div
+          className={
+            view === "stream" ? "terminal-pane" : "terminal-pane terminal-pane-behind"
+          }
+          aria-hidden={view !== "stream"}
+        >
+          <Terminal
+            key={state.id}
+            onInput={onInput}
+            onResize={onResize}
+            onReady={onTerminalReady}
+          />
+        </div>
+      ) : null}
+
       {view === "diff" ? (
         <DiffPanel sessionId={state.id} />
-      ) : state.mode === "pty" ? (
-        <Terminal onInput={onInput} onResize={onResize} onReady={onTerminalReady} />
-      ) : (
+      ) : state.mode === "pty" ? null : (
         <div className="log">
           {state.entries.length === 0 ? (
             <p className="empty">Nothing yet. Send a prompt.</p>

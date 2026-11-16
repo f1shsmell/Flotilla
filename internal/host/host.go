@@ -4,6 +4,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,6 +81,45 @@ type Host struct {
 
 	mu   sync.Mutex
 	conn *ipc.Conn
+	// out holds the PTY bytes a client has not seen yet: what arrived while
+	// nobody was attached, and what arrived while a replay was still being
+	// written. A terminal's scrollback lives in its client, so without this a
+	// detach would silently start the next client on a blank screen while the
+	// agent kept working.
+	out []byte
+	// replayConn is the client a replay is being written to, or nil when none
+	// is running. While it is set, new output queues instead of racing the
+	// snapshot. It is a connection rather than a bool because an attach can
+	// supersede one mid-replay: the old replay must not clear the new one's
+	// state or push its stale bytes into the new client's queue.
+	replayConn *ipc.Conn
+}
+
+// ptyBufferLimit bounds the terminal output held for the next client. It is a
+// screenful's worth of scrollback, not a transcript: past this the oldest bytes
+// go, because a reattach should show the recent past at a bounded cost.
+const ptyBufferLimit = 256 * 1024
+
+// sendScrollback hands the buffered terminal output to the current client on
+// request. It is how a window that starts watching an already-running session
+// gets the screen it missed: the host has been writing to the daemon all along,
+// so only the host still has those bytes.
+//
+// The buffer is left in place rather than cleared here: another window may ask
+// next, and the write path trims it anyway. Sending is guarded by the replay
+// flag so live output cannot overtake the snapshot.
+func (h *Host) sendScrollback() {
+	h.mu.Lock()
+	conn := h.conn
+	if conn == nil || h.replayConn != nil || len(h.out) == 0 {
+		h.mu.Unlock()
+		return
+	}
+	h.replayConn = conn
+	pending := h.out
+	h.mu.Unlock()
+
+	h.replayOutput(conn, pending)
 }
 
 // Start spawns the agent and publishes the host record. The host is not
@@ -226,14 +266,30 @@ func (h *Host) attach(conn *ipc.Conn) {
 	h.mu.Lock()
 	previous := h.conn
 	h.conn = conn
+
+	// A terminal's scrollback lives in its client, so the bytes a returning
+	// client missed are replayed. The snapshot is taken under the same lock
+	// that promotes this connection, and output produced from here on queues
+	// behind it: a live chunk overtaking the replay would show the past after
+	// the present.
+	var pending []byte
+	if h.pty != nil {
+		h.replayConn = conn
+		pending = h.out
+		h.out = nil
+	}
 	h.mu.Unlock()
 
 	if previous != nil {
 		previous.Close()
 	}
 
-	// A client that arrives after a gap sees what it missed while detached.
-	h.replayBuffered(conn)
+	if h.pty != nil {
+		h.replayOutput(conn, pending)
+	} else {
+		// Structured updates are replayed as notifications, not as bytes.
+		h.replayBuffered(conn)
+	}
 
 	go func() {
 		<-conn.Done()
@@ -270,6 +326,15 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 			return nil, err
 		}
 		h.answerPermission(reply)
+		return struct{}{}, nil
+	case session.MethodReplay:
+		h.sendScrollback()
+		return struct{}{}, nil
+	case session.MethodStop:
+		// Stopping closes this connection too, so it runs off the handler: a
+		// Close inside the call would pull the pipe out from under its own
+		// reply. The caller asked for the session to end and needs no answer.
+		go func() { _ = h.Close() }()
 		return struct{}{}, nil
 	default:
 		return nil, ipc.ErrNoHandler
@@ -377,14 +442,128 @@ func (h *Host) pumpOutput() {
 func (h *Host) send(stream uint32, payload []byte) {
 	h.mu.Lock()
 	conn := h.conn
+	// Terminal output is always copied into the replay buffer, and also sent
+	// live to the attached client so the daemon's subscribers see it without
+	// waiting for a replay. While a replay is being written, the live copy is
+	// withheld: the replay already carries these bytes, and sending them twice
+	// would make the client render them twice.
+	buffered := stream == session.StreamOutput
+	if buffered {
+		h.bufferLocked(payload)
+	}
+	queued := buffered && h.replayConn != nil
 	h.mu.Unlock()
 
-	if conn == nil {
+	if conn == nil || queued {
 		return
 	}
 	// A failed send means this client is gone. The PTY keeps running and the
 	// next client attaches to the same agent.
 	_ = conn.SendData(stream, payload)
+}
+
+// bufferLocked appends terminal output to the replay buffer, keeping the most
+// recent bytes. h.mu must be held.
+//
+// Every terminal chunk is kept, whether or not a client is attached: the
+// daemon's connection is not the same thing as a window watching, and a window
+// that starts watching an already-running session needs the screen the agent
+// produced before it looked. The buffer is bounded, so this is recent
+// scrollback rather than a transcript.
+// Trimming is aligned to a line break: a terminal fed half an escape sequence
+// renders it as garbage, and the cost of keeping a few extra bytes is one scan
+// of a buffer that is already bounded.
+//
+// Trimming happens in bulk, down to the point where half the limit is free
+// again. Copying the whole buffer on every chunk would cost a ~256 KB memmove
+// per PTY read under sustained output, which is exactly when it hurts.
+func (h *Host) bufferLocked(payload []byte) {
+	h.out = append(h.out, payload...)
+	if len(h.out) < 2*ptyBufferLimit {
+		return
+	}
+
+	over := len(h.out) - ptyBufferLimit
+	start := over
+	if cut := bytes.IndexByte(h.out[start:], '\n'); cut >= 0 {
+		start += cut + 1
+	} else {
+		// No line break after the cut: every kept byte would be the tail of a
+		// line whose head is gone, so keeping none is the honest choice.
+		start = len(h.out)
+	}
+
+	// Copy rather than reslice: the old backing array would otherwise pin its
+	// full size for the life of the session as the buffer slides forward.
+	h.out = append(make([]byte, 0, len(h.out)-start), h.out[start:]...)
+}
+
+// replayOutput writes what the terminal missed to a freshly attached client.
+// pending is the snapshot taken by attach; anything produced while it is being
+// written is fetched afterwards and sent in order, so the client sees neither a
+// gap nor a duplicate.
+//
+// All state changes check that conn is still the connection being replayed: an
+// attach that supersedes this one must not have its replay state cleared, nor
+// its queue polluted with bytes meant for a client that is gone.
+func (h *Host) replayOutput(conn *ipc.Conn, pending []byte) {
+	for {
+		for len(pending) > 0 {
+			chunk := pending
+			if len(chunk) > ipc.MaxFrameSize {
+				chunk = chunk[:ipc.MaxFrameSize]
+			}
+			if err := conn.SendData(session.StreamOutput, chunk); err != nil {
+				h.abandonReplay(conn, pending)
+				return
+			}
+			pending = pending[len(chunk):]
+		}
+
+		// Clearing the replay state under the same lock that checks the buffer
+		// is what makes the handover exact: send either queues here or goes
+		// straight out, never both.
+		h.mu.Lock()
+		if h.replayConn != conn {
+			// Another client owns the replay now; its snapshot covers what this
+			// one had left, so these bytes are not ours to send or restore.
+			h.mu.Unlock()
+			return
+		}
+		pending = h.out
+		h.out = nil
+		if len(pending) == 0 {
+			h.replayConn = nil
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
+	}
+}
+
+// abandonReplay gives back the bytes a failed replay could not deliver, so the
+// next client is not shown a screen that starts after them. It only takes over
+// state it still owns: a replay superseded by a newer attach leaves that
+// attach's queue untouched.
+func (h *Host) abandonReplay(conn *ipc.Conn, pending []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.replayConn != conn {
+		return
+	}
+	h.replayConn = nil
+	h.out = append(pending, h.out...)
+	if over := len(h.out) - ptyBufferLimit; over > 0 {
+		// Trim on a line break for the same reason bufferLocked does: a
+		// terminal fed half an escape sequence renders it as garbage.
+		if cut := bytes.IndexByte(h.out[over:], '\n'); cut >= 0 {
+			over += cut + 1
+		} else {
+			over = len(h.out)
+		}
+		h.out = append(make([]byte, 0, len(h.out)-over), h.out[over:]...)
+	}
 }
 
 // watchAgent reaps the agent and closes the host when it exits. xpty.WaitProcess
