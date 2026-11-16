@@ -17,12 +17,10 @@ import (
 func collect() (func(*ipc.Conn, uint32, []byte), func() string) {
 	var seen strings.Builder
 	return func(_ *ipc.Conn, stream uint32, payload []byte) {
-			if stream == session.StreamOutput {
-				seen.Write(payload)
-			}
-		}, func() string {
-			return seen.String()
+		if stream == session.StreamOutput {
+			seen.Write(payload)
 		}
+	}, seen.String
 }
 
 // waitForText waits until read reports needle, or fails the test with what it

@@ -13,7 +13,8 @@ import (
 // fetchStatus asks the daemon what it serves.
 func fetchStatus(t *testing.T, ctx context.Context, client interface {
 	Call(context.Context, string, any) (json.RawMessage, error)
-}) Status {
+},
+) Status {
 	t.Helper()
 
 	raw, err := client.Call(ctx, MethodStatus, struct{}{})
@@ -33,7 +34,8 @@ func fetchStatus(t *testing.T, ctx context.Context, client interface {
 // its own goroutine.
 func waitForNoSessions(t *testing.T, ctx context.Context, client interface {
 	Call(context.Context, string, any) (json.RawMessage, error)
-}, id session.ID) {
+}, id session.ID,
+) {
 	t.Helper()
 
 	deadline := time.Now().Add(waitFor)
