@@ -60,7 +60,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "Flotilla",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     }
   },
   "author": {
