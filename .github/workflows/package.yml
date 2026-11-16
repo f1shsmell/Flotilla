@@ -53,7 +53,7 @@ jobs:
           $bin = "gui/release/win-unpacked/resources/bin/flt-daemon.exe"
           if (-not (Test-Path $bin)) { throw "the installer is missing $bin" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flotilla-installer
           path: gui/release/*.exe
