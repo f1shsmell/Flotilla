@@ -68,14 +68,30 @@ func startACPHost(t *testing.T, dir, id, token string) *host.Host {
 }
 
 // runDaemon starts a daemon that listens, and waits until it accepts a client.
+//
+// Cleanup waits for Run to return before the next test starts. The pipe name is
+// shared by every test in this package (there is one "test" channel), so a
+// listener that is still closing makes the next test's Listen fail — and its
+// dial then finds a pipe that is about to disappear.
 func runDaemon(t *testing.T, dir, token string) *Daemon {
 	t.Helper()
 
 	d := New(Config{Channel: "test", Token: token, StateDir: dir, Log: discardLogger()}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = d.Run(ctx) }()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = d.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(waitFor):
+			t.Errorf("the daemon on %q did not stop", d.Addr().String())
+		}
+	})
 
 	deadline := time.Now().Add(waitFor)
 	for time.Now().Before(deadline) {
