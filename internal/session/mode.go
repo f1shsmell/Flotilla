@@ -36,6 +36,52 @@ const (
 	MethodPermissionReply = "session.permission.reply"
 )
 
+// State is the lifecycle a session reports. The five values are a closed set
+// (FLOTILLA.md): a caller that cannot classify a session says unknown, and
+// unknown is never treated as complete.
+type State string
+
+const (
+	// StateWorking means the agent is running a turn or producing output.
+	StateWorking State = "working"
+	// StateBlocked means the agent is waiting for the user to answer it.
+	StateBlocked State = "blocked"
+	// StateDone means a turn finished and nobody has looked since.
+	StateDone State = "done"
+	// StateIdle means a turn finished and its result has been seen, or that no
+	// turn has run yet. Both mean "ready for input".
+	StateIdle State = "idle"
+	// StateUnknown means this build cannot classify the session. It does not
+	// mean complete: a timeout or a silent terminal proves nothing.
+	StateUnknown State = "unknown"
+)
+
+// Valid reports whether s is one of the five states.
+func (s State) Valid() bool {
+	switch s {
+	case StateWorking, StateBlocked, StateDone, StateIdle, StateUnknown:
+		return true
+	}
+	return false
+}
+
+// MethodState is the notification a host sends when its session's lifecycle
+// changes, and the call a client uses to ask for the current value. A state is
+// an event: polling a host for it would make the fleet view as slow as its
+// slowest host.
+const MethodState = "session.state"
+
+// StateUpdate carries one lifecycle change.
+type StateUpdate struct {
+	ID    ID    `json:"id"`
+	State State `json:"state"`
+}
+
+// MethodSeen marks a session's finished work as looked at, which is what turns
+// done into idle. Seen state is per client: one window looking does not mark
+// the work seen for another.
+const MethodSeen = "session.seen"
+
 // MethodStop ends a session: the host kills its agent, removes its record and
 // stops serving. The daemon answers it on the control plane; on a bound
 // connection it forwards to the host, which reaches the same end.

@@ -187,7 +187,8 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
-		session.MethodPermissionReply, session.MethodResize, session.MethodStop:
+		session.MethodPermissionReply, session.MethodResize, session.MethodStop,
+		session.MethodSeen:
 	default:
 		return nil, ipc.ErrNoHandler
 	}
@@ -323,6 +324,17 @@ func (d *Daemon) clientData(peer *ipc.Conn, stream uint32, payload []byte) {
 func (d *Daemon) hostHooks(id session.ID) HostHooks {
 	return HostHooks{
 		Handler: func(_ context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
+			// A state change is also the daemon's own business: status reports
+			// read it, so it is recorded before being fanned out. A daemon that
+			// only forwarded it would answer "unknown" for a session the host
+			// had already classified.
+			if method == session.MethodState {
+				var update session.StateUpdate
+				if err := json.Unmarshal(params, &update); err == nil {
+					d.rememberState(id, update.State)
+				}
+			}
+
 			for _, peer := range d.relay.subscribers(id) {
 				if err := peer.Notify(method, params); err != nil {
 					d.cfg.Log.Debug("forward a session notification failed", "session", id, "err", err.Error())
@@ -335,6 +347,23 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 				_ = peer.SendData(stream, payload)
 			}
 		},
+	}
+}
+
+// rememberState records the lifecycle a host reported, so a status poll answers
+// with what the host last said rather than with the state it had at attach.
+func (d *Daemon) rememberState(id session.ID, state session.State) {
+	if !state.Valid() {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.fleet.Attachments {
+		if d.fleet.Attachments[i].Record.ID == id {
+			d.fleet.Attachments[i].Info.State = state
+			return
+		}
 	}
 }
 
@@ -374,26 +403,41 @@ func (d *Daemon) dropSession(id session.ID) {
 func (d *Daemon) end(id session.ID, explicit bool) {
 	d.forget(id)
 
+	// An explicit stop does not read the record first. On Windows a read that
+	// races the host's own removal fails with a sharing violation rather than
+	// ENOENT, and treating any read error as "nothing to do" would leave the
+	// record behind — the session the user killed would come back on the next
+	// daemon start. Removing a file that is already gone is fine; removing one
+	// that is still there is the whole point.
+	if explicit {
+		d.prune(id, "stopped")
+		return
+	}
+
 	rec, err := d.reg.Read(id)
 	if err != nil {
 		return
 	}
-	switch {
-	case explicit:
-		d.prune(id, rec.PID, "stopped")
-	case !processAlive(rec.PID):
-		d.prune(id, rec.PID, "dead")
+	if !processAlive(rec.PID) {
+		d.prune(id, "dead")
 	}
 }
 
-// prune removes a session record. A record that cannot be deleted is reported,
-// not fatal: a host that is still shutting down keeps it for the next scan.
-func (d *Daemon) prune(id session.ID, pid int, why string) {
-	if err := d.reg.Unpublish(id); err != nil {
-		d.cfg.Log.Warn("cannot prune a "+why+" host record", "session", id, "err", err.Error())
-		return
+// prune removes a session record, retrying a removal that loses a race with the
+// host. The host deletes its own record as it shuts down, so the two can meet;
+// a few short retries turn that into one successful delete instead of a warning
+// and a record nobody will look at again.
+func (d *Daemon) prune(id session.ID, why string) {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = d.reg.Unpublish(id); err == nil {
+			d.cfg.Log.Info("pruned a "+why+" host record", "session", id)
+			return
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
 	}
-	d.cfg.Log.Info("pruned a "+why+" host record", "session", id, "pid", pid)
+
+	d.cfg.Log.Warn("cannot prune a "+why+" host record", "session", id, "err", err.Error())
 }
 
 // forget removes a session from the fleet this daemon reports.

@@ -46,6 +46,11 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
         if (method === "session.permission") {
           send(target, { type: "permission", session: sessionId, question: params });
         }
+        // A lifecycle change is what lets the fleet show a session as blocked
+        // or done without polling the host for it.
+        if (method === "session.state") {
+          send(target, { type: "state", session: sessionId, state: params });
+        }
       },
       onData: (stream, payload) => {
         send(target, {
@@ -137,6 +142,13 @@ function register(): void {
   ipcMain.handle("flotilla:prompt", async (_event, sessionId: string, text: string) =>
     link(sessionId).call("session.prompt", { text }, turnTimeoutMs),
   );
+
+  ipcMain.handle("flotilla:seen", async (_event, sessionId: string) => {
+    // Looking at a session is what turns done into idle. It goes to the host
+    // through the session's own link, because seen state belongs to the
+    // session, not to the control plane.
+    await link(sessionId).call("session.seen", {});
+  });
 
   ipcMain.handle("flotilla:cancel", async (_event, sessionId: string) => {
     await link(sessionId).call("session.cancel", {});

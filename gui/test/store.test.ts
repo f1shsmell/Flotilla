@@ -15,6 +15,9 @@ import {
   startTurn,
   worktreeOf,
   summarise,
+  needsAttention,
+  withLifecycle,
+  type Status,
 } from "../src/store";
 
 describe("parseStatus", () => {
@@ -49,9 +52,41 @@ describe("parseStatus", () => {
       host_pid: 0,
       command: "",
       dir: "",
+      // A session whose state the daemon did not send is unknown, never idle:
+      // idle would claim it is ready for input.
+      lifecycle: "unknown",
       reachable: false,
     });
     expect(status.failures).toEqual([]);
+  });
+
+  it("reads the lifecycle the daemon reports", () => {
+    const status = parseStatus({
+      sessions: [
+        { id: "a", state: "blocked" },
+        { id: "b", state: "done" },
+        { id: "c", state: "working" },
+        { id: "d", state: "idle" },
+      ],
+    });
+
+    expect(status.sessions.map((session) => session.lifecycle)).toEqual([
+      "blocked",
+      "done",
+      "working",
+      "idle",
+    ]);
+  });
+
+  it("turns a state it does not know into unknown, not done", () => {
+    const status = parseStatus({
+      sessions: [{ id: "a", state: "finished" }, { id: "b", state: 7 }],
+    });
+
+    expect(status.sessions.map((session) => session.lifecycle)).toEqual([
+      "unknown",
+      "unknown",
+    ]);
   });
 
   it("survives a shape it did not expect", () => {
@@ -253,5 +288,75 @@ describe("session log", () => {
 
     state = loseSession(state, "host gone");
     expect(state).toMatchObject({ turn: "lost", error: "host gone" });
+  });
+});
+
+describe("fleet lifecycle", () => {
+  function fleet(): Status {
+    return {
+      channel: "stable",
+      pid: 1,
+      ready: true,
+      failures: [],
+      sessions: [
+        {
+          id: "a",
+          mode: "acp",
+          host_pid: 10,
+          command: "kimi",
+          dir: "/w",
+          lifecycle: "idle",
+          reachable: true,
+        },
+        {
+          id: "b",
+          mode: "acp",
+          host_pid: 11,
+          command: "kimi",
+          dir: "/w",
+          lifecycle: "idle",
+          reachable: true,
+        },
+      ],
+    };
+  }
+
+  it("updates one session without touching the others", () => {
+    const next = withLifecycle(fleet(), "b", "blocked");
+
+    expect(next?.sessions.map((s) => s.lifecycle)).toEqual(["idle", "blocked"]);
+    // Everything else about the row survives: a state change is not a rebuild.
+    expect(next?.sessions[1]).toMatchObject({ id: "b", host_pid: 11, reachable: true });
+  });
+
+  it("returns the same fleet when nothing changed", () => {
+    const current = fleet();
+    // Identity matters: React re-renders on a new object, and most state
+    // notifications repeat the state the row already shows.
+    expect(withLifecycle(current, "a", "idle")).toBe(current);
+  });
+
+  it("ignores a state for a session this fleet does not list", () => {
+    const current = fleet();
+    expect(withLifecycle(current, "ghost", "done")).toBe(current);
+    expect(withLifecycle(current, "ghost", "done")?.sessions).toHaveLength(2);
+  });
+
+  it("does nothing before the fleet has arrived", () => {
+    expect(withLifecycle(null, "a", "done")).toBeNull();
+  });
+
+  it("treats a value it cannot classify as unknown", () => {
+    const next = withLifecycle(fleet(), "a", "finished");
+    expect(next?.sessions[0].lifecycle).toBe("unknown");
+  });
+
+  it("says which states ask something of the user", () => {
+    expect(needsAttention("blocked")).toBe(true);
+    expect(needsAttention("done")).toBe(true);
+    // unknown is never treated as complete, so it is not an invitation to look.
+    expect(needsAttention("unknown")).toBe(false);
+    expect(needsAttention("idle")).toBe(false);
+    expect(needsAttention("working")).toBe(false);
   });
 });

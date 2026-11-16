@@ -12,19 +12,22 @@ import {
   failTurn,
   loseSession,
   newSession,
+  needsAttention,
   parseStatus,
   startTurn,
   summarise,
+  withLifecycle,
   type SessionState,
   type StartRequest,
   type Status,
 } from "./store";
 
 interface WireEvent {
-  type: "update" | "permission" | "data" | "closed";
+  type: "update" | "permission" | "state" | "data" | "closed";
   session: string;
   update?: unknown;
   question?: unknown;
+  state?: unknown;
   base64?: string;
   error?: string;
 }
@@ -122,6 +125,15 @@ export function App(): React.ReactElement {
         return;
       }
 
+      // A lifecycle change belongs to the fleet, not to the open session's log:
+      // the row that says "blocked" is the one the user needs to see, whether
+      // or not that session is the one on screen.
+      if (event.type === "state") {
+        const update = (event.state ?? {}) as { state?: unknown };
+        setFleet((current) => withLifecycle(current, event.session, update.state));
+        return;
+      }
+
       queue.current.push(event);
       schedule();
     });
@@ -211,9 +223,20 @@ export function App(): React.ReactElement {
     setOpenError(null);
     try {
       const attached = (await window.flotilla.open(id)) as {
-        info?: { mode?: string };
+        info?: { mode?: string; state?: unknown };
       };
       setSession(newSession(id, attached.info?.mode ?? "pty"));
+
+      // Opening a session is looking at it, which is what separates done from
+      // idle. Only a finished turn is marked: marking a working session seen
+      // would be a lie about work that has not arrived.
+      const finished = (attached.info?.state ?? "") === "done";
+      if (finished) {
+        void window.flotilla.seen(id).catch(() => {
+          // A host that went away cannot record seen; the row keeps its badge.
+        });
+      }
+
       if (layoutReady.current) {
         void window.flotilla.saveLayout({ session: id });
       }
@@ -346,6 +369,11 @@ export function App(): React.ReactElement {
   }, [refresh]);
 
   const counts = fleet ? summarise(fleet) : { total: 0, reachable: 0 };
+  // How many sessions are waiting on the user. It is a count of rows the list
+  // will colour, not a second opinion about their state.
+  const attention = fleet
+    ? fleet.sessions.filter((session) => needsAttention(session.lifecycle)).length
+    : 0;
 
   return (
     <div className="app">
@@ -355,6 +383,7 @@ export function App(): React.ReactElement {
           <p className="muted">
             {fleet ? `${counts.reachable}/${counts.total} reachable` : "…"}
             {fleet ? ` · pid ${fleet.pid}` : ""}
+            {attention > 0 ? ` · ${attention} need you` : ""}
           </p>
           <button type="button" onClick={() => void refresh(true)}>
             Refresh

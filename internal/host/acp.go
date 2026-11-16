@@ -170,6 +170,12 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 	if conn == nil {
 		return acp.PermissionAnswer{}, nil
 	}
+
+	// The agent is waiting on the user. This is the exact case `blocked` names:
+	// an approval or question UI the session cannot get past on its own. Unlike
+	// a PTY session, ACP tells us rather than leaving us to recognise a dialog.
+	h.setState(session.StateBlocked)
+
 	if err := conn.Notify(session.MethodPermission, session.PermissionQuestion{
 		ID:      id,
 		Title:   req.Title,
@@ -184,6 +190,8 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 
 	select {
 	case a := <-answer:
+		// Answered: the turn resumes, so the session is working again.
+		h.setState(session.StateWorking)
 		return a, nil
 	case <-ctx.Done():
 		return acp.PermissionAnswer{}, nil
@@ -239,10 +247,22 @@ func (h *Host) promptACP(ctx context.Context, req session.PromptRequest) (sessio
 		return session.PromptResponse{}, fmt.Errorf("session %q is not an ACP session: %w", h.cfg.ID, errWrongMode)
 	}
 
+	// The turn is now running. An ACP session knows this exactly: the call is
+	// synchronous and returns when the agent stops.
+	h.setState(session.StateWorking)
+
 	resp, err := h.acp.sess.Prompt(ctx, sdk.TextBlock(req.Text))
 	if err != nil {
+		// A failed turn is not "done": the work did not happen, and a caller
+		// that reads done would think there is something to look at. Unknown
+		// says what this build knows.
+		h.setState(session.StateUnknown)
 		return session.PromptResponse{}, fmt.Errorf("run the turn: %w", err)
 	}
+
+	// The agent stopped. Whether the user has seen the result is the client's
+	// question, so the host reports done and the client marks it seen.
+	h.setState(session.StateDone)
 	return session.PromptResponse{StopReason: string(resp.StopReason)}, nil
 }
 
