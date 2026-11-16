@@ -21,32 +21,44 @@ const historyTail = 200
 // and says there is more.
 const historyBudget = ipc.MaxFrameSize / 2
 
-// recordUpdate stores one agent update and returns it carrying its place in the
-// session's log. A store failure is logged rather than raised: the live update is
-// the session's present, and dropping it over a full disk would be worse than a
-// gap in the log.
+// recordUpdate stores one agent update and returns what to forward, and whether
+// to forward it at all. A store failure is logged rather than raised: the live
+// update is the session's present, and dropping it over a full disk would be
+// worse than a gap in the log.
 //
 // A replay of an update the log already holds is not an error either. A host
 // hands its buffer to a daemon that reconnects, and the same paragraph must not
-// become two lines; the copy keeps the sequence it was first stored under.
-func (d *Daemon) recordUpdate(id session.ID, params json.RawMessage) json.RawMessage {
+// become two lines; the copy keeps the sequence it was first stored under, so a
+// client that already folded it in recognises it.
+//
+// A replay whose record has since been trimmed away is the one case that is not
+// forwarded. Its text belongs to the part of the turn the log chose to drop, and
+// handing a window a line from before everything it holds would place it out of
+// order — with no sequence, because the record that carried one is gone.
+func (d *Daemon) recordUpdate(id session.ID, params json.RawMessage) (json.RawMessage, bool) {
 	var msg session.UpdateMessage
 	if err := json.Unmarshal(params, &msg); err != nil {
-		return params
+		return params, true
 	}
 
 	seq, err := d.transcripts.Append(string(id), msg.HostSeq, params)
-	if err != nil && !errors.Is(err, transcript.ErrDuplicate) {
+	switch {
+	case err == nil:
+	case errors.Is(err, transcript.ErrTrimmed):
+		return nil, false
+	case errors.Is(err, transcript.ErrDuplicate):
+		// Stored already; the copy keeps the sequence it was first given.
+	case err != nil:
 		d.cfg.Log.Warn("cannot store an agent update", "session", id, "err", err.Error())
-		return params
+		return params, true
 	}
 
 	msg.Seq = seq
 	stored, err := json.Marshal(msg)
 	if err != nil {
-		return params
+		return params, true
 	}
-	return stored
+	return stored, true
 }
 
 // history answers a request for a session's stored updates. The daemon serves it,

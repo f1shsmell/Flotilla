@@ -32,6 +32,12 @@ const maxLineBytes = 8 << 20
 // number the host gave it is what tells the two copies apart.
 var ErrDuplicate = errors.New("transcript: update already stored")
 
+// ErrTrimmed reports an update the log has moved past: it was stored once, and a
+// trim has since dropped the record that held it. There is no sequence left to
+// hand back, so a caller cannot pass the copy on as one a client already has —
+// and storing it again would place work from before the kept tail after it.
+var ErrTrimmed = errors.New("transcript: update was trimmed")
+
 // Record is one stored update and its place in the session's log. Seq starts at
 // one and keeps counting across trims, so a client can tell the updates it has
 // already from the ones it does not, without knowing how much went before it.
@@ -115,7 +121,7 @@ func (s *Store) Append(id string, hostSeq uint64, update json.RawMessage) (uint6
 		}
 		// The record was trimmed away; the update is still one the log already
 		// moved past, so it is refused rather than reinserted out of order.
-		return 0, ErrDuplicate
+		return 0, ErrTrimmed
 	}
 
 	line, err := json.Marshal(Record{Seq: l.next, HostSeq: hostSeq, Update: update})

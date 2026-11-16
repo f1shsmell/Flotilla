@@ -323,6 +323,19 @@ func TestAnOversizedTranscriptKeepsItsTail(t *testing.T) {
 				i, page.Records[i].Seq, page.Records[i-1].Seq)
 		}
 	}
+
+	// A replay of work the trim dropped is refused, and refused differently: the
+	// sequence it was stored under went with the record, so there is none to
+	// report. Handing back zero as "the sequence it already has" would tell a
+	// client the update is unnumbered, and storing it again would place an old
+	// line after the whole kept tail.
+	seq, err := reopened.Append("sess-1", 1, update(t, body))
+	if !errors.Is(err, transcript.ErrTrimmed) {
+		t.Fatalf("a replay of a trimmed update = %v, want ErrTrimmed", err)
+	}
+	if seq != 0 {
+		t.Fatalf("a trimmed replay reported sequence %d, want none", seq)
+	}
 }
 
 // TestAPartialLineDoesNotSpoilTheLog pins the crash case: a write cut in half

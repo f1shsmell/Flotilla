@@ -422,10 +422,16 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 			// An agent update is stored before it is forwarded, so a window that
 			// attaches later can be told what it missed. What goes out carries
 			// the sequence the store gave it, which is how a client discards an
-			// update it already has from its attach history.
+			// update it already has from its attach history. A replay of work the
+			// log has already dropped is forwarded to nobody: it would put a line
+			// from before the window's whole log at the end of it.
 			forwarded := params
 			if method == session.MethodUpdate {
-				forwarded = d.recordUpdate(id, params)
+				var keep bool
+				forwarded, keep = d.recordUpdate(id, params)
+				if !keep {
+					return struct{}{}, nil
+				}
 			}
 
 			for _, peer := range d.relay.subscribers(id) {
