@@ -58,7 +58,7 @@ describe("startDaemon", () => {
       },
     });
 
-    expect(started).toBe("task");
+    expect(started.how).toBe("task");
     expect(calls.map((args) => args[0])).toEqual(["/create", "/change", "/run"]);
   });
 
@@ -77,7 +77,8 @@ describe("startDaemon", () => {
       },
     });
 
-    expect(started).toBe("spawn");
+    expect(started.how).toBe("spawn");
+    expect(started.why).toMatch(/access denied/);
     expect(spawned).toEqual([["--channel", "stable"]]);
   });
 
@@ -92,6 +93,6 @@ describe("startDaemon", () => {
       spawner: async () => undefined,
     });
 
-    expect(started).toBe("spawn");
+    expect(started.how).toBe("spawn");
   });
 });

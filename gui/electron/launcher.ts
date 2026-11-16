@@ -59,27 +59,38 @@ export interface StartOptions {
   spawner?: (binary: string, args: string[]) => Promise<void>;
 }
 
+export interface StartResult {
+  // how names what actually started the daemon.
+  how: "task" | "spawn";
+  // why carries the scheduler's refusal, which is the only way to learn why an
+  // installed window fell back to a child that dies with it.
+  why?: string;
+}
+
 // startDaemon asks Task Scheduler to run the daemon on Windows, and falls back to
 // a plain spawn elsewhere or when the scheduler refuses: a window that cannot
 // outlive itself is still better than a window with no daemon.
-export async function startDaemon(options: StartOptions): Promise<"task" | "spawn"> {
+export async function startDaemon(options: StartOptions): Promise<StartResult> {
   const platform = options.platform ?? process.platform;
   const scheduler = options.scheduler ?? ((args: string[]) => run("schtasks", args).then(() => undefined));
+
+  let why: string | undefined;
 
   if (platform === "win32") {
     try {
       await scheduler(createTaskArgs(options.binary, options.channel));
       await scheduler(disableTaskArgs(options.channel));
       await scheduler(runTaskArgs(options.channel));
-      return "task";
-    } catch {
+      return { how: "task" };
+    } catch (error) {
       // A locked-down machine may refuse a task; the spawn below is the old path.
+      why = error instanceof Error ? error.message : String(error);
     }
   }
 
   const spawner = options.spawner ?? spawnDetached;
   await spawner(options.binary, ["--channel", options.channel]);
-  return "spawn";
+  return { how: "spawn", why };
 }
 
 // spawnDetached starts the daemon as a child, which is the fallback for a

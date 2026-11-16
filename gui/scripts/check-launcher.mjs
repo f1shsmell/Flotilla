@@ -25,9 +25,9 @@ process.env.FLT_HOME = home;
 let daemonPID = 0;
 
 try {
-  const how = await startDaemon({ binary, channel });
-  if (how !== "task") {
-    throw new Error(`the launcher fell back to ${how}: the scheduler refused the task`);
+  const started = await startDaemon({ binary, channel });
+  if (started.how !== "task") {
+    throw new Error(`the launcher fell back to a spawn: ${started.why ?? "no reason given"}`);
   }
 
   const deadline = Date.now() + 20000;
@@ -63,5 +63,15 @@ try {
       // already gone
     }
   }
-  rmSync(home, { recursive: true, force: true });
+
+  // Windows keeps the daemon's log locked until the process is gone, so the
+  // directory is removed with a few tries rather than one.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(home, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
