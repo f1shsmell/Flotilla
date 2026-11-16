@@ -3,6 +3,7 @@ package comments_test
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/f1shsmell/flotilla/internal/comments"
@@ -77,6 +78,7 @@ func TestRefusesACommentThatCannotBeMeant(t *testing.T) {
 		"escaping":     {Path: "../outside.txt", Line: 1, Side: comments.NewSide, Text: "hi"},
 		"zero line":    {Path: "a.txt", Line: 0, Side: comments.NewSide, Text: "hi"},
 		"unknown side": {Path: "a.txt", Line: 1, Side: comments.Side("middle"), Text: "hi"},
+		"too long":     {Path: "a.txt", Line: 1, Side: comments.NewSide, Text: strings.Repeat("x", 4097)},
 	}
 
 	for name, c := range cases {

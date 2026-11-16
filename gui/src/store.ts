@@ -142,7 +142,10 @@ export function parsePatch(patch: string): DiffLine[] {
       line.startsWith("new file") ||
       line.startsWith("deleted file") ||
       line.startsWith("similarity") ||
-      line.startsWith("rename ")
+      line.startsWith("rename ") ||
+      // "\ No newline at end of file" is a marker, not a line: counting it would
+      // shift every note below it onto the wrong line.
+      line.startsWith("\\")
     ) {
       out.push({ kind: "meta", text: line, line: 0, side: "new" });
       continue;

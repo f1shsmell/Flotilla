@@ -115,6 +115,16 @@ describe("parsePatch", () => {
     expect(parsePatch("+one\n")).toHaveLength(1);
   });
 
+  it("does not count the no-newline marker as a line", () => {
+    const patch = ["@@ -1,1 +1,2 @@", " kept", "+added", "\\ No newline at end of file"].join("\n");
+
+    const lines = parsePatch(patch).filter((line) => line.kind === "add" || line.kind === "context");
+    expect(lines.map((line) => [line.kind, line.line])).toEqual([
+      ["context", 1],
+      ["add", 2],
+    ]);
+  });
+
   it("numbers the lines a comment can anchor to", () => {
     const patch = [
       "diff --git a/readme.md b/readme.md",

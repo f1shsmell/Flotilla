@@ -25,6 +25,10 @@ var ErrNoComment = errors.New("comments: no such comment")
 // ErrBadComment reports a comment that cannot be stored as asked.
 var ErrBadComment = errors.New("comments: invalid comment")
 
+// maxTextBytes bounds one note. A review note is a sentence or two; the bound is
+// what keeps one runaway client from filling the disk with prose.
+const maxTextBytes = 4 << 10
+
 // Side names which version of the file a line number belongs to.
 type Side string
 
@@ -124,6 +128,9 @@ func (s Store) Remove(session, id string) error {
 func validate(c Comment) error {
 	if strings.TrimSpace(c.Text) == "" {
 		return fmt.Errorf("comment on %q: empty text: %w", c.Path, ErrBadComment)
+	}
+	if len(c.Text) > maxTextBytes {
+		return fmt.Errorf("comment on %q: %d bytes of text, over %d: %w", c.Path, len(c.Text), maxTextBytes, ErrBadComment)
 	}
 	if c.Path == "" {
 		return fmt.Errorf("comment: empty path: %w", ErrBadComment)
