@@ -161,6 +161,44 @@ type CommentListResponse struct {
 	Comments []comments.Comment `json:"comments"`
 }
 
+// Methods a review ends with. The daemon answers them for the same reason it
+// answers the diff: they write to the checkout, not to the agent's conversation.
+//
+// Each one is an explicit request from a person. Nothing here runs on its own
+// and nothing force-pushes: a rejected push is a decision left to the user.
+const (
+	// MethodCommit stages every change and commits it.
+	MethodCommit = "session.commit"
+	// MethodPush sends the current branch to origin.
+	MethodPush = "session.push"
+	// MethodPullRequest opens a pull request for the current branch with gh.
+	MethodPullRequest = "session.pr"
+)
+
+// CommitRequest names the message one commit should carry. An empty message is
+// refused rather than invented.
+type CommitRequest struct {
+	Message string `json:"message"`
+}
+
+// PullRequestRequest names what the pull request says.
+type PullRequestRequest struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+	// Base is the branch to merge into. Empty lets gh use the repository's
+	// default, which is what a caller who did not think about it wants.
+	Base string `json:"base,omitempty"`
+}
+
+// WriteResponse is what a commit, a push or a pull request produced. Summary is
+// one line fit for a log or a toast; Ref names the handle (a commit id, a
+// branch, a pull request URL) when the action has one.
+type WriteResponse struct {
+	Summary string `json:"summary"`
+	Ref     string `json:"ref,omitempty"`
+	Output  string `json:"output,omitempty"`
+}
+
 // MethodAttach binds one client connection to one session. The daemon serves it,
 // not the host: after it succeeds, that connection carries the session's calls,
 // its updates and its terminal bytes.

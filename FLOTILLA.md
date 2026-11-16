@@ -135,6 +135,7 @@ activates as the code lands:
 - sensitive: internal/host/** (ConPTY / stdio ownership)
 - sensitive: internal/pty/** (input injection, blocked gate)
 - sensitive: internal/worktree/** (git operations on user repos)
+- sensitive: internal/gitops/** (commits, pushes and PRs on user repos)
 - sensitive: internal/bridge/** (magpie credential bridge)
 - sensitive: gui/src/updater/**
 

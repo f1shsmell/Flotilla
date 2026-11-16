@@ -8,3 +8,6 @@ internal/host 75
 internal/worktree 75
 internal/diff 75
 internal/comments 75
+# gitops writes to a user's repository and pushes to their remote. The floor is
+# where it is because a wrong path here is a commit on someone else's branch.
+internal/gitops 75

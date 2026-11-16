@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld("flotilla", {
     ipcRenderer.invoke("flotilla:resize", sessionId, cols, rows),
   diff: (sessionId: string, scope: string, path?: string) =>
     ipcRenderer.invoke("flotilla:diff", sessionId, scope, path),
+  commit: (sessionId: string, message: string) =>
+    ipcRenderer.invoke("flotilla:commit", sessionId, message),
+  push: (sessionId: string) => ipcRenderer.invoke("flotilla:push", sessionId),
+  pr: (sessionId: string, request: unknown) =>
+    ipcRenderer.invoke("flotilla:pr", sessionId, request),
   comments: (sessionId: string) => ipcRenderer.invoke("flotilla:comments", sessionId),
   addComment: (sessionId: string, comment: unknown) =>
     ipcRenderer.invoke("flotilla:comment:add", sessionId, comment),
