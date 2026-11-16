@@ -5,7 +5,7 @@
 // through a per-user task.
 
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -67,6 +67,8 @@ export interface StartOptions {
   platform?: NodeJS.Platform;
   scheduler?: (args: string[]) => Promise<void>;
   spawner?: (binary: string, args: string[]) => Promise<void>;
+  /** Overridable so a test writes its wrapper somewhere disposable. */
+  home?: string;
 }
 
 export interface StartResult {
@@ -88,8 +90,9 @@ export async function startDaemon(options: StartOptions): Promise<StartResult> {
 
   if (platform === "win32") {
     try {
-      const home = resolvePaths(options.channel).root;
+      const home = options.home ?? resolvePaths(options.channel).root;
       const script = wrapperPath(home, options.channel);
+      await mkdir(home, { recursive: true });
       await writeFile(script, wrapperScript(home, options.binary, options.channel), "utf8");
 
       // Enabled to be run, then disabled: `/run` refuses a disabled task, and a

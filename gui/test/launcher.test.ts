@@ -1,3 +1,7 @@
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -59,6 +63,7 @@ describe("startDaemon", () => {
       binary: "d.exe",
       channel: "stable",
       platform: "win32",
+      home: mkdtempSync(path.join(os.tmpdir(), "flt-launcher-")),
       scheduler: async (args) => {
         calls.push(args);
       },
@@ -79,6 +84,7 @@ describe("startDaemon", () => {
       binary: "d.exe",
       channel: "stable",
       platform: "win32",
+      home: mkdtempSync(path.join(os.tmpdir(), "flt-launcher-")),
       scheduler: async () => {
         throw new Error("access denied");
       },
