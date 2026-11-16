@@ -20,6 +20,13 @@ func Init(t *testing.T) string {
 	dir := t.TempDir()
 	Run(t, dir, "init", "-b", "main")
 
+	// The repository carries its own identity. Two reasons: a CI runner has no
+	// global one, and code under test that runs git itself — gitops — cannot see
+	// the environment this package sets for its own commands, so the identity
+	// has to live where that code will find it.
+	Run(t, dir, "config", "user.name", "test")
+	Run(t, dir, "config", "user.email", "test@example.com")
+
 	Write(t, dir, "readme.md", "hello\n")
 	Write(t, dir, ".gitignore", ".env\n")
 	Write(t, dir, ".worktreeinclude", ".env\n")

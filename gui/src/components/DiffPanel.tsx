@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { GitActions } from "./GitActions";
+
 import {
   commentPrompt,
   commentsOn,
@@ -144,6 +146,10 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
           </button>
         ) : null}
       </div>
+
+      {/* The writes sit under the diff they describe: what is on screen is what
+          a commit would record, so the message can be written while reading it. */}
+      <GitActions sessionId={sessionId} onWrote={() => void load(scope)} />
 
       {error ? <p className="error">{error}</p> : null}
 

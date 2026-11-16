@@ -17,6 +17,10 @@ function userData(): string {
 // call timeout.
 const turnTimeoutMs = 30 * 60 * 1000;
 
+// A push waits on the network and a pull request waits on gh, so they get a
+// bound of their own. A commit is local and needs far less.
+const writeTimeoutMs = 5 * 60 * 1000;
+
 // links are the session connections this window holds. The daemon is the only
 // client a host has, so every window asks the daemon for its own link.
 const links = new Map<string, { client: DaemonClient; attached: unknown }>();
@@ -177,6 +181,24 @@ function register(): void {
 
   ipcMain.handle("flotilla:comments", async (_event, sessionId: string) =>
     link(sessionId).call("session.comment.list", {}),
+  );
+
+  // The three writes a review ends with. They are long calls: a push waits on
+  // the network, and a pull request waits on gh. A commit is local and fast.
+  ipcMain.handle(
+    "flotilla:commit",
+    async (_event, sessionId: string, message: string) =>
+      link(sessionId).call("session.commit", { message }, 60000),
+  );
+
+  ipcMain.handle("flotilla:push", async (_event, sessionId: string) =>
+    link(sessionId).call("session.push", {}, writeTimeoutMs),
+  );
+
+  ipcMain.handle(
+    "flotilla:pr",
+    async (_event, sessionId: string, request: unknown) =>
+      link(sessionId).call("session.pr", request, writeTimeoutMs),
   );
 
   ipcMain.handle(

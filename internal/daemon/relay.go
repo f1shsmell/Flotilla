@@ -10,6 +10,7 @@ import (
 
 	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/diff"
+	"github.com/f1shsmell/flotilla/internal/gitops"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -183,6 +184,12 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 		return d.addComment(id, params)
 	case session.MethodCommentRemove:
 		return d.removeComment(id, params)
+	case session.MethodCommit:
+		return d.commit(ctx, id, params)
+	case session.MethodPush:
+		return d.push(ctx, id)
+	case session.MethodPullRequest:
+		return d.pullRequest(ctx, id, params)
 	}
 
 	switch method {
@@ -281,6 +288,65 @@ func (d *Daemon) removeComment(id session.ID, params json.RawMessage) (any, erro
 		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentRemove, id, err)
 	}
 	return struct{}{}, nil
+}
+
+// commit stages every change in the session's checkout and commits it.
+//
+// The message comes from the caller: this daemon never invents a subject, for
+// the same reason it does not invent a diff summary — the person who presses
+// the button has to have read what goes into history.
+func (d *Daemon) commit(ctx context.Context, id session.ID, params json.RawMessage) (any, error) {
+	var req session.CommitRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", session.MethodCommit, err)
+	}
+
+	att := d.lookup(id)
+	if att == nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommit, id, ErrUnknownSession)
+	}
+
+	res, err := gitops.Commit(ctx, att.Info.Dir, req.Message)
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommit, id, err)
+	}
+	d.cfg.Log.Info("session committed", "session", id, "ref", res.Ref)
+	return session.WriteResponse{Summary: res.Summary, Ref: res.Ref, Output: res.Output}, nil
+}
+
+// push sends the session's branch to origin, through the user's own credentials.
+func (d *Daemon) push(ctx context.Context, id session.ID) (any, error) {
+	att := d.lookup(id)
+	if att == nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodPush, id, ErrUnknownSession)
+	}
+
+	res, err := gitops.Push(ctx, att.Info.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodPush, id, err)
+	}
+	d.cfg.Log.Info("session pushed", "session", id, "ref", res.Ref)
+	return session.WriteResponse{Summary: res.Summary, Ref: res.Ref, Output: res.Output}, nil
+}
+
+// pullRequest opens a pull request for the session's branch with gh.
+func (d *Daemon) pullRequest(ctx context.Context, id session.ID, params json.RawMessage) (any, error) {
+	var req session.PullRequestRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", session.MethodPullRequest, err)
+	}
+
+	att := d.lookup(id)
+	if att == nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodPullRequest, id, ErrUnknownSession)
+	}
+
+	res, err := gitops.PullRequest(ctx, att.Info.Dir, req.Title, req.Body, req.Base)
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodPullRequest, id, err)
+	}
+	d.cfg.Log.Info("session opened a pull request", "session", id, "ref", res.Ref)
+	return session.WriteResponse{Summary: res.Summary, Ref: res.Ref, Output: res.Output}, nil
 }
 
 // baseline reports the commit a session started at, if the daemon watched it

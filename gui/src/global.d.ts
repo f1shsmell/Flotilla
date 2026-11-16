@@ -14,6 +14,9 @@ interface FlotillaBridge {
   input(sessionId: string, text: string): Promise<unknown>;
   resize(sessionId: string, cols: number, rows: number): Promise<unknown>;
   diff(sessionId: string, scope: string, path?: string): Promise<unknown>;
+  commit(sessionId: string, message: string): Promise<unknown>;
+  push(sessionId: string): Promise<unknown>;
+  pr(sessionId: string, request: unknown): Promise<unknown>;
   comments(sessionId: string): Promise<unknown>;
   addComment(sessionId: string, comment: unknown): Promise<unknown>;
   removeComment(sessionId: string, id: string): Promise<unknown>;

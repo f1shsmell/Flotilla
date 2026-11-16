@@ -279,6 +279,38 @@ button.primary {
   align-items: center;
 }
 
+/* The commit/push/PR row. It wraps because the window can be narrow, and a
+   control that scrolls out of reach is a control the user cannot find. */
+.git-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.git-actions input {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.git-actions p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.git-result {
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.git-result a {
+  color: var(--accent);
+}
+
 .diff-bar select {
   font: inherit;
   color: var(--text);
