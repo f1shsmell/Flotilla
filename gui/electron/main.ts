@@ -138,6 +138,22 @@ function register(): void {
       link(sessionId).call("session.diff", { scope, path }, 30000),
   );
 
+  ipcMain.handle("flotilla:comments", async (_event, sessionId: string) =>
+    link(sessionId).call("session.comment.list", {}),
+  );
+
+  ipcMain.handle(
+    "flotilla:comment:add",
+    async (_event, sessionId: string, comment: unknown) =>
+      link(sessionId).call("session.comment.add", comment),
+  );
+
+  ipcMain.handle(
+    "flotilla:comment:remove",
+    async (_event, sessionId: string, id: string) =>
+      link(sessionId).call("session.comment.remove", { id }),
+  );
+
   ipcMain.handle(
     "flotilla:resize",
     async (_event, sessionId: string, cols: number, rows: number) => {

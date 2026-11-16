@@ -93,6 +93,27 @@ async function finish(
   return true;
 }
 
+// leaveNote comments on the last added line, the way a reviewer would: click the
+// line number, type, submit.
+async function leaveNote(target: BrowserWindow, text: string): Promise<void> {
+  await target.webContents.executeJavaScript(`(() => {
+    const numbers = [...document.querySelectorAll(".patch-line.add .line-no")];
+    const target = numbers[numbers.length - 1];
+    if (!target) { throw new Error("no added line to comment on"); }
+    target.click();
+  })()`);
+
+  await target.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector(".note-compose input");
+    if (!input) { throw new Error("no note composer"); }
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(text)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector(".note-compose").requestSubmit();
+  })()`);
+}
+
 async function waitForAddedLine(
   target: BrowserWindow,
   needle: string,
@@ -140,6 +161,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const form = process.env.FLT_GUI_SMOKE_FORM ?? "";
   const diffFile = process.env.FLT_GUI_SMOKE_DIFF ?? "";
   const diffLine = process.env.FLT_GUI_SMOKE_PATCH ?? "";
+  const note = process.env.FLT_GUI_SMOKE_NOTE ?? "";
   const deadline = Date.now() + 120000;
 
   target.webContents.on("render-process-gone", (_event, details) => {
@@ -212,9 +234,19 @@ export async function run(target: BrowserWindow): Promise<boolean> {
         // The renderer strips git's prefix, so an added line is found by the
         // class that colours it, not by a leading "+".
         const added = diffLine.replace(/^\+/, "");
-        const text = await waitForAddedLine(target, added, deadline);
-        console.log(`smoke: ok (diff: ${diffLine})`);
+        await waitForAddedLine(target, added, deadline);
+      }
+
+      if (note !== "") {
+        await leaveNote(target, note);
+        const text = await waitFor(target, note, deadline);
+        console.log(`smoke: ok (note: ${note})`);
         console.log(text);
+        return true;
+      }
+
+      if (diffLine !== "") {
+        console.log(`smoke: ok (diff: ${diffLine})`);
         return true;
       }
     }

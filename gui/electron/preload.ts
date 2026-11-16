@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld("flotilla", {
     ipcRenderer.invoke("flotilla:resize", sessionId, cols, rows),
   diff: (sessionId: string, scope: string, path?: string) =>
     ipcRenderer.invoke("flotilla:diff", sessionId, scope, path),
+  comments: (sessionId: string) => ipcRenderer.invoke("flotilla:comments", sessionId),
+  addComment: (sessionId: string, comment: unknown) =>
+    ipcRenderer.invoke("flotilla:comment:add", sessionId, comment),
+  removeComment: (sessionId: string, id: string) =>
+    ipcRenderer.invoke("flotilla:comment:remove", sessionId, id),
   onEvent: (handler: (event: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => handler(payload);
     ipcRenderer.on("flotilla:event", listener);

@@ -10,9 +10,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -131,6 +133,10 @@ type Daemon struct {
 	// baselines is the commit each session started at, which is what the turn
 	// scope compares against. It is memory only: a daemon restart forgets it.
 	baselines map[session.ID]string
+	// comments are the reviewer's notes, which outlive the daemon. They sit
+	// beside the session records: both are the daemon's per-session state, and
+	// the registry skips a directory when it scans for records.
+	comments comments.Store
 }
 
 // New builds a daemon. Call Run to serve.
@@ -142,6 +148,7 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		spawn:     spawn,
 		relay:     newRelay(),
 		baselines: make(map[session.ID]string),
+		comments:  comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
 	}
 }
 

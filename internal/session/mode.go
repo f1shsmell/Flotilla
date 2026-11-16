@@ -1,6 +1,9 @@
 package session
 
-import "github.com/f1shsmell/flotilla/internal/diff"
+import (
+	"github.com/f1shsmell/flotilla/internal/comments"
+	"github.com/f1shsmell/flotilla/internal/diff"
+)
 
 // Mode says how a session speaks to its agent.
 type Mode string
@@ -64,6 +67,36 @@ type DiffResponse struct {
 	Files []diff.File `json:"files,omitempty"`
 	// Patch is one file's unified diff, present when the request named a path.
 	Patch string `json:"patch,omitempty"`
+}
+
+// Methods a reviewer uses on a session's diff. The daemon answers them: a
+// comment is an annotation, not a change to the checkout.
+const (
+	// MethodCommentList returns a session's comments.
+	MethodCommentList = "session.comment.list"
+	// MethodCommentAdd stores one comment and returns it.
+	MethodCommentAdd = "session.comment.add"
+	// MethodCommentRemove deletes one comment.
+	MethodCommentRemove = "session.comment.remove"
+)
+
+// CommentAddRequest is one note a reviewer leaves on a diff line.
+type CommentAddRequest struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	// Side is "new" for an added or unchanged line, "old" for a deleted one.
+	Side string `json:"side"`
+	Text string `json:"text"`
+}
+
+// CommentRemoveRequest names the comment to delete.
+type CommentRemoveRequest struct {
+	ID string `json:"id"`
+}
+
+// CommentListResponse carries a session's comments, oldest first.
+type CommentListResponse struct {
+	Comments []comments.Comment `json:"comments"`
 }
 
 // MethodAttach binds one client connection to one session. The daemon serves it,

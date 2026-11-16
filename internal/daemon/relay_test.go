@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
+	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/gittest"
 	"github.com/f1shsmell/flotilla/internal/host"
 	"github.com/f1shsmell/flotilla/internal/ipc"
@@ -569,5 +570,74 @@ func TestDiffCrossesTheDaemon(t *testing.T) {
 	}
 	if len(turn.Files) != 1 || turn.Files[0].Path != "readme.md" {
 		t.Fatalf("turn files = %+v, want the edit since the session started", turn.Files)
+	}
+}
+
+// TestCommentsCrossTheDaemon pins the review loop: a note lands on a diff line,
+// is read back, and is deleted, all through the daemon that owns the checkout.
+func TestCommentsCrossTheDaemon(t *testing.T) {
+	stateDir := t.TempDir()
+	const token = "shared"
+	repo := gittest.Init(t)
+
+	startHostIn(t, stateDir, "sess-notes", token, repo)
+	runDaemon(t, stateDir, token)
+
+	client := dialDaemon(t, stateDir, token, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-notes"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	raw, err := client.Call(ctx, session.MethodCommentAdd, session.CommentAddRequest{
+		Path: "readme.md",
+		Line: 2,
+		Side: "new",
+		Text: "this needs a test",
+	})
+	if err != nil {
+		t.Fatalf("add a comment: %v", err)
+	}
+	var added comments.Comment
+	if err := json.Unmarshal(raw, &added); err != nil {
+		t.Fatalf("decode the comment: %v", err)
+	}
+	if added.ID == "" || added.Author != "user" {
+		t.Fatalf("comment = %+v, want an id and an author", added)
+	}
+
+	raw, err = client.Call(ctx, session.MethodCommentList, struct{}{})
+	if err != nil {
+		t.Fatalf("list comments: %v", err)
+	}
+	var listed session.CommentListResponse
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("decode the list: %v", err)
+	}
+	if len(listed.Comments) != 1 || listed.Comments[0].Text != "this needs a test" {
+		t.Fatalf("comments = %+v, want the one note", listed.Comments)
+	}
+
+	if _, err := client.Call(ctx, session.MethodCommentRemove, session.CommentRemoveRequest{ID: added.ID}); err != nil {
+		t.Fatalf("remove the comment: %v", err)
+	}
+
+	raw, err = client.Call(ctx, session.MethodCommentList, struct{}{})
+	if err != nil {
+		t.Fatalf("list after remove: %v", err)
+	}
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("decode the list: %v", err)
+	}
+	if len(listed.Comments) != 0 {
+		t.Fatalf("comments after remove = %+v, want none", listed.Comments)
+	}
+
+	// A note with no text is refused rather than stored as a blank line.
+	if _, err := client.Call(ctx, session.MethodCommentAdd, session.CommentAddRequest{Path: "readme.md", Line: 1, Side: "new"}); err == nil {
+		t.Fatal("an empty comment was accepted")
 	}
 }
