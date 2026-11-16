@@ -98,3 +98,11 @@ jobs:
         env:
           FLT_DAEMON_BIN: ${{ github.workspace }}/flt-daemon.exe
         run: pnpm test
+
+      # The window cannot keep a child alive: Task Scheduler starts the daemon
+      # outside Electron's job object. This is the only check that the task path
+      # works, and it needs a runner whose policy allows schtasks.
+      - name: the launcher starts the daemon through a task
+        env:
+          FLT_DAEMON_BIN: ${{ github.workspace }}/flt-daemon.exe
+        run: node scripts/check-launcher.mjs

@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { DaemonClient, type ClientHandlers } from "./client";
+import { startDaemon } from "./launcher";
 import { endpoint, resolvePaths } from "./home";
 
 export interface EnsureOptions {
@@ -32,32 +32,6 @@ export async function connect(
   });
 }
 
-// start spawns the daemon detached and resolves once the process exists. A
-// missing binary reports as an error event, not as a throw, so the event is what
-// this waits on: an unhandled one would take the whole main process down.
-async function start(binary: string, channel: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(binary, ["--channel", channel], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-
-    child.once("error", (error: NodeJS.ErrnoException) => {
-      reject(
-        new Error(
-          `${binary} could not start (${error.code ?? error.message}); set FLT_DAEMON_BIN to its path`,
-        ),
-      );
-    });
-
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
-  });
-}
-
 // bundledDaemon is the daemon an installed build ships beside the app, which is
 // what an installed copy must run: PATH belongs to the machine, not to us.
 async function bundledDaemon(): Promise<string | null> {
@@ -83,7 +57,18 @@ export async function ensure(options: EnsureOptions): Promise<DaemonClient> {
   } catch (first) {
     const binary =
       options.binary ?? process.env.FLT_DAEMON_BIN ?? (await bundledDaemon()) ?? "flt-daemon";
-    await start(binary, options.channel);
+
+    // A child of Electron dies with it, so Windows starts the daemon through a
+    // per-user task; the launcher falls back to a spawn when that is refused.
+    try {
+      await startDaemon({ binary, channel: options.channel });
+    } catch (error) {
+      throw new Error(
+        `${binary} could not start: ${
+          error instanceof Error ? error.message : String(error)
+        }; set FLT_DAEMON_BIN to its path`,
+      );
+    }
 
     const deadline = Date.now() + (options.timeoutMs ?? 10000);
     let last: unknown = first;
