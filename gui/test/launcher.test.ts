@@ -7,6 +7,7 @@ import {
   runTaskArgs,
   startDaemon,
   taskName,
+  wrapperScript,
 } from "../electron/launcher";
 
 describe("task names", () => {
@@ -17,18 +18,16 @@ describe("task names", () => {
 });
 
 describe("schtasks arguments", () => {
-  it("quotes the binary, because an install path has spaces", () => {
-    const args = createTaskArgs("C:\\Program Files\\Flotilla\\resources\\bin\\flt-daemon.exe", "stable");
+  it("runs a wrapper, because a task inherits no environment", () => {
+    const args = createTaskArgs("C:\\state\\daemon-stable.cmd", "stable");
 
     expect(args).toContain("/create");
-    expect(args[args.indexOf("/tr") + 1]).toBe(
-      '"C:\\Program Files\\Flotilla\\resources\\bin\\flt-daemon.exe" --channel stable',
-    );
+    expect(args[args.indexOf("/tr") + 1]).toBe('"C:\\state\\daemon-stable.cmd"');
     expect(args).toContain("/f");
   });
 
   it("creates the task for a schedule it is then told to ignore", () => {
-    const args = createTaskArgs("d.exe", "stable");
+    const args = createTaskArgs("d.cmd", "stable");
     expect(args[args.indexOf("/sc") + 1]).toBe("once");
     expect(args[args.indexOf("/st") + 1]).toBe("00:00");
     expect(disableTaskArgs("stable")).toEqual([
@@ -39,6 +38,16 @@ describe("schtasks arguments", () => {
     ]);
     expect(runTaskArgs("stable")).toEqual(["/run", "/tn", "\\Flotilla\\daemon-stable"]);
     expect(deleteTaskArgs("stable")).toEqual(["/delete", "/tn", "\\Flotilla\\daemon-stable", "/f"]);
+  });
+});
+
+describe("the wrapper", () => {
+  it("carries the state root and quotes both paths", () => {
+    const script = wrapperScript("C:////state", "C:////Program Files////Flotilla////flt-daemon.exe", "stable");
+
+    expect(script).toContain('set "FLT_HOME=C:////state"');
+    expect(script).toContain('"C:////Program Files////Flotilla////flt-daemon.exe" --channel stable');
+    expect(script.startsWith("@echo off")).toBe(true);
   });
 });
 

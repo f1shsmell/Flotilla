@@ -31,8 +31,10 @@ pnpm start    # electron ., which loads dist/, so build first
 A child of Electron does not: the browser process puts its whole process tree in
 a job object that is killed when it closes, so `detached: true` and `unref()`
 change nothing. On Windows the main process therefore creates a per-user
-scheduled task (`\Flotilla\daemon-<channel>`, created disabled) and runs it,
-which starts the daemon from Task Scheduler — outside the job. Elsewhere, and on
+scheduled task (`\Flotilla\daemon-<channel>`) and runs it, which starts the
+daemon from Task Scheduler — outside the job. A task inherits no environment, so
+the task runs a small wrapper script in the state root that sets `FLT_HOME`
+first; that is what keeps `FLT_HOME` isolation working for a launched daemon. Elsewhere, and on
 a machine that refuses a task, it falls back to a detached spawn; in that case
 closing the window does stop the daemon.
 

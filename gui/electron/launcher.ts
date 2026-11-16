@@ -5,7 +5,11 @@
 // through a per-user task.
 
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
+
+import { resolvePaths } from "./home";
 
 const run = promisify(execFile);
 
@@ -18,22 +22,27 @@ export function taskName(channel: string): string {
   return `${taskFolder}\\daemon-${channel}`;
 }
 
-// createTaskArgs builds the task that runs the daemon. It is created enabled
+// wrapperPath is the script a task runs. A task does not inherit the caller's
+// environment, so the state root has to be written into the command itself.
+export function wrapperPath(home: string, channel: string): string {
+  return path.join(home, `daemon-${channel}.cmd`);
+}
+
+// wrapperScript is that script: the state root, then the daemon.
+export function wrapperScript(home: string, binary: string, channel: string): string {
+  return [
+    "@echo off",
+    `set "FLT_HOME=${home}"`,
+    `"${binary}" --channel ${channel}`,
+    "",
+  ].join("\r\n");
+}
+
+// createTaskArgs builds the task that runs the wrapper. It is created enabled
 // because `/run` refuses a disabled task, and disabled again once it has run, so
 // its own schedule never starts a second daemon.
-export function createTaskArgs(binary: string, channel: string): string[] {
-  return [
-    "/create",
-    "/tn",
-    taskName(channel),
-    "/tr",
-    `"${binary}" --channel ${channel}`,
-    "/sc",
-    "once",
-    "/st",
-    "00:00",
-    "/f",
-  ];
+export function createTaskArgs(script: string, channel: string): string[] {
+  return ["/create", "/tn", taskName(channel), "/tr", `"${script}"`, "/sc", "once", "/st", "00:00", "/f"];
 }
 
 // disableTaskArgs keeps the task from firing on its own schedule after the run.
@@ -79,9 +88,13 @@ export async function startDaemon(options: StartOptions): Promise<StartResult> {
 
   if (platform === "win32") {
     try {
+      const home = resolvePaths(options.channel).root;
+      const script = wrapperPath(home, options.channel);
+      await writeFile(script, wrapperScript(home, options.binary, options.channel), "utf8");
+
       // Enabled to be run, then disabled: `/run` refuses a disabled task, and a
       // schedule nobody wants must not start a second daemon later.
-      await scheduler(createTaskArgs(options.binary, options.channel));
+      await scheduler(createTaskArgs(script, options.channel));
       await scheduler(runTaskArgs(options.channel));
       await scheduler(disableTaskArgs(options.channel));
       return { how: "task" };
