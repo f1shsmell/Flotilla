@@ -89,9 +89,14 @@ func Decode(payload []byte) (Scenario, error) {
 	return s, nil
 }
 
-// validate refuses an update the replay cannot express. An unknown kind would
-// reach the renderer as a blank line, which is a lie about what the agent did.
+// validate refuses a turn the replay cannot express. An empty turn would answer
+// a prompt with nothing, which is the session that looks hung; an unknown kind
+// would reach the renderer as a blank line, which is a lie about what the agent
+// did.
 func (t Turn) validate() error {
+	if len(t.Updates) == 0 {
+		return fmt.Errorf("the turn carries no update: %w", ErrInvalidScenario)
+	}
 	for i, u := range t.Updates {
 		switch u.Kind {
 		case "message", "thought", "plan":

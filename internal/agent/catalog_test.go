@@ -221,6 +221,31 @@ func TestResolvePrefersTheBundledBinaryOverPath(t *testing.T) {
 	}
 }
 
+// TestABundledLookupTakesOnlyABareName pins the guard: a command that names a
+// directory is the caller's to run, and joining it under the binary directory
+// would quietly rewrite a path the user typed.
+func TestABundledLookupTakesOnlyABareName(t *testing.T) {
+	c := newCatalog(t)
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	// A file that exists, reached through a relative path, must not be found.
+	if err := os.WriteFile(filepath.Join(dir, "agent"+exeSuffix()), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write the file: %v", err)
+	}
+
+	for _, command := range []string{
+		"../agent",
+		"./agent",
+		filepath.Join(dir, "agent"),
+		"sub/agent",
+	} {
+		if got := c.Resolve(command); got != command {
+			t.Errorf("Resolve(%q) = %q, want the path left alone", command, got)
+		}
+	}
+}
+
 func TestListReportsWhatIsInstalled(t *testing.T) {
 	c := newCatalog(t, "reasonix")
 

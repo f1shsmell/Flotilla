@@ -126,6 +126,33 @@ func TestExportDropsATurnThatAnsweredNothing(t *testing.T) {
 	}
 }
 
+// TestExportDropsTheTurnsASplitPromptLeaves keeps the boundary honest: a prompt
+// too long for one frame arrives as several user updates, and the turns the
+// extra ones open hold no work. They are dropped, so what a replay answers is
+// the questions that were actually answered.
+func TestExportDropsTheTurnsASplitPromptLeaves(t *testing.T) {
+	scenario, err := Export(log(
+		user("first part of the question"),
+		session.UpdateMessage{Kind: session.KindUser, Text: " second part", Continued: true},
+		message("one answer"),
+		user("a later question"),
+		message("a later answer"),
+	))
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	if len(scenario.Turns) != 2 {
+		t.Fatalf("exported %d turns, want the two questions", len(scenario.Turns))
+	}
+	if got := scenario.Turns[0].Updates[0].Text; got != "one answer" {
+		t.Fatalf("the first turn starts with %q, want the split question's answer", got)
+	}
+	if got := scenario.Turns[1].Updates[0].Text; got != "a later answer" {
+		t.Fatalf("the second turn starts with %q, want the later question's answer", got)
+	}
+}
+
 // TestExportMarksEveryTurnAsFinished pins the only honest stop reason: the log
 // does not record why a turn stopped, so "end_turn" is the value that does not
 // claim a cancellation nobody made.
@@ -149,6 +176,27 @@ func TestExportHandlesALogWithNoBoundary(t *testing.T) {
 	}
 	if len(scenario.Turns) != 1 || len(scenario.Turns[0].Updates) != 1 {
 		t.Fatalf("exported %+v, want one turn with the one update", scenario.Turns)
+	}
+}
+
+// TestExportJSONReportsAnUnreadableRecord pins the difference between a log
+// that holds records and one that holds none: a version mismatch must not read
+// as "this session did nothing".
+func TestExportJSONReportsAnUnreadableRecord(t *testing.T) {
+	raw := []json.RawMessage{
+		json.RawMessage(`{"kind":"user","text":"go"}`),
+		json.RawMessage(`{"kind":42}`),
+	}
+
+	_, err := ExportJSON(raw)
+	if err == nil {
+		t.Fatal("ExportJSON accepted a record it cannot decode")
+	}
+	if !errors.Is(err, ErrUnreadableRecord) {
+		t.Fatalf("error = %v, want ErrUnreadableRecord", err)
+	}
+	if errors.Is(err, ErrNothingToExport) {
+		t.Fatalf("an unreadable record was reported as an empty log: %v", err)
 	}
 }
 

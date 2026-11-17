@@ -103,8 +103,16 @@ func Lookup(name string) (Agent, error) {
 	return Agent{}, fmt.Errorf("unknown agent %q: known names are %s", name, strings.Join(Names(), ", "))
 }
 
-// Available reports whether the agent's command is on PATH.
+// Available reports whether the agent's command can be run: beside this build
+// when the binary ships with it, otherwise on PATH.
+//
+// The bundled lookup is not optional. The catalogue offers an agent that ships
+// beside the daemon, and a probe that only asked PATH would accept the name and
+// then fail on every install — the one case the name was added for.
 func (a Agent) Available() error {
+	if _, ok := agent.Bundled(a.Command); ok {
+		return nil
+	}
 	if _, err := exec.LookPath(a.Command); err != nil {
 		if a.NeedsCredential == "" {
 			return fmt.Errorf("%s is not on PATH: %w", a.Command, err)

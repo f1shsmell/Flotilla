@@ -180,16 +180,31 @@ func TestReplayReachesTheClient(t *testing.T) {
 	}
 }
 
-// TestReplaySendsEachKindThroughItsOwnUpdate keeps the client's timeline honest:
-// a thought, a tool call and a message are three different updates, and a tool
-// call is announced once rather than created twice.
-func TestReplaySendsEachKindThroughItsOwnUpdate(t *testing.T) {
+// TestReplaySendsTheToolCallTwice pins the ordering the client's timeline
+// depends on: ACP reports one call twice — started, then updated — and a replay
+// that announced it twice would create two lines, or one that updated it first
+// would update a call the client never saw.
+func TestReplaySendsTheToolCallTwice(t *testing.T) {
 	s := scenario()
-	// A second update for the same call is what ACP sends when the tool finishes.
-	s.Turns[0].Updates = append(s.Turns[0].Updates,
-		Update{Kind: "tool", ToolCallID: "call-1", ToolStatus: "completed"})
+	s.Turns[0].Updates = []Update{
+		{Kind: "tool", ToolCallID: "call-1", ToolTitle: "read a.txt"},
+		{Kind: "tool", ToolCallID: "call-1", ToolStatus: "completed"},
+	}
 
-	conn := dial(t, s)
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+
+	agent := NewAgent(s)
+	agentConn := sdk.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
+	agent.SetAgentConnection(agentConn)
+
+	client := &collector{updates: make(chan sdk.SessionNotification, 64)}
+	conn := sdk.NewClientSideConnection(client, clientToAgentW, agentToClientR)
+	t.Cleanup(func() {
+		_ = clientToAgentW.Close()
+		_ = agentToClientW.Close()
+	})
+
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
@@ -199,6 +214,43 @@ func TestReplaySendsEachKindThroughItsOwnUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
+
+	// The first is a tool_call (the announcement), the second a
+	// tool_call_update (the completion). Both belong to the same id.
+	var kinds []string
+	for len(kinds) < 2 {
+		select {
+		case n := <-client.updates:
+			switch {
+			case n.Update.ToolCall != nil:
+				if string(n.Update.ToolCall.ToolCallId) != "call-1" {
+					t.Fatalf("the announcement names %q, want call-1", n.Update.ToolCall.ToolCallId)
+				}
+				kinds = append(kinds, "start:"+n.Update.ToolCall.Title)
+			case n.Update.ToolCallUpdate != nil:
+				kinds = append(kinds, "update:"+string(derefStatus(n.Update.ToolCallUpdate.Status)))
+			default:
+				kinds = append(kinds, "other")
+			}
+		case <-time.After(waitFor):
+			t.Fatalf("the client received %v, want a start and an update", kinds)
+		}
+	}
+
+	want := []string{"start:read a.txt", "update:completed"}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("update %d is %q, want %q (stream: %v)", i, kinds[i], want[i], kinds)
+		}
+	}
+}
+
+// derefStatus reads a tool status the SDK may leave unset.
+func derefStatus(s *sdk.ToolCallStatus) string {
+	if s == nil {
+		return ""
+	}
+	return string(*s)
 }
 
 // TestReplayRepeatsTheLastTurn pins the demo rule: somebody typing a third time
@@ -286,6 +338,24 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if got := loaded.Turns[0].Updates[2].Text; got != "it says hello" {
 		t.Fatalf("the third update reads %q", got)
+	}
+}
+
+// TestLoadRefusesATurnWithNoUpdate pins the refusal that Export already makes:
+// an empty turn answers a prompt with nothing, which is the session that looks
+// hung rather than one that finished.
+func TestLoadRefusesATurnWithNoUpdate(t *testing.T) {
+	if _, err := Decode([]byte(`{"turns":[{"updates":[]}]}`)); err == nil {
+		t.Fatal("Decode accepted a turn with no update")
+	}
+
+	// The builtin and an export both have to pass the same gate.
+	payload, err := json.Marshal(Builtin())
+	if err != nil {
+		t.Fatalf("marshal the builtin: %v", err)
+	}
+	if _, err := Decode(payload); err != nil {
+		t.Fatalf("the builtin is not replayable: %v", err)
 	}
 }
 

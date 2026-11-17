@@ -12,6 +12,12 @@ import (
 // already refuses.
 var ErrNothingToExport = fmt.Errorf("replay: the log holds no agent update: %w", ErrInvalidScenario)
 
+// ErrUnreadableRecord reports a stored record this build cannot decode. It is
+// separate from ErrNothingToExport: a log that holds records but none this build
+// can read is a version problem, and saying "no update" would send the reader
+// looking for a turn that is not missing.
+var ErrUnreadableRecord = fmt.Errorf("replay: a stored record cannot be decoded: %w", ErrInvalidScenario)
+
 // Export turns a session's stored log into a scenario a replay can answer from.
 //
 // The person's own messages are the turn boundaries and are not kept: the host
@@ -28,6 +34,9 @@ func Export(updates []session.UpdateMessage) (Scenario, error) {
 
 	for _, msg := range updates {
 		if msg.Kind == session.KindUser {
+			// The person's message opens a turn; a prompt too long for one frame
+			// arrives as several of them, and the empty turns they leave behind
+			// are dropped below.
 			turns = append(turns, Turn{})
 			current = &turns[len(turns)-1]
 			continue
@@ -94,12 +103,17 @@ func exportUpdate(msg session.UpdateMessage) (Update, bool) {
 }
 
 // ExportJSON is Export for a caller holding the log as stored records.
+//
+// A record this build cannot decode is reported rather than skipped: the
+// transcript already dropped lines that would not parse, so one that arrives
+// here and fails means the update's shape changed. Skipping it would turn a
+// version mismatch into "this session did nothing".
 func ExportJSON(raw []json.RawMessage) (Scenario, error) {
 	updates := make([]session.UpdateMessage, 0, len(raw))
-	for _, payload := range raw {
+	for i, payload := range raw {
 		var msg session.UpdateMessage
 		if err := json.Unmarshal(payload, &msg); err != nil {
-			continue
+			return Scenario{}, fmt.Errorf("record %d: %w", i, ErrUnreadableRecord)
 		}
 		updates = append(updates, msg)
 	}

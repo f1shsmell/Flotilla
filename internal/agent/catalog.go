@@ -128,11 +128,35 @@ func executableDir() string {
 	return filepath.Dir(exe)
 }
 
-// bundled finds one of this build's own agents next to the executable. It tries
-// the Windows extension as well, so a release is not missing its agents only
-// because Go appended .exe to them.
+// Bundled resolves one of this build's own agents as it ships: a bare command
+// name is looked for beside the executable, with the platform's extension
+// appended as well. It is exported because `flt probe` offers the same names and
+// has to find them the same way — a probe that only asked PATH would offer an
+// agent and then fail on every install.
+//
+// Only a bare name is looked up: a command that names a directory, absolute or
+// relative, is the caller's to run, and joining it under the binary directory
+// would quietly rewrite a path the user typed.
+func Bundled(command string) (string, bool) {
+	dir := executableDir()
+	if dir == "" || command == "" || command != filepath.Base(command) {
+		return "", false
+	}
+	candidate := filepath.Join(dir, command)
+	for _, path := range []string{candidate + ".exe", candidate} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// bundled finds one of this build's own agents next to the executable, using the
+// directory this catalog was built with. The rule lives in Bundled so `flt
+// probe` resolves the same names the same way; this method only supplies the
+// directory, which tests replace.
 func (c *Catalog) bundled(command string) (string, bool) {
-	if c.selfDir == "" || command == "" {
+	if c.selfDir == "" || command == "" || command != filepath.Base(command) {
 		return "", false
 	}
 	candidate := filepath.Join(c.selfDir, command)

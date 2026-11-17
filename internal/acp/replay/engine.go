@@ -130,10 +130,16 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	return sdk.PromptResponse{StopReason: sdk.StopReason(reason)}, nil
 }
 
-// nextTurn hands out the turn this prompt answers.
+// nextTurn hands out the turn this prompt answers. A scenario with no turn is
+// refused at load time; a caller that builds one directly gets nothing rather
+// than an index panic.
 func (a *Agent) nextTurn() Turn {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if len(a.scenario.Turns) == 0 {
+		return Turn{StopReason: StopEndTurn}
+	}
 
 	index := a.turns
 	if index >= len(a.scenario.Turns) {
