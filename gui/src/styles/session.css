@@ -1,0 +1,130 @@
+/* The session view: the header, the agent's log, the permission card and the
+   composer. The terminal lives in its own file because it is the one element
+   the browser does not lay out. */
+
+.session {
+  padding: var(--sp-6) var(--sp-7);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Anchors .agent-settings-overlay. */
+  position: relative;
+}
+
+/* The settings panel sits over the session rather than beside it: the terminal
+   stays mounted underneath, so closing the panel returns to its scrollback. */
+.agent-settings-overlay {
+  position: absolute;
+  inset: 0;
+  /* Painting must not depend on DOM order: the overlay is a sibling of the
+     session view, and one reorder would otherwise bury it. */
+  z-index: 1;
+  background: var(--bg);
+  padding: var(--sp-6) var(--sp-7);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.session-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-height: 0;
+  height: 100%;
+  /* Anchors .terminal-pane-behind, which stays laid out while the diff shows. */
+  position: relative;
+}
+
+.session-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--sp-4);
+}
+
+.session-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-family: var(--mono);
+}
+
+.session-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.log {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--sunken);
+  min-height: 0;
+}
+
+/* The note that the log starts after the session did. It sits above the first
+   entry and is deliberately quiet: it is a correction, not an error. */
+.log-more {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-tiny);
+}
+
+.entry {
+  margin: 0 0 var(--sp-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.entry.thought {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.entry.tool {
+  font-size: var(--fs-small);
+  color: var(--dim);
+}
+
+.entry.other {
+  font-size: var(--fs-small);
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-3);
+  align-items: end;
+}
+
+.composer textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  resize: vertical;
+  min-height: 56px;
+}
+
+.permission {
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--note-bg);
+}
+
+.permission p {
+  margin: 0 0 var(--sp-3);
+}
+
+.permission-options {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}

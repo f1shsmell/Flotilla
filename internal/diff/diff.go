@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/f1shsmell/flotilla/internal/ipc"
 )
 
 // Scope names what a review compares.
@@ -33,13 +35,13 @@ const (
 )
 
 // ErrNotARepository reports a path that is not the root of a git repository.
-var ErrNotARepository = errors.New("diff: not a git repository")
+var ErrNotARepository = ipc.Class(errors.New("diff: not a git repository"), ipc.CodeNotARepository)
 
 // ErrOutsideRepo reports a path that leaves the repository.
-var ErrOutsideRepo = errors.New("diff: path escapes the repository")
+var ErrOutsideRepo = ipc.Class(errors.New("diff: path escapes the repository"), ipc.CodeOutsideRepo)
 
 // ErrUnknownScope reports a scope this build does not read.
-var ErrUnknownScope = errors.New("diff: unknown scope")
+var ErrUnknownScope = ipc.Class(errors.New("diff: unknown scope"), ipc.CodeUnknownScope)
 
 // File is one changed path, with the counts a list needs.
 type File struct {

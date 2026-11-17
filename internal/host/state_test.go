@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -184,9 +185,12 @@ func TestAPermissionQuestionBlocksTheSession(t *testing.T) {
 	}
 }
 
-// TestSeenMovesDoneToIdle pins the seen semantics: the host reports done, and
-// a client that has looked says so, which is the only thing that makes it idle.
-func TestSeenMovesDoneToIdle(t *testing.T) {
+// TestSeenIsNotTheHostsToAnswer pins the layer boundary: `done` says a turn
+// ended and nobody has looked, and a host has exactly one client so it cannot
+// tell one window from another. A host that answered `session.seen` itself
+// would clear every window's badge at once, and it would turn a PTY session it
+// never classified into idle. The daemon owns that call.
+func TestSeenIsNotTheHostsToAnswer(t *testing.T) {
 	_, dir := startACPHost(t, acp.Auto)
 
 	states := make(chan session.State, 16)
@@ -200,50 +204,21 @@ func TestSeenMovesDoneToIdle(t *testing.T) {
 	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "say hello"}); err != nil {
 		t.Fatalf("session.prompt: %v", err)
 	}
-
 	var seen []session.State
 	waitState(t, states, session.StateDone, &seen)
 
-	if _, err := conn.Call(ctx, session.MethodSeen, struct{}{}); err != nil {
-		t.Fatalf("session.seen: %v", err)
+	// The refusal is the assertion: a host that served this would have had to
+	// decide on behalf of clients it cannot see.
+	_, err := conn.Call(ctx, session.MethodSeen, struct{}{})
+	if !errors.Is(err, ipc.ErrNoHandler) {
+		t.Fatalf("session.seen on a host = %v, want ErrNoHandler", err)
 	}
 
-	waitState(t, states, session.StateIdle, &seen)
-}
-
-// TestAnUnchangedStateIsNotAnnounced pins the quiet path: the UI must not
-// repaint for a state that did not change, and a duplicate would read as new
-// activity in a log.
-func TestAnUnchangedStateIsNotAnnounced(t *testing.T) {
-	_, dir := startACPHost(t, acp.Auto)
-
-	states := make(chan session.State, 16)
-	conn := dialStates(t, dir, states, nil)
-
-	waitState(t, states, session.StateUnknown, new([]session.State))
-
-	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
-	defer cancel()
-
-	// A turn ends as done; marking it seen twice must produce one idle.
-	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "say hello"}); err != nil {
-		t.Fatalf("session.prompt: %v", err)
-	}
-	var seen []session.State
-	waitState(t, states, session.StateDone, &seen)
-
-	for i := 0; i < 3; i++ {
-		if _, err := conn.Call(ctx, session.MethodSeen, struct{}{}); err != nil {
-			t.Fatalf("session.seen: %v", err)
-		}
-	}
-
-	waitState(t, states, session.StateIdle, &seen)
-
+	// The turn stays done: nobody could have looked, because the call that
+	// says so was refused.
 	select {
 	case extra := <-states:
-		t.Fatalf("an unchanged state was announced again as %q", extra)
+		t.Fatalf("the host changed state to %q after a seen it did not serve", extra)
 	case <-time.After(300 * time.Millisecond):
-		// Three seen calls, one idle: the rest were duplicates.
 	}
 }

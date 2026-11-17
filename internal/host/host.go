@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/x/xpty"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
+	"github.com/f1shsmell/flotilla/internal/adapters"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -46,6 +48,11 @@ type Config struct {
 	Rows int
 	// Policy decides what an ACP agent may do without asking.
 	Policy acp.Policy
+	// Adapter is the operational knowledge this agent declared: the patterns
+	// that mean it is waiting for the user, how it reads a paste, and how it is
+	// resumed. Zero value means the agent declared none, which is the cautious
+	// path rather than a guess.
+	Adapter adapters.Adapter
 	// SeqBase is the host number the first update continues from; zero starts at 1.
 	SeqBase uint64
 	// Ctx is the parent context for the agent process. It is detached from the
@@ -80,6 +87,15 @@ type Host struct {
 	donec  chan struct{}
 	exitc  chan error
 	stopOn sync.Once
+	// closing is set as Close begins, before anything is torn down. It is what
+	// lets a watcher tell "the user stopped this" from "the agent died": both
+	// end with the same process gone, and only one of them is worth a warning.
+	closing atomic.Bool
+	// detector recognises the agent's own "waiting for you" screens. It is nil
+	// for an agent that declared no patterns, which keeps the whole check off
+	// the read path for every ACP session and for a terminal agent nobody
+	// described.
+	detector *adapters.Detector
 
 	mu   sync.Mutex
 	conn *ipc.Conn
@@ -150,6 +166,14 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 		addr:  ipc.Address{Channel: string(cfg.ID), Name: "host"},
 		donec: make(chan struct{}),
 		exitc: make(chan error, 1),
+	}
+	// Only a terminal session with declared patterns gets a detector: an ACP
+	// session reports blocked itself, and an agent nobody described is not
+	// guessed at.
+	if cfg.Mode == session.ModePTY {
+		if detector := adapters.NewDetector(cfg.Adapter.Blocked); detector.Armed() {
+			h.detector = detector
+		}
 	}
 
 	if cfg.Mode == session.ModeACP {
@@ -268,10 +292,16 @@ func (h *Host) Serve(ctx context.Context) error {
 		}
 	}()
 
-	// A PTY session has a child process to reap; an ACP session's agent is
-	// waited on by the ACP layer, so there is nothing to watch here.
+	// Both modes get a watcher. A PTY agent is reaped here because xpty owns
+	// the wait; an ACP agent is waited on by the ACP layer, and this watches the
+	// event that layer publishes. Without it, an agent that died would leave the
+	// host serving a session that fails every prompt while its lifecycle stayed
+	// at whatever it last said.
 	if h.cmd != nil {
 		go h.watchAgent(ctx)
+	}
+	if h.acp != nil {
+		go h.watchACP(ctx)
 	}
 
 	for {
@@ -393,11 +423,13 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		h.sendScrollback()
 		return struct{}{}, nil
 	case session.MethodSeen:
-		// The client has looked at the finished work, which is what separates
-		// done from idle. Seen is per client: one window looking must not
-		// clear another window's badge.
-		h.setState(session.StateIdle)
-		return struct{}{}, nil
+		// Looking at finished work is the client's own business: `done` says a
+		// turn ended and nobody has looked, and only the window that looked can
+		// answer for itself. A host has one client and cannot tell one window
+		// from another, so the daemon owns this call; a host that cleared its
+		// own state would clear every other window's badge. A PTY session has
+		// no lifecycle to clear at all.
+		return nil, ipc.ErrNoHandler
 	case session.MethodStop:
 		// Stopping closes this connection too, so it runs off the handler: a
 		// Close inside the call would pull the pipe out from under its own
@@ -449,9 +481,50 @@ func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {
 	if stream != session.StreamInput || h.pty == nil {
 		return
 	}
+
+	// The state is read before the write. A prompt the agent prints in answer to
+	// this input arrives on the read pump, which may turn the session blocked
+	// again before this returns; clearing after the write would then overwrite a
+	// fresh, correct classification with a stale "unknown".
+	answered := h.detector != nil && h.CurrentState() == session.StateBlocked
+
 	if _, err := h.pty.Write(payload); err != nil {
 		h.log.Debug("write to the agent failed", "session", h.cfg.ID, "err", err.Error())
+		return
 	}
+
+	// The user just answered something. A blocked session that has stopped
+	// printing is not proof that the agent resumed — this build cannot observe
+	// that in a terminal — so it goes back to unknown rather than claiming work
+	// it cannot see. Unknown is never read as complete. A prompt that arrives in
+	// response re-classifies the session on the next read.
+	if answered {
+		h.setState(session.StateUnknown)
+	}
+}
+
+// observe classifies one chunk of terminal output. A pattern the adapter
+// declared as "waiting for the user" turns the session blocked: that is the
+// state a fleet view needs, and the only judgement this build makes from
+// wording. Nothing is inferred from the absence of a match — a terminal session
+// that is quiet is unknown, not idle.
+func (h *Host) observe(chunk []byte) {
+	if h.detector == nil {
+		return
+	}
+	if h.CurrentState() == session.StateBlocked {
+		// Already blocked: keep the carried line bounded rather than matching
+		// the same prompt on every read of the same screen.
+		h.detector.Reset()
+		return
+	}
+
+	pattern, matched := h.detector.Push(chunk)
+	if !matched {
+		return
+	}
+	h.log.Info("session looks blocked", "session", h.cfg.ID, "pattern", pattern)
+	h.setState(session.StateBlocked)
 }
 
 // Close stops the agent, removes the host record and releases its handles.
@@ -459,7 +532,18 @@ func (h *Host) Close() error {
 	var errs []error
 
 	h.stopOn.Do(func() {
+		// Set before the teardown: a watcher that sees the process go has to be
+		// able to tell that this host is the one that stopped it.
+		h.closing.Store(true)
 		close(h.donec)
+
+		// The record goes first. It is the promise that dialling this endpoint
+		// reaches a live agent, and a host on its way out keeps that promise
+		// only until this moment: leaving the file behind would let a daemon
+		// reattach to a session whose handles are already being released.
+		if err := h.reg.Unpublish(h.cfg.ID); err != nil {
+			errs = append(errs, err)
+		}
 
 		h.mu.Lock()
 		conn := h.conn
@@ -480,10 +564,6 @@ func (h *Host) Close() error {
 			}
 		}
 		errs = append(errs, h.closeACP()...)
-
-		if err := h.reg.Unpublish(h.cfg.ID); err != nil {
-			errs = append(errs, err)
-		}
 	})
 
 	return errors.Join(errs...)
@@ -497,7 +577,9 @@ func (h *Host) pumpOutput() {
 	for {
 		n, err := h.pty.Read(buf)
 		if n > 0 {
-			h.send(session.StreamOutput, buf[:n])
+			chunk := buf[:n]
+			h.observe(chunk)
+			h.send(session.StreamOutput, chunk)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -641,6 +723,39 @@ func (h *Host) watchAgent(ctx context.Context) {
 	err := xpty.WaitProcess(ctx, h.cmd)
 	h.exitc <- err
 	h.log.Info("agent exited", "session", h.cfg.ID, "err", errText(err))
+	_ = h.Close()
+}
+
+// watchACP closes the host when the ACP agent process ends without being asked
+// to. A prompt that arrives after that would fail at the transport, and the
+// session would look alive for as long as nobody tried: the fourth shape — host
+// up, agent gone — which the keep-alive boundary does not allow.
+//
+// The exit is reported as unknown before the host goes, because this build did
+// not see the agent decide to stop; a "done" would claim a turn finished.
+func (h *Host) watchACP(ctx context.Context) {
+	select {
+	case <-h.acp.sess.Exited():
+	case <-h.donec:
+		return
+	case <-ctx.Done():
+		return
+	}
+
+	// The agent is gone either way; only the reason differs. A host that was
+	// already asked to stop must not report its own kill as an agent that died
+	// on its own, so the closing state is what decides the wording.
+	if h.closing.Load() {
+		h.log.Debug("the acp agent stopped with its host", "session", h.cfg.ID)
+		_ = h.Close()
+		return
+	}
+
+	if h.acp.sess.ExitErr() != nil {
+		h.log.Warn("the acp agent exited on its own", "session", h.cfg.ID,
+			"err", errText(h.acp.sess.ExitErr()))
+		h.setState(session.StateUnknown)
+	}
 	_ = h.Close()
 }
 

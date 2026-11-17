@@ -18,18 +18,20 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/f1shsmell/flotilla/internal/ipc"
 )
 
 // ErrNotARepository reports a path that is not inside a git working tree.
-var ErrNotARepository = errors.New("gitops: not a git repository")
+var ErrNotARepository = ipc.Class(errors.New("gitops: not a git repository"), ipc.CodeNotARepository)
 
 // ErrNothingToCommit reports a clean working tree. It is not a failure of the
 // operation; it means there is no commit to make.
-var ErrNothingToCommit = errors.New("gitops: nothing to commit")
+var ErrNothingToCommit = ipc.Class(errors.New("gitops: nothing to commit"), ipc.CodeNothingToCommit)
 
 // ErrGhMissing reports that the GitHub CLI is not installed, which is what a
 // pull request needs and a commit does not.
-var ErrGhMissing = errors.New("gitops: gh is not installed")
+var ErrGhMissing = ipc.Class(errors.New("gitops: gh is not installed"), ipc.CodeGhMissing)
 
 // Result is what one write produced.
 type Result struct {

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/f1shsmell/flotilla/internal/adapters"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -38,6 +40,10 @@ type SpawnRequest struct {
 	// Cols and Rows size the initial PTY.
 	Cols int
 	Rows int
+	// Adapter is the operational knowledge the agent declared: what a blocked
+	// screen looks like, how it reads a paste, and how it is resumed. It is
+	// filled from the catalogue by agent id, never by the caller.
+	Adapter adapters.Adapter
 	// Channel selects the endpoint namespace and the token file.
 	Channel string
 	// StateDir holds the host records and the Unix sockets.
@@ -77,6 +83,17 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		}
 		if req.SeqBase > 0 {
 			args = append(args, "--seq-base", fmt.Sprint(req.SeqBase))
+		}
+		if !req.Adapter.Empty() {
+			// The definition travels as JSON on the command line rather than in a
+			// file: the host is one process for one session, and a file would
+			// outlive the session it describes. Empty means the agent declared
+			// nothing, and the flag is left out entirely.
+			encoded, err := json.Marshal(req.Adapter)
+			if err != nil {
+				return ipc.Address{}, fmt.Errorf("encode the adapter for session %q: %w", req.Session, err)
+			}
+			args = append(args, "--adapter", string(encoded))
 		}
 		if len(req.Args) > 0 {
 			args = append(args, "--")

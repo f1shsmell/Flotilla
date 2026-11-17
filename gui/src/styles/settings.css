@@ -1,0 +1,89 @@
+/* The agent settings page: a catalogue with three switches per row. */
+
+.agent-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-settings header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--sp-4);
+}
+
+.agent-settings header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.agent-settings header p {
+  margin: 2px 0 0;
+}
+
+.agent-settings header .row {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.agent-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+
+.agent-table th,
+.agent-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-table th {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+/* The three switch columns are narrow and centred; the name column carries the
+   text that matters. */
+.agent-table th:nth-child(n + 3),
+.agent-table td:nth-child(n + 3) {
+  width: 1%;
+  text-align: center;
+}
+
+.agent-table tr.off td {
+  color: var(--muted);
+}
+
+.agent-table input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.agent-name {
+  display: block;
+}
+
+.agent-source,
+.agent-description,
+.agent-needs {
+  display: block;
+  font-size: var(--fs-tiny);
+}
+
+.agent-needs {
+  color: var(--warn);
+}
+
+/* A purpose a preset's protocol cannot serve: no switch, just the reason. */
+.agent-unsupported {
+  cursor: help;
+}

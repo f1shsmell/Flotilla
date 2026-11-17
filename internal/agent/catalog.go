@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,14 +15,16 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/f1shsmell/flotilla/internal/adapters"
+	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
 
 // ErrNoAgent reports an agent id the catalog does not hold.
-var ErrNoAgent = errors.New("agent: no such agent")
+var ErrNoAgent = ipc.Class(errors.New("agent: no such agent"), ipc.CodeNoAgent)
 
 // ErrBadPreset reports an adapter file that cannot define an agent.
-var ErrBadPreset = errors.New("agent: invalid preset")
+var ErrBadPreset = ipc.Class(errors.New("agent: invalid preset"), ipc.CodeBadRequest)
 
 // ErrBadSwitches reports a switch file that cannot be decoded. It is exported
 // because it is recoverable: a write replaces the file rather than failing on
@@ -47,6 +50,15 @@ type Preset struct {
 	Needs string `json:"needs,omitempty"`
 	// Description is one line the picker can show.
 	Description string `json:"description,omitempty"`
+	// Adapter is the operational knowledge a terminal session needs: how the
+	// agent looks when it is waiting, how it reads a paste, and what it takes to
+	// start or resume without a dialog. It is data because a new agent should be
+	// a new file, not a new branch in the host.
+	//
+	// It never crosses the wire. Approval-UI recognition is heuristic by nature,
+	// and FLOTILLA.md keeps it at the PTY adapter boundary: a renderer that
+	// received the patterns could start classifying lines itself.
+	Adapter adapters.Adapter `json:"-"`
 
 	// source is where the preset came from: a builtin, or an adapter file name.
 	source string
@@ -233,6 +245,61 @@ func (c *Catalog) find(id string) (Preset, bool) {
 	return Preset{}, false
 }
 
+// AdapterForCommand reports the knowledge declared for the agent behind a
+// command. A start request names a command, not a catalogue id — the form lets
+// the user type one — so this is how the daemon finds the definition that
+// belongs to it. The first preset whose command matches wins, which is stable
+// because the catalogue order is.
+//
+// A caller may name the command by an absolute path, or with a Windows
+// extension: the form accepts a free-text command, and a definition that stops
+// matching because the user pasted `C:\tools\claude.cmd` would silently lose its
+// blocked detection. The program name is therefore compared too, case-insensitively
+// because a Windows user may type the capitalisation the catalogue does not.
+//
+// An exact command match wins over a program-name match: two presets can share a
+// binary name (a wrapper and the tool it wraps), and the one the caller named
+// outright is the one they meant.
+func (c *Catalog) AdapterForCommand(command string) (adapters.Adapter, bool) {
+	want := strings.TrimSpace(command)
+	if want == "" {
+		return adapters.Adapter{}, false
+	}
+	base := commandBase(want)
+
+	c.mu.Lock()
+	presets := append([]Preset(nil), c.presets...)
+	c.mu.Unlock()
+
+	for _, preset := range presets {
+		if !preset.Adapter.Empty() && preset.Command == want {
+			return preset.Adapter, true
+		}
+	}
+	for _, preset := range presets {
+		if !preset.Adapter.Empty() && strings.EqualFold(commandBase(preset.Command), base) {
+			return preset.Adapter, true
+		}
+	}
+	return adapters.Adapter{}, false
+}
+
+// commandBase is the program name a command names, without its directory or the
+// Windows extension a shell would add.
+func commandBase(command string) string {
+	base := command
+	if i := strings.LastIndexAny(base, `\/`); i >= 0 {
+		base = base[i+1:]
+	}
+	for _, ext := range []string{".exe", ".cmd", ".bat", ".ps1"} {
+		if strings.HasSuffix(strings.ToLower(base), ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return base
+}
+
 // project answers one preset for the GUI. A preset's mode is its recipe, so it
 // decides the purpose: an acp preset can serve chat sessions and never terminal
 // ones, whatever a switch file holds. Reading the stored value only for the
@@ -311,8 +378,8 @@ func readAdapter(path string) (Preset, error) {
 		return Preset{}, fmt.Errorf("read adapter %q: %w", name, err)
 	}
 
-	var preset Preset
-	if err := json.Unmarshal(payload, &preset); err != nil {
+	preset, err := decodeAdapter(payload)
+	if err != nil {
 		return Preset{}, fmt.Errorf("decode adapter %q: %w", name, err)
 	}
 
@@ -326,6 +393,57 @@ func readAdapter(path string) (Preset, error) {
 	}
 	preset.source = name
 	return preset, nil
+}
+
+// adapterFile is the on-disk shape of an adapter: one flat object holding the
+// launch recipe and the operational knowledge. It is a separate type because
+// Preset hides Adapter from JSON — the wire must not carry heuristics — while the
+// file a user edits writes both in one place.
+type adapterFile struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Command     string       `json:"command"`
+	Args        []string     `json:"args"`
+	Mode        session.Mode `json:"mode"`
+	Needs       string       `json:"needs"`
+	Description string       `json:"description"`
+
+	Blocked       []string       `json:"blocked"`
+	Paste         adapters.Paste `json:"paste"`
+	TrustArgs     []string       `json:"trust_args"`
+	ResumeArgs    []string       `json:"resume_args"`
+	ResumeCommand string         `json:"resume_command"`
+}
+
+// decodeAdapter reads one adapter file strictly. A field this build does not
+// know is an error rather than a silent no-op: a typo in "blocked" would leave
+// the agent looking busy while it waits for an answer, and nothing else would say
+// so.
+func decodeAdapter(payload []byte) (Preset, error) {
+	var file adapterFile
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&file); err != nil {
+		return Preset{}, fmt.Errorf("decode the adapter: %w", err)
+	}
+
+	return Preset{
+		ID:          file.ID,
+		Name:        file.Name,
+		Command:     file.Command,
+		Args:        file.Args,
+		Mode:        file.Mode,
+		Needs:       file.Needs,
+		Description: file.Description,
+		Adapter: adapters.Adapter{
+			Blocked:       file.Blocked,
+			Paste:         file.Paste,
+			TrustArgs:     file.TrustArgs,
+			ResumeArgs:    file.ResumeArgs,
+			ResumeCommand: file.ResumeCommand,
+		},
+	}, nil
 }
 
 // normalize refuses what a session start could not use. Fields an adapter leaves
@@ -344,6 +462,9 @@ func normalize(p *Preset) error {
 	if p.Mode != "" && !p.Mode.Valid() {
 		return fmt.Errorf("%s: mode %q is neither %s nor %s: %w", p.ID, p.Mode, session.ModeACP, session.ModePTY, ErrBadPreset)
 	}
+	if err := p.Adapter.Validate(); err != nil {
+		return fmt.Errorf("%s: %w: %w", p.ID, ErrBadPreset, err)
+	}
 	return nil
 }
 
@@ -351,9 +472,9 @@ func normalize(p *Preset) error {
 // replaces it in place, which is how a user corrects a command without losing
 // the picker's order. A field the adapter leaves out keeps the builtin's value,
 // so overriding a command does not silently reset the name, mode or login note.
-func merge(builtin, adapters []Preset) []Preset {
+func merge(builtin, overrides []Preset) []Preset {
 	out := append([]Preset(nil), builtin...)
-	for _, adapter := range adapters {
+	for _, adapter := range overrides {
 		replaced := false
 		for i := range out {
 			if out[i].ID == adapter.ID {
@@ -388,6 +509,10 @@ func inherit(base, adapter Preset) Preset {
 	if adapter.Description == "" {
 		adapter.Description = base.Description
 	}
+	// The operational knowledge inherits field by field too: correcting a
+	// command must not silently drop the patterns that recognise a blocked
+	// agent, or the session would look working while it waits for an answer.
+	adapter.Adapter = adapters.Inherit(base.Adapter, adapter.Adapter)
 	return adapter
 }
 

@@ -113,10 +113,17 @@ gofmt -l <changed Go files>           # formatting; empty output = clean
 go vet ./...
 golangci-lint run                     # at CI's pin
 go test <changed packages>            # plus the packages that import them
+go run ./cmd/flt-contract -out gui/electron/contract.ts -check
 bash scripts/check-coverage.sh        # sensitive paths, when they change
 # gui changes:
 pnpm --dir gui lint && pnpm --dir gui test
 ```
+
+The contract gate is the answer to "two sides mirror a type by hand". Go is the
+source: `cmd/flt-contract` renders the method names, the wire constants and the
+JSON shape of every type a client reads into `gui/electron/contract.ts`. A wire
+change that does not regenerate that file fails here, and so does a renderer
+interface that stopped matching it (`gui/test/contract.test.ts`).
 
 The CI workflows land with the first code and run exactly these gates on
 Windows; docs-only changes skip CI via paths filters. If a gate

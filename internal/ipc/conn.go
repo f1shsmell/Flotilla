@@ -29,6 +29,9 @@ type Config struct {
 	Token string
 	// Role names this side for the peer's logs: "daemon", "host", "cli", "gui".
 	Role string
+	// Client names the window or tool behind the connection, when it has one.
+	// It is stable across the connections one client opens.
+	Client string
 	// Session names the session this connection is about, when it has one.
 	Session string
 	// Handler serves inbound calls; nil rejects them with ErrNoHandler, which
@@ -64,15 +67,17 @@ func handshakeDeadline(ctx context.Context, timeout time.Duration) time.Time {
 
 // Conn is one authenticated connection carrying both planes.
 type Conn struct {
-	rwc     net.Conn
-	r       *Reader
-	w       *Writer
-	token   string
-	role    string
-	peer    string
-	session string
-	handler Handler
-	onData  DataSink
+	rwc        net.Conn
+	r          *Reader
+	w          *Writer
+	token      string
+	role       string
+	peer       string
+	peerClient string
+	client     string
+	session    string
+	handler    Handler
+	onData     DataSink
 
 	nextID  atomic.Int64
 	pendMu  sync.Mutex
@@ -116,6 +121,7 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 	}
 
 	c.peer = hello.Role
+	c.peerClient = hello.Client
 	c.session = hello.Session
 	go c.readNotifications()
 	go c.readLoop()
@@ -139,6 +145,7 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 		Version: ProtocolVersion,
 		Token:   cfg.Token,
 		Role:    cfg.Role,
+		Client:  cfg.Client,
 		Session: cfg.Session,
 	}); err != nil {
 		_ = nc.Close()
@@ -164,6 +171,7 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 	}
 
 	c.peer = hello.Role
+	c.peerClient = hello.Client
 	go c.readNotifications()
 	go c.readLoop()
 	return c, nil
@@ -176,6 +184,7 @@ func newConn(nc net.Conn, cfg Config) *Conn {
 		w:       NewWriter(nc),
 		token:   cfg.Token,
 		role:    cfg.Role,
+		client:  cfg.Client,
 		session: cfg.Session,
 		handler: cfg.Handler,
 		onData:  cfg.OnData,
@@ -190,6 +199,16 @@ func (c *Conn) Role() string { return c.role }
 
 // Peer reports the role the peer announced, or "" before its handshake.
 func (c *Conn) Peer() string { return c.peer }
+
+// Client reports the client this connection speaks for: the peer's name when
+// this side dialled, or this side's own when the peer connected to it. It is
+// empty for a client that named none.
+func (c *Conn) Client() string {
+	if c.peerClient != "" {
+		return c.peerClient
+	}
+	return c.client
+}
 
 // Session reports the session this connection named, if any.
 func (c *Conn) Session() string { return c.session }
@@ -402,38 +421,102 @@ func (c *Conn) readNotifications() {
 	}
 }
 
+// replyKey carries the per-call reply gate a handler can register with. The
+// value is a *replyGate, shared with the call it belongs to.
+type replyKey struct{}
+
+// replyGate collects the work a handler wants run once its reply is on the
+// wire. Once the call has answered, the gate is closed: a callback registered
+// afterwards would never run, so it runs at once instead of disappearing.
+type replyGate struct {
+	mu     sync.Mutex
+	after  []func()
+	closed bool
+}
+
+// register queues fn, or runs it now when the reply has already gone.
+func (g *replyGate) register(fn func()) {
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		// The reply is already out, so "after the reply" has no work left to
+		// order against: running it here is what keeps a late handler correct
+		// instead of silently losing its callback.
+		fn()
+		return
+	}
+	g.after = append(g.after, fn)
+	g.mu.Unlock()
+}
+
+// close runs everything that was queued and refuses anything after it.
+func (g *replyGate) close() {
+	g.mu.Lock()
+	after := g.after
+	g.after = nil
+	g.closed = true
+	g.mu.Unlock()
+
+	for _, fn := range after {
+		fn()
+	}
+}
+
+// OnReply runs fn once this call's reply is on the wire, or once it is known
+// there will be none. A handler uses it to order work that must not overtake
+// its own answer: a client that has not been told what it attached to must not
+// receive live traffic for it first.
+//
+// Outside a served call there is no reply to wait for, so fn runs at once. The
+// same is true of a call whose reply already went: the ordering it asked for is
+// no longer possible, and dropping the work would be worse than running it late.
+func OnReply(ctx context.Context, fn func()) {
+	if gate, ok := ctx.Value(replyKey{}).(*replyGate); ok && gate != nil {
+		gate.register(fn)
+		return
+	}
+	fn()
+}
+
 // dispatch runs one inbound call and answers it.
 func (c *Conn) dispatch(msg rpcMessage) {
+	gate := &replyGate{}
+	defer gate.close()
+
+	ctx := context.WithValue(context.Background(), replyKey{}, gate)
+
 	if c.handler == nil {
 		if msg.ID != nil {
-			_ = c.replyError(msg.ID, codeMethodFailed, ErrNoHandler.Error())
+			_ = c.replyError(msg.ID, int(CodeUnknownMethod), ErrNoHandler.Error())
 		}
 		return
 	}
 
-	result, err := c.handler(context.Background(), c, msg.Method, msg.Params)
+	result, err := c.handler(ctx, c, msg.Method, msg.Params)
 	if msg.ID == nil {
 		return
 	}
 	if err != nil {
-		_ = c.replyError(msg.ID, codeMethodFailed, err.Error())
+		// The class travels, not just the sentence: a caller branches on what
+		// failed, and every layer above projects that class.
+		_ = c.replyError(msg.ID, int(CodeOf(err)), err.Error())
 		return
 	}
 
 	raw, err := json.Marshal(result)
 	if err != nil {
-		_ = c.replyError(msg.ID, codeMethodFailed, fmt.Sprintf("encode result: %v", err))
+		_ = c.replyError(msg.ID, int(CodeMethodFailed), fmt.Sprintf("encode result: %v", err))
 		return
 	}
 	payload, err := json.Marshal(rpcMessage{Version: "2.0", ID: msg.ID, Result: raw})
 	if err != nil {
-		_ = c.replyError(msg.ID, codeMethodFailed, fmt.Sprintf("encode response: %v", err))
+		_ = c.replyError(msg.ID, int(CodeMethodFailed), fmt.Sprintf("encode response: %v", err))
 		return
 	}
 	if len(payload) > MaxFrameSize {
 		// The writer would refuse this frame and drop it, leaving the caller to
 		// wait for a timeout it cannot tell from a slow peer.
-		_ = c.replyError(msg.ID, codeResponseTooLarge, ErrResponseTooLarge.Error())
+		_ = c.replyError(msg.ID, int(CodeResponseTooLarge), ErrResponseTooLarge.Error())
 		return
 	}
 	_ = c.w.WriteControl(payload)
@@ -498,23 +581,27 @@ func (e *CallError) Error() string {
 }
 
 // Unwrap maps the peer's code onto the sentinel a caller branches on, so a
-// failure is identified by what it was, not by the peer's wording.
+// failure is identified by what it was, not by the peer's wording. A code no
+// sentinel stands behind, or a peer that classified nothing, unwraps to nil and
+// the caller falls back to errors.As on a *CodedError.
 func (e *CallError) Unwrap() error {
-	switch e.Code {
-	case codeResponseTooLarge:
+	return e.class()
+}
+
+// class is the sentinel this code names, or nil for a class this build does not
+// know.
+func (e *CallError) class() error {
+	switch Code(e.Code) {
+	case CodeResponseTooLarge:
 		return ErrResponseTooLarge
+	case CodeUnknownMethod:
+		return ErrNoHandler
+	case CodeAlreadyRunning:
+		return ErrLocked
 	default:
 		return nil
 	}
 }
-
-const (
-	// codeMethodFailed is the JSON-RPC server-error code used for a handler
-	// that returned an error; the reason travels in the message.
-	codeMethodFailed = -32000
-	// codeResponseTooLarge reports a reply the wire cannot carry in one frame.
-	codeResponseTooLarge = -32001
-)
 
 type rpcMessage struct {
 	Version string          `json:"jsonrpc"`

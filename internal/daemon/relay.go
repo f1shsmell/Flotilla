@@ -16,7 +16,12 @@ import (
 )
 
 // ErrUnknownSession reports an attach for a session this daemon does not serve.
-var ErrUnknownSession = errors.New("daemon: no such session")
+var ErrUnknownSession = ipc.Class(errors.New("daemon: no such session"), ipc.CodeUnknownSession)
+
+// ErrHostUnreachable reports a session whose host stopped answering. The work
+// is there and the process behind it is not, which is a different cause from a
+// session that never existed even though the caller cannot proceed either way.
+var ErrHostUnreachable = ipc.Class(errors.New("daemon: the host is unreachable"), ipc.CodeHostUnreachable)
 
 // HostHooks are what the daemon does with traffic from one host connection: the
 // host only ever sends, so a call from it is a notification and its data frames
@@ -26,6 +31,85 @@ type HostHooks struct {
 	OnData  ipc.DataSink
 }
 
+// peerQueue orders everything one client receives. A connection that has just
+// attached holds its frames until the attach reply is out: the reply carries the
+// history a window folds before any live line, and a live byte that overtook it
+// would be drawn before the work it belongs after.
+//
+// No write ever runs under the queue's lock. A frame is the transport's own
+// blocking write, and holding the lock across it would stall every caller of
+// bind and release — the whole relay — on one client that stopped reading.
+type peerQueue struct {
+	mu       sync.Mutex
+	holding  bool
+	draining bool
+	held     []func() error
+	onError  func(error)
+}
+
+// newPeerQueue builds a queue that reports a failed write through report. The
+// report is what makes a dropped frame visible in a log; the client it belonged
+// to learns from its own connection closing.
+func newPeerQueue(report func(error)) *peerQueue {
+	return &peerQueue{onError: report}
+}
+
+// hold stops the queue from writing, so what arrives while a client is still
+// attaching waits for release.
+func (q *peerQueue) hold() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.holding = true
+}
+
+// enqueue writes a frame in arrival order. While the queue is held or draining,
+// the write is queued for release; otherwise it runs here, outside the lock.
+func (q *peerQueue) enqueue(write func() error) error {
+	q.mu.Lock()
+	if q.holding || q.draining {
+		q.held = append(q.held, write)
+		q.mu.Unlock()
+		return nil
+	}
+	q.mu.Unlock()
+
+	return write()
+}
+
+// release lets the queue through: the held frames go first, in arrival order,
+// and everything that arrives while they are being written follows behind them
+// rather than overtaking the batch.
+func (q *peerQueue) release() {
+	q.mu.Lock()
+	q.holding = false
+	if q.draining {
+		// Another release is already draining; it will pick these frames up.
+		q.mu.Unlock()
+		return
+	}
+	q.draining = true
+	q.mu.Unlock()
+
+	for {
+		q.mu.Lock()
+		batch := q.held
+		q.held = nil
+		if len(batch) == 0 {
+			q.draining = false
+			q.mu.Unlock()
+			return
+		}
+		q.mu.Unlock()
+
+		for _, write := range batch {
+			if err := write(); err != nil && q.onError != nil {
+				q.onError(err)
+			}
+		}
+	}
+}
+
 // relay binds client connections to sessions. One connection carries one
 // session: the daemon is the only client a host has, so it fans the host's
 // stream out to however many clients attached, and forwards their calls back.
@@ -33,16 +117,51 @@ type relay struct {
 	mu    sync.Mutex
 	bound map[*ipc.Conn]session.ID
 	subs  map[session.ID]map[*ipc.Conn]struct{}
+	// queues holds the per-client ordering gate. It is created at bind and
+	// dropped when the client goes.
+	queues map[*ipc.Conn]*peerQueue
+	// seen records which clients have looked at a session's finished turn. It
+	// lives here because this is the only layer that knows how many clients
+	// there are: a host has one client and cannot answer the question, and one
+	// window clearing its own badge must not clear another's. A client is named
+	// in its handshake, so the control connection that polls the fleet and the
+	// session connection that reports seen are the same client.
+	seen map[session.ID]map[string]struct{}
+	// present is the set of windows the daemon has seen, read and written under
+	// mu. It is what bounds the per-client seen table: a window's name never
+	// returns, so without a bound a long-lived daemon would keep one entry per
+	// launch forever.
+	present map[string]struct{}
+	// onWriteError receives a frame that could not be delivered while it was
+	// queued. It is a field rather than a logger so a test can build a relay
+	// with nothing behind it.
+	onWriteError func(error)
 }
 
-func newRelay() *relay {
+// maxRememberedClients bounds how many windows the daemon remembers for their
+// seen marks. A desktop has a handful; the bound is what keeps a tab opened
+// once a day from accumulating for the life of the daemon.
+const maxRememberedClients = 32
+
+// newRelay builds a relay whose queued-write failures go to onWriteError. The
+// daemon passes its own logger; a test passes nothing and gets a silent relay.
+func newRelay(onWriteError func(error)) *relay {
 	return &relay{
-		bound: make(map[*ipc.Conn]session.ID),
-		subs:  make(map[session.ID]map[*ipc.Conn]struct{}),
+		bound:        make(map[*ipc.Conn]session.ID),
+		subs:         make(map[session.ID]map[*ipc.Conn]struct{}),
+		queues:       make(map[*ipc.Conn]*peerQueue),
+		seen:         make(map[session.ID]map[string]struct{}),
+		present:      make(map[string]struct{}),
+		onWriteError: onWriteError,
 	}
 }
 
-// bind makes peer the client of id, replacing any session it was bound to.
+// bind makes peer the client of id, replacing any session it was bound to, and
+// holds what the session produces until the caller releases the queue.
+//
+// The hold happens before the relay lock is released and the write path never
+// runs under that lock, so no frame can slip through between the bind and the
+// hold.
 func (r *relay) bind(peer *ipc.Conn, id session.ID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -55,6 +174,51 @@ func (r *relay) bind(peer *ipc.Conn, id session.ID) {
 		r.subs[id] = make(map[*ipc.Conn]struct{})
 	}
 	r.subs[id][peer] = struct{}{}
+
+	q := r.queues[peer]
+	if q == nil {
+		q = newPeerQueue(r.reportWrite)
+		r.queues[peer] = q
+	}
+	// hold takes the queue's own lock, which enqueue never holds across a
+	// write — so this cannot block on a client that stopped reading.
+	q.hold()
+}
+
+// reportWrite logs a frame that could not be delivered while it was queued.
+// The client's own connection closing is what it acts on; this is the record a
+// postmortem needs.
+func (r *relay) reportWrite(err error) {
+	if r.onWriteError != nil {
+		r.onWriteError(err)
+	}
+}
+
+// release lets a bound client's held frames through. It is what runs once the
+// attach reply is on the wire.
+func (r *relay) release(peer *ipc.Conn) {
+	r.mu.Lock()
+	q := r.queues[peer]
+	r.mu.Unlock()
+
+	if q != nil {
+		q.release()
+	}
+}
+
+// deliver hands one frame to a client in order, and reports what the write
+// said. A client with no queue left — one that departed between the subscriber
+// snapshot and this call — is written to directly; the transport drops the frame
+// on a closed connection, which is the same end the queue would have reached.
+func (r *relay) deliver(peer *ipc.Conn, write func() error) error {
+	r.mu.Lock()
+	q := r.queues[peer]
+	r.mu.Unlock()
+
+	if q == nil {
+		return write()
+	}
+	return q.enqueue(write)
 }
 
 // sessionOf reports the session peer is bound to.
@@ -66,11 +230,14 @@ func (r *relay) sessionOf(peer *ipc.Conn) (session.ID, bool) {
 	return id, ok
 }
 
-// forget drops a closed client from both maps.
+// forget drops a closed client from every map. Its queue goes too: a frame that
+// arrives for a departed client is written to a closed connection and dropped
+// by the transport, which is why nothing waits on it.
 func (r *relay) forget(peer *ipc.Conn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	delete(r.queues, peer)
 	id, ok := r.bound[peer]
 	if !ok {
 		return
@@ -86,6 +253,104 @@ func (r *relay) removeLocked(id session.ID, peer *ipc.Conn) {
 			delete(r.subs, id)
 		}
 	}
+}
+
+// track records that client is present, and keeps the record bounded. A window
+// names itself once per launch; its mark has to outlive a dropped connection,
+// because a poll that failed and reconnected must not turn a turn the user
+// already read back into an unread badge.
+func (r *relay) track(client string) {
+	if client == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.present[client] = struct{}{}
+	r.evictLocked(client)
+}
+
+// evictLocked drops windows once the table outgrows its bound, and every seen
+// mark they left behind. keep is never a candidate: it is the window that just
+// spoke, and evicting it would drop the mark the caller is about to set.
+//
+// The iteration order of a map is not a claim about age, so the table is a set:
+// any window beyond the bound is as good a candidate as another, and a window
+// that is still open re-registers itself on its next connection.
+func (r *relay) evictLocked(keep string) {
+	for len(r.present) > maxRememberedClients {
+		evicted := false
+		for client := range r.present {
+			if client == keep {
+				continue
+			}
+			delete(r.present, client)
+			r.forgetClientLocked(client)
+			evicted = true
+			break
+		}
+		if !evicted {
+			// Every remaining entry is the window being kept, which cannot fill
+			// the table on its own; stopping is what keeps this from spinning.
+			return
+		}
+	}
+}
+
+// forgetClientLocked removes one client's marks. The per-session map goes when
+// its last client does, so an eviction leaves no empty shells behind.
+func (r *relay) forgetClientLocked(client string) {
+	for id, marked := range r.seen {
+		delete(marked, client)
+		if len(marked) == 0 {
+			delete(r.seen, id)
+		}
+	}
+}
+
+// markSeen records that client has looked at id's finished turn. A client that
+// named itself in no handshake is not recorded: there is nothing to attribute
+// the look to, and guessing would clear a badge somebody else still needs.
+func (r *relay) markSeen(id session.ID, client string) {
+	if client == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// A window that looked is a window that is present: recording it here is
+	// what keeps an eviction from choosing the caller's own name, which would
+	// delete the mark set two lines below.
+	r.present[client] = struct{}{}
+	if r.seen[id] == nil {
+		r.seen[id] = make(map[string]struct{})
+	}
+	r.seen[id][client] = struct{}{}
+	r.evictLocked(client)
+}
+
+// hasSeen reports whether client has looked at id's finished turn.
+func (r *relay) hasSeen(id session.ID, client string) bool {
+	if client == "" {
+		return false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	_, ok := r.seen[id][client]
+	return ok
+}
+
+// forgetSeen clears every client's seen flag for id. A turn that just finished
+// is unread for everyone, however many windows read the turn before it.
+func (r *relay) forgetSeen(id session.ID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.seen, id)
 }
 
 // subscribers snapshots the clients attached to id.
@@ -111,6 +376,7 @@ func (r *relay) drop(id session.ID) []*ipc.Conn {
 	out := make([]*ipc.Conn, 0, len(subs))
 	for peer := range subs {
 		delete(r.bound, peer)
+		delete(r.queues, peer)
 		out = append(out, peer)
 	}
 	delete(r.subs, id)
@@ -120,7 +386,7 @@ func (r *relay) drop(id session.ID) []*ipc.Conn {
 // attachClient binds one client connection to a session. Everything the session
 // produces after this point arrives on that connection, and every call it makes
 // is forwarded to the host.
-func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, error) {
+func (d *Daemon) attachClient(ctx context.Context, peer *ipc.Conn, params json.RawMessage) (any, error) {
 	var req session.AttachRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", session.MethodAttach, err)
@@ -134,7 +400,7 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 		return nil, fmt.Errorf("attach to session %q: %w", req.ID, ErrUnknownSession)
 	}
 	if !att.Conn.Alive() {
-		return nil, fmt.Errorf("attach to session %q: the host is unreachable: %w", req.ID, ErrUnknownSession)
+		return nil, fmt.Errorf("attach to session %q: %w", req.ID, ErrHostUnreachable)
 	}
 
 	d.relay.bind(peer, req.ID)
@@ -148,7 +414,16 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 	// start time, before any window existed, so those bytes went to the daemon
 	// with nobody to forward them to. Asking the host for a replay now is what
 	// makes the first window see the screen the session already had.
-	go d.requestReplay(req.ID, att.Conn)
+	//
+	// The release runs after this call's reply, through the gate: the connection
+	// holds every frame of the session until then, so no live update can overtake
+	// the history the renderer folds first.
+	ipc.OnReply(ctx, func() { d.relay.release(peer) })
+	// The replay request runs after that, and on its own goroutine: it is a
+	// blocking call bounded at five seconds, and a host that stopped answering
+	// must not hold this connection's next frames, nor the call that asked for
+	// the attach.
+	ipc.OnReply(ctx, func() { go d.requestReplay(req.ID, att.Conn) })
 
 	// The agent's own log is the daemon's, not the host's: this is what shows a
 	// window the work that happened before it opened, and it survives the host.
@@ -169,6 +444,16 @@ func (d *Daemon) attachClient(peer *ipc.Conn, params json.RawMessage) (any, erro
 	}, nil
 }
 
+// projectSeen projects the seen flag onto the lifecycle one client should see:
+// a finished turn it has already looked at is idle for it, and stays done for
+// every other client.
+func projectSeen(state session.State, seen bool) session.State {
+	if state == session.StateDone && seen {
+		return session.StateIdle
+	}
+	return state
+}
+
 // requestReplay asks a host to resend what it is holding for a client that has
 // just started watching. The host answers on its own connection, so the bytes
 // arrive as ordinary data frames and reach every subscriber like live output.
@@ -186,10 +471,17 @@ func (d *Daemon) requestReplay(id session.ID, conn *ipc.Conn) {
 // relayCall forwards one call from an attached client to its host. The host's
 // reply is handed back untouched, so the client decodes the same shape it would
 // have got by dialling the host itself.
-func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, params json.RawMessage) (any, error) {
+func (d *Daemon) relayCall(ctx context.Context, peer *ipc.Conn, id session.ID, method string, params json.RawMessage) (any, error) {
 	// The diff and its notes belong to the checkout, not to the agent: the daemon
 	// answers them itself instead of forwarding to a host with no repository.
 	switch method {
+	case session.MethodSeen:
+		// Seen belongs to the window that looked, and this is the only layer
+		// that can tell one window from another. Forwarding it to the host
+		// would clear every window's badge, and would turn a PTY session the
+		// host cannot classify from unknown into idle.
+		d.relay.markSeen(id, peer.Client())
+		return struct{}{}, nil
 	case session.MethodDiff:
 		return d.readDiff(ctx, id, params)
 	case session.MethodCommentList:
@@ -212,8 +504,7 @@ func (d *Daemon) relayCall(ctx context.Context, id session.ID, method string, pa
 
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
-		session.MethodPermissionReply, session.MethodResize, session.MethodStop,
-		session.MethodSeen:
+		session.MethodPermissionReply, session.MethodResize, session.MethodStop:
 	default:
 		return nil, ipc.ErrNoHandler
 	}
@@ -416,6 +707,13 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 				var update session.StateUpdate
 				if err := json.Unmarshal(params, &update); err == nil {
 					d.rememberState(id, update.State)
+					// A turn that just finished is unread in every window:
+					// the badge belongs to this turn, not to one read earlier.
+					// Any other state leaves the flags alone, because a
+					// transition back to done means new work arrived.
+					if update.State == session.StateDone {
+						d.relay.forgetSeen(id)
+					}
 				}
 			}
 
@@ -435,7 +733,8 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 			}
 
 			for _, peer := range d.relay.subscribers(id) {
-				if err := peer.Notify(method, forwarded); err != nil {
+				err := d.relay.deliver(peer, func() error { return peer.Notify(method, forwarded) })
+				if err != nil {
 					d.cfg.Log.Debug("forward a session notification failed", "session", id, "err", err.Error())
 				}
 			}
@@ -443,7 +742,10 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 		},
 		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			for _, peer := range d.relay.subscribers(id) {
-				_ = peer.SendData(stream, payload)
+				// A failed send reaches the client's own connection close, which
+				// is the event the daemon acts on; a logged line per failed byte
+				// would be a flood of its own.
+				_ = d.relay.deliver(peer, func() error { return peer.SendData(stream, payload) })
 			}
 		},
 	}
@@ -557,6 +859,7 @@ func (d *Daemon) forget(id session.ID) {
 	}
 	d.fleet.Attachments = kept
 	delete(d.baselines, id)
+	d.relay.forgetSeen(id)
 }
 
 // stopTimeout bounds the request that asks a host to end its session. A host

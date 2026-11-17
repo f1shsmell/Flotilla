@@ -118,6 +118,15 @@ func runDaemonWith(t *testing.T, cfg Config) *Daemon {
 // dialDaemon connects one client to the daemon under test.
 func dialDaemon(t *testing.T, dir, token string, handler ipc.Handler, onData ipc.DataSink) *ipc.Conn {
 	t.Helper()
+	return dialDaemonAs(t, dir, token, "", handler, onData)
+}
+
+// dialDaemonAs connects as one named client. A client name is stable across the
+// connections one window opens, which is what lets the daemon answer a
+// per-window question: pass the same name for a window's control connection and
+// its session connection.
+func dialDaemonAs(t *testing.T, dir, token, client string, handler ipc.Handler, onData ipc.DataSink) *ipc.Conn {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	t.Cleanup(cancel)
@@ -125,6 +134,7 @@ func dialDaemon(t *testing.T, dir, token string, handler ipc.Handler, onData ipc
 	conn, err := ipc.Dial(ctx, ipc.Address{Channel: "test", Name: "daemon"}, dir, ipc.Config{
 		Token:   token,
 		Role:    "gui",
+		Client:  client,
 		Handler: handler,
 		OnData:  onData,
 	})

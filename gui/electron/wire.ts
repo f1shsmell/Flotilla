@@ -1,15 +1,23 @@
 // The wire between a client and the daemon. One authenticated pipe carries two
 // planes: control frames are JSON-RPC, data frames are terminal bytes. The
 // header is the Go side's, byte for byte: kind(1) + stream(4 LE) + length(4 LE).
+//
+// The numbers are read from contract.ts, which cmd/flt-contract generates from
+// the Go constants: a frame size or a protocol version that changes on one side
+// fails the contract gate instead of drifting here.
 
-export const PROTOCOL_VERSION = 1;
-export const MAX_FRAME_SIZE = 1 << 20;
-export const STREAM_OUTPUT = 1;
-export const STREAM_INPUT = 2;
+import { constants } from "./contract";
 
-const KIND_CONTROL = 0x01;
-const KIND_DATA = 0x02;
-const HEADER_SIZE = 9;
+export const PROTOCOL_VERSION = Number(constants.ipc.ProtocolVersion);
+export const MAX_FRAME_SIZE = Number(constants.ipc.MaxFrameSize);
+export const STREAM_OUTPUT = Number(constants.session.StreamOutput);
+export const STREAM_INPUT = Number(constants.session.StreamInput);
+
+// The kind bytes are written in the source as hex literals; they are parsed so
+// the contract can keep them in the form the Go side declares them.
+const KIND_CONTROL = Number(constants.ipc.KindControl);
+const KIND_DATA = Number(constants.ipc.KindData);
+const HEADER_SIZE = Number(constants.ipc.HeaderSize);
 
 export type Frame = { kind: "control" | "data"; stream: number; payload: Buffer };
 
@@ -84,6 +92,10 @@ export interface Handshake {
   version: number;
   token?: string;
   role?: string;
+  // client names the window behind the connection. It is the same for every
+  // connection one window opens, so the daemon can answer "has this window
+  // looked at the finished turn" without confusing one window for another.
+  client?: string;
   session?: string;
   error?: string;
 }
@@ -104,5 +116,27 @@ export class RpcError extends Error {
     message: string,
   ) {
     super(`${method} failed (${code}): ${message}`);
+  }
+
+  // is reports whether this failure is the class the code names. A caller
+  // branches on this rather than on the message: the wording is for a log, and
+  // the code is the contract.
+  is(code: number): boolean {
+    return this.code === code;
+  }
+
+  // isUnknownSession, isUnknownMethod and isLocked are the three classes a
+  // window acts on: a session that is gone, a method this daemon does not speak
+  // (an older build), and another daemon holding the channel.
+  isUnknownSession(): boolean {
+    return this.is(Number(constants.ipc.CodeUnknownSession));
+  }
+
+  isUnknownMethod(): boolean {
+    return this.is(Number(constants.ipc.CodeUnknownMethod));
+  }
+
+  isLocked(): boolean {
+    return this.is(Number(constants.ipc.CodeAlreadyRunning));
   }
 }

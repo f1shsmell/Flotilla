@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
@@ -39,6 +40,11 @@ type Session struct {
 	agentID sdk.SessionId
 	init    sdk.InitializeResponse
 	exitc   chan error
+	// exited closes when the agent process is gone, whichever side ended it.
+	// Close reads the status from exitc; a host that wants to notice an agent
+	// dying on its own watches this instead, because exitc has one reader.
+	exited  chan struct{}
+	exitErr atomic.Pointer[error]
 
 	mu     sync.Mutex
 	closed bool
@@ -98,11 +104,26 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("start %q: %w", launch.Command, err)
 	}
 
-	s := &Session{cmd: cmd, stdin: stdin, stdout: stdout, exitc: make(chan error, 1)}
+	s := &Session{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: stdout,
+		exitc:  make(chan error, 1),
+		exited: make(chan struct{}),
+	}
 
 	// One goroutine owns Wait, so Close never waits twice and a reaped process
-	// is never killed a second time.
-	go func() { s.exitc <- cmd.Wait() }()
+	// is never killed a second time. The status goes to exitc for Close and the
+	// event goes to exited for whoever needs to notice a death that happened
+	// while nobody was closing anything.
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			s.exitErr.Store(&err)
+		}
+		close(s.exited)
+		s.exitc <- err
+	}()
 
 	client := NewClient(cfg)
 	s.client = client
@@ -141,6 +162,29 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 
 // ID reports the session id the agent assigned.
 func (s *Session) ID() sdk.SessionId { return s.agentID }
+
+// PID reports the agent process id, or 0 when the process never started. It is
+// for diagnostics and for a caller that has to take the agent away.
+func (s *Session) PID() int {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
+// Exited closes when the agent process is gone, whether it ended on its own or
+// because Close stopped it. A host watches this so an agent that died cannot
+// leave a session that looks alive and fails every prompt.
+func (s *Session) Exited() <-chan struct{} { return s.exited }
+
+// ExitErr reports why the agent exited, or nil when it had not yet. It is only
+// meaningful after Exited has closed.
+func (s *Session) ExitErr() error {
+	if err := s.exitErr.Load(); err != nil {
+		return *err
+	}
+	return nil
+}
 
 // Capabilities reports what the agent said it supports.
 func (s *Session) Capabilities() sdk.AgentCapabilities { return s.init.AgentCapabilities }

@@ -1,0 +1,17 @@
+/* The one stylesheet the renderer imports. It holds no rules of its own: the
+   order below is the cascade, and each file owns one domain.
+   
+   An unlayered rule beats a layered one, so tokens stay unlayered: they are
+   declarations, not styles, and a layer would only make a later override of a
+   value fight its own specificity. Everything that paints lives in the design
+   layer, in a fixed order, so the last word on a shared element never depends
+   on which file the bundler happened to emit first. */
+
+@import "./tokens.css";
+@import "./base.css" layer(design);
+
+@import "./fleet.css" layer(design);
+@import "./settings.css" layer(design);
+@import "./session.css" layer(design);
+@import "./terminal.css" layer(design);
+@import "./diff.css" layer(design);

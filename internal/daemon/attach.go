@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -31,9 +30,6 @@ type Fleet struct {
 	// rest, and that host's record stays on disk for the next attempt.
 	Failures []error
 }
-
-// ErrNoHosts reports a scan that found nothing reachable.
-var ErrNoHosts = errors.New("daemon: no session hosts")
 
 // Attach dials every published host and asks what it holds. Each host gets
 // timeout of its own, so one that stopped answering costs a bounded wait

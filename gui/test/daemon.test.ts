@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { constants } from "../electron/contract";
 import { connect } from "../electron/daemon";
 
 const binary = process.env.FLT_DAEMON_BIN;
@@ -65,7 +66,7 @@ describe.skipIf(!binary)("daemon interop", () => {
   });
 
   it("lists the fleet of a real daemon", async () => {
-    const client = await connect(channel);
+    const client = await connect(channel, "test");
     try {
       const status = (await client.call("daemon.status", {})) as {
         channel: string;
@@ -82,9 +83,13 @@ describe.skipIf(!binary)("daemon interop", () => {
   });
 
   it("fails a call the daemon does not serve, and stays usable", async () => {
-    const client = await connect(channel);
+    const client = await connect(channel, "test");
     try {
-      await expect(client.call("daemon.nonsense", {})).rejects.toThrow(/unknown method/);
+      // The class is the assertion, not the wording: the daemon answers a code
+      // and the client reads the code.
+      await expect(client.call("daemon.nonsense", {})).rejects.toMatchObject({
+        code: Number(constants.ipc.CodeUnknownMethod),
+      });
       const status = (await client.call("daemon.status", {})) as { ready: boolean };
       expect(status.ready).toBe(true);
     } finally {
@@ -97,7 +102,7 @@ describe.skipIf(!binary)("daemon interop", () => {
     const real = (await fs.readFile(paths, "utf8")).trim();
 
     await fs.writeFile(paths, "not-the-token\n");
-    await expect(connect(channel)).rejects.toThrow(/rejected/);
+    await expect(connect(channel, "test")).rejects.toThrow(/rejected/);
 
     await fs.writeFile(paths, `${real}\n`);
   });

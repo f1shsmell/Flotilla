@@ -21,6 +21,7 @@ export interface ConnectOptions {
   path: string;
   token: string;
   role: string;
+  client?: string;
   session?: string;
   handlers?: ClientHandlers;
   timeoutMs?: number;
@@ -120,6 +121,7 @@ export class DaemonClient {
             version: PROTOCOL_VERSION,
             token: options.token,
             role: options.role,
+            client: options.client,
             session: options.session,
           }),
         );

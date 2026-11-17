@@ -64,7 +64,7 @@ type Record struct {
 }
 
 // ErrNoRecord reports a session whose host is not registered on this machine.
-var ErrNoRecord = errors.New("session: no record")
+var ErrNoRecord = ipc.Class(errors.New("session: no record"), ipc.CodeNoRecord)
 
 // Registry is the directory of host records under the state root.
 type Registry struct {

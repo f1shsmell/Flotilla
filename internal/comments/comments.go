@@ -17,13 +17,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/f1shsmell/flotilla/internal/ipc"
 )
 
 // ErrNoComment reports a comment id this store does not hold.
-var ErrNoComment = errors.New("comments: no such comment")
+var ErrNoComment = ipc.Class(errors.New("comments: no such comment"), ipc.CodeNoComment)
 
 // ErrBadComment reports a comment that cannot be stored as asked.
-var ErrBadComment = errors.New("comments: invalid comment")
+var ErrBadComment = ipc.Class(errors.New("comments: invalid comment"), ipc.CodeBadComment)
 
 // maxTextBytes bounds one note. A review note is a sentence or two; the bound is
 // what keeps one runaway client from filling the disk with prose.

@@ -1,0 +1,56 @@
+/* The design tokens. One file holds every value the rest of the CSS refers to,
+   so a colour or a spacing step changes in one place. Names follow the shape
+   Studio's design system uses: surfaces, text, lines, state, then scale. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, from the window down to a well. */
+  --bg: #14161a;
+  --panel: #1b1e24;
+  --sunken: #101216;
+  --note-bg: #1f1a10;
+
+  /* Lines and text. */
+  --line: #2a2f38;
+  --text: #e6e9ef;
+  --dim: #cbd5e1;
+  --muted: #9aa3b2;
+
+  /* State: the only colours that may draw the eye. */
+  --accent: #6aa9ff;
+  --ok: #4ade80;
+  --down: #f87171;
+  --warn: #fbbf24;
+
+  /* Diff washes, kept apart from the state colours so a changed line does not
+     read as a status. */
+  --add-bg: rgba(74, 222, 128, 0.12);
+  --add-text: #b9f6ca;
+  --del-bg: rgba(248, 113, 113, 0.12);
+  --del-text: #fecaca;
+
+  /* Type. */
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --ui: "Segoe UI", system-ui, sans-serif;
+  --fs-body: 14px;
+  --fs-small: 13px;
+  --fs-tiny: 12px;
+  --fs-label: 11px;
+
+  /* Scale. One step of padding, one of gap, one radius: the layout reads as
+     aligned because it does not invent a new pixel value per rule. */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 10px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 20px;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+
+  /* The fleet column. */
+  --fleet-width: 320px;
+}

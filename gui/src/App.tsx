@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { decodeBase64 } from "./base64";
 import { AgentSettings } from "./components/AgentSettings";
 import { FleetList } from "./components/FleetList";
 import { NewSessionForm } from "./components/NewSessionForm";
@@ -33,7 +32,10 @@ interface WireEvent {
   update?: unknown;
   question?: unknown;
   state?: unknown;
-  base64?: string;
+  // bytes is one coalesced run of terminal output. It crosses the preload
+  // boundary as a Uint8Array: structured clone copies the bytes, and nothing
+  // has to decode them.
+  bytes?: Uint8Array;
   error?: string;
 }
 
@@ -130,13 +132,15 @@ export function App(): React.ReactElement {
       const event = payload as WireEvent;
 
       if (event.type === "data") {
-        if (event.session === selectedId.current && event.base64) {
-          const bytes = decodeBase64(event.base64);
+        if (event.session === selectedId.current && event.bytes) {
+          // The bytes are already a Uint8Array over the preload boundary, so
+          // there is nothing to decode here: one copy in the main process, no
+          // base64 on either side.
           const write = terminalWrite.current;
           if (write) {
-            write(bytes);
+            write(event.bytes);
           } else {
-            pendingOutput.current.push(bytes);
+            pendingOutput.current.push(event.bytes);
           }
         }
         return;

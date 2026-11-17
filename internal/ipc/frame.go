@@ -23,8 +23,9 @@ const (
 // error and never an allocation: the length arrives from the peer.
 const MaxFrameSize = 1 << 20
 
-// headerSize is kind(1) + stream(4) + length(4).
-const headerSize = 9
+// HeaderSize is kind(1) + stream(4) + length(4). It is part of the wire
+// contract: a client that mirrors the framing reads it rather than writing 9.
+const HeaderSize = 9
 
 // controlStream is the only stream a control frame may use.
 const controlStream uint32 = 0
@@ -46,7 +47,7 @@ func NewReader(r io.Reader) *Reader { return &Reader{r: r} }
 
 // ReadFrame returns the next frame, or io.EOF when the peer closed cleanly.
 func (r *Reader) ReadFrame() (Frame, error) {
-	var hdr [headerSize]byte
+	var hdr [HeaderSize]byte
 	if _, err := io.ReadFull(r.r, hdr[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return Frame{}, io.EOF
@@ -305,11 +306,11 @@ func (wr *Writer) drain(first Frame) []Frame {
 }
 
 func (wr *Writer) write(f Frame) bool {
-	buf := make([]byte, headerSize+len(f.Payload))
+	buf := make([]byte, HeaderSize+len(f.Payload))
 	buf[0] = byte(f.Kind)
 	binary.LittleEndian.PutUint32(buf[1:5], f.Stream)
 	binary.LittleEndian.PutUint32(buf[5:9], uint32(len(f.Payload)))
-	copy(buf[headerSize:], f.Payload)
+	copy(buf[HeaderSize:], f.Payload)
 
 	if _, err := wr.w.Write(buf); err != nil {
 		wr.stop(fmt.Errorf("write frame: %w", err))
