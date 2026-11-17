@@ -153,7 +153,6 @@ func TestHeldFramesKeepTheirArrivalOrder(t *testing.T) {
 
 	want := []session.State{session.StateWorking, session.StateBlocked, session.StateDone}
 	for _, state := range want {
-		state := state
 		if err := r.deliver(server, func() error {
 			return server.Notify(session.MethodState, session.StateUpdate{ID: "sess-order", State: state})
 		}); err != nil {

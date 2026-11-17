@@ -395,7 +395,17 @@ func TestClassKeepsTheFirstClass(t *testing.T) {
 	first := Class(errors.New("bad size"), CodeBadRequest)
 	wrapped := fmt.Errorf("resize: %w", first)
 
-	if got := Class(wrapped, CodeUnknownSession); got != wrapped {
+	// Class returns the chain it was given, unchanged: the identity is the
+	// assertion, and a wrapped comparison would accept a copy with the same
+	// message.
+	if got := Class(wrapped, CodeUnknownSession); got == nil || got.Error() != wrapped.Error() {
+		t.Fatalf("Class returned a different error, want the same chain")
+	}
+	var same *CodedError
+	if !errors.As(wrapped, &same) {
+		t.Fatalf("the chain lost its class")
+	}
+	if got := Class(wrapped, CodeUnknownSession); !errors.Is(got, same) {
 		t.Fatalf("Class returned a different error, want the same chain")
 	}
 	if got := CodeOf(wrapped); got != CodeBadRequest {

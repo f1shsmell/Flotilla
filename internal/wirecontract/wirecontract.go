@@ -165,7 +165,7 @@ func Build(root string) (Contract, error) {
 func parse(dir string) (*source, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", dir, err)
 	}
 
 	src := &source{fset: token.NewFileSet(), types: map[string]*ast.StructType{}}

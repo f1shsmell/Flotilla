@@ -425,7 +425,7 @@ func decodeAdapter(payload []byte) (Preset, error) {
 	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&file); err != nil {
-		return Preset{}, err
+		return Preset{}, fmt.Errorf("decode the adapter: %w", err)
 	}
 
 	return Preset{

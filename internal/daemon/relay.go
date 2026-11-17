@@ -415,18 +415,15 @@ func (d *Daemon) attachClient(ctx context.Context, peer *ipc.Conn, params json.R
 	// with nobody to forward them to. Asking the host for a replay now is what
 	// makes the first window see the screen the session already had.
 	//
-	// Both the request and the release run after this call's reply, through the
-	// same gate: the connection is holding every frame of the session until
-	// then, so neither a replayed byte nor a live one can overtake the history
-	// the renderer folds first.
-	//
-	// The release goes first. The replay request is a blocking call with a
-	// five-second bound, and a host that stopped answering must not keep the
-	// frames already holding the session off a window that is now allowed to
-	// receive them: the replay lands behind them, which is the order it belongs
-	// in anyway.
+	// The release runs after this call's reply, through the gate: the connection
+	// holds every frame of the session until then, so no live update can overtake
+	// the history the renderer folds first.
 	ipc.OnReply(ctx, func() { d.relay.release(peer) })
-	ipc.OnReply(ctx, func() { d.requestReplay(req.ID, att.Conn) })
+	// The replay request runs after that, and on its own goroutine: it is a
+	// blocking call bounded at five seconds, and a host that stopped answering
+	// must not hold this connection's next frames, nor the call that asked for
+	// the attach.
+	ipc.OnReply(ctx, func() { go d.requestReplay(req.ID, att.Conn) })
 
 	// The agent's own log is the daemon's, not the host's: this is what shows a
 	// window the work that happened before it opened, and it survives the host.
@@ -745,7 +742,10 @@ func (d *Daemon) hostHooks(id session.ID) HostHooks {
 		},
 		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
 			for _, peer := range d.relay.subscribers(id) {
-				d.relay.deliver(peer, func() error { return peer.SendData(stream, payload) })
+				// A failed send reaches the client's own connection close, which
+				// is the event the daemon acts on; a logged line per failed byte
+				// would be a flood of its own.
+				_ = d.relay.deliver(peer, func() error { return peer.SendData(stream, payload) })
 			}
 		},
 	}

@@ -27,7 +27,7 @@ func run(args []string) error {
 	root := fs.String("root", ".", "module root")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse arguments: %w", err)
 	}
 	if *check && *out == "" {
 		return fmt.Errorf("-check needs -out: there is nothing to compare")
@@ -36,7 +36,7 @@ func run(args []string) error {
 	if *check {
 		_, same, err := wirecontract.Check(*root, *out)
 		if err != nil {
-			return err
+			return fmt.Errorf("check the contract: %w", err)
 		}
 		if same {
 			return nil
@@ -45,12 +45,15 @@ func run(args []string) error {
 	}
 
 	if *out == "" {
-		return wirecontract.Write(*root, os.Stdout)
+		if err := wirecontract.Write(*root, os.Stdout); err != nil {
+			return fmt.Errorf("write the contract: %w", err)
+		}
+		return nil
 	}
 
 	contract, err := wirecontract.Build(*root)
 	if err != nil {
-		return err
+		return fmt.Errorf("build the contract: %w", err)
 	}
 	if err := os.WriteFile(*out, wirecontract.Render(contract), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", *out, err)

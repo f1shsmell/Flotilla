@@ -49,7 +49,6 @@ func TestOnReplyRunsQueuedWorkInOrder(t *testing.T) {
 	)
 
 	for i := 1; i <= 3; i++ {
-		i := i
 		OnReply(ctxKey, func() {
 			mu.Lock()
 			order = append(order, i)
