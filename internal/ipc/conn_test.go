@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -352,11 +353,64 @@ func TestCallSurfacesAHandlerError(t *testing.T) {
 	if !errors.As(err, &callErr) {
 		t.Fatalf("Call = %v, want a *CallError", err)
 	}
-	if callErr.Code != codeMethodFailed {
-		t.Fatalf("CallError.Code = %d, want %d", callErr.Code, codeMethodFailed)
+	if callErr.Code != int(CodeMethodFailed) {
+		t.Fatalf("CallError.Code = %d, want %d", callErr.Code, CodeMethodFailed)
 	}
 	if callErr.Message != "no such session" {
 		t.Fatalf("CallError.Message = %q, want the handler's reason", callErr.Message)
+	}
+}
+
+// TestCallCarriesTheHandlersClass is what makes a failure identifiable: the
+// layer that knows why it failed names the class, and the caller reads that
+// class instead of the sentence.
+func TestCallCarriesTheHandlersClass(t *testing.T) {
+	_, client := servePair(t,
+		Config{Token: "shared", Role: "daemon", Handler: func(_ context.Context, _ *Conn, _ string, _ json.RawMessage) (any, error) {
+			return nil, Class(errors.New("session sess-1 is gone"), CodeUnknownSession)
+		}},
+		Config{Token: "shared", Role: "cli"},
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	_, err := client.Call(ctx, "session.attach", nil)
+	if got := CodeOf(err); got != CodeUnknownSession {
+		t.Fatalf("CodeOf = %d, want %d", got, CodeUnknownSession)
+	}
+
+	var callErr *CallError
+	if !errors.As(err, &callErr) {
+		t.Fatalf("Call = %v, want a *CallError", err)
+	}
+	if callErr.Message != "session sess-1 is gone" {
+		t.Fatalf("CallError.Message = %q, want the handler's reason", callErr.Message)
+	}
+}
+
+// TestClassKeepsTheFirstClass: the layer closest to the cause owns the class,
+// so a forwarding layer that tries to relabel a failure does not get to.
+func TestClassKeepsTheFirstClass(t *testing.T) {
+	first := Class(errors.New("bad size"), CodeBadRequest)
+	wrapped := fmt.Errorf("resize: %w", first)
+
+	if got := Class(wrapped, CodeUnknownSession); got != wrapped {
+		t.Fatalf("Class returned a different error, want the same chain")
+	}
+	if got := CodeOf(wrapped); got != CodeBadRequest {
+		t.Fatalf("CodeOf = %d, want %d", got, CodeBadRequest)
+	}
+}
+
+// TestUnclassifiedErrorsSaySo: an error nobody classified is CodeMethodFailed,
+// which is the absence of a class rather than a category of its own.
+func TestUnclassifiedErrorsSaySo(t *testing.T) {
+	if got := CodeOf(errors.New("something went wrong")); got != CodeMethodFailed {
+		t.Fatalf("CodeOf = %d, want %d", got, CodeMethodFailed)
+	}
+	if got := CodeOf(nil); got != CodeMethodFailed {
+		t.Fatalf("CodeOf(nil) = %d, want %d", got, CodeMethodFailed)
 	}
 }
 

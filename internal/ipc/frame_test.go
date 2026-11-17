@@ -77,7 +77,7 @@ func TestReaderRejectsMalformedHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var hdr [headerSize]byte
+			var hdr [HeaderSize]byte
 			hdr[0] = byte(tt.kind)
 			binary.LittleEndian.PutUint32(hdr[1:5], tt.stream)
 			binary.LittleEndian.PutUint32(hdr[5:9], tt.length)

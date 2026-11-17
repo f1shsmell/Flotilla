@@ -14,6 +14,11 @@ type Handshake struct {
 	Token string `json:"token"`
 	// Role names the caller's side: "daemon", "host", "cli" or "gui".
 	Role string `json:"role"`
+	// Client names the window or tool behind the connection. One client opens
+	// several connections (control, one per session), and this is what lets a
+	// question be asked about that client rather than about one socket: whether
+	// the window has already looked at a finished turn. Empty means anonymous.
+	Client string `json:"client,omitempty"`
 	// Session names the session this peer serves or asks for, when it has one.
 	Session string `json:"session,omitempty"`
 	// Error is set by the server when it rejects the handshake.
