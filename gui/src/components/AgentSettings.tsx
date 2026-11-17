@@ -8,6 +8,9 @@ interface Props {
   // unavailable is set when the catalogue could not be read at all, so an empty
   // list is not mistaken for a machine with no agents defined.
   unavailable?: string | null;
+  // loaded is false until the first answer arrives, so an empty table is not
+  // presented as "no agent is defined" before anyone has asked.
+  loaded?: boolean;
   // onToggle applies one switch and re-reads the catalogue, so the row shows
   // what the daemon stored rather than what the click hoped.
   onToggle: (id: string, change: AgentChange) => Promise<void>;
@@ -22,6 +25,7 @@ export function AgentSettings({
   agents,
   problems,
   unavailable,
+  loaded = true,
   onToggle,
   onRefresh,
   onClose,
@@ -79,7 +83,11 @@ export function AgentSettings({
 
       {agents.length === 0 ? (
         <p className="empty">
-          {unavailable ? "The daemon could not be reached." : "No agent is defined yet."}
+          {!loaded
+            ? "Reading the agent list…"
+            : unavailable
+              ? "The daemon could not be reached."
+              : "No agent is defined yet."}
         </p>
       ) : (
         <table className="agent-table">

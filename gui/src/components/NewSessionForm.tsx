@@ -14,6 +14,9 @@ interface Props {
   // unavailable is set when the catalogue could not be read at all. The picker
   // then says the daemon is unreachable instead of claiming nothing is installed.
   unavailable?: string | null;
+  // loaded is false until the first answer arrives, so an empty list is not
+  // presented as "this machine has no agents" before anyone has asked.
+  loaded?: boolean;
   onStart: (request: StartRequest) => Promise<void>;
   // onOpenAgentSettings is the picker's way out when nothing installed matches.
   // A window with no settings page yet just does not render it.
@@ -28,6 +31,7 @@ const policies = ["supervised", "accept-edits", "auto", "full-access"];
 export function NewSessionForm({
   agents,
   unavailable,
+  loaded = true,
   onStart,
   onOpenAgentSettings,
 }: Props): React.ReactElement {
@@ -184,12 +188,14 @@ export function NewSessionForm({
             </ul>
             {visible.length === 0 ? (
               <p className="muted">
-                {unavailable
-                  ? `Agents unavailable: ${unavailable}`
-                  : query.trim() === ""
-                    ? `No ${mode === "acp" ? "chat" : "terminal"} agent is available.`
-                    : "No available agent matches."}{" "}
-                {onOpenAgentSettings ? (
+                {!loaded
+                  ? "Reading the agent list…"
+                  : unavailable
+                    ? `Agents unavailable: ${unavailable}`
+                    : query.trim() === ""
+                      ? `No ${mode === "acp" ? "chat" : "terminal"} agent is available.`
+                      : "No available agent matches."}{" "}
+                {loaded && onOpenAgentSettings ? (
                   <button type="button" className="link" onClick={onOpenAgentSettings}>
                     Manage agents
                   </button>
@@ -199,7 +205,8 @@ export function NewSessionForm({
             {/* The builtins all speak acp, so a terminal session with no
                 adapter of its own would otherwise offer nothing and say only
                 that nothing is available. */}
-            {visible.length === 0 &&
+            {loaded &&
+            visible.length === 0 &&
             !unavailable &&
             query.trim() === "" &&
             mode === "pty" ? (

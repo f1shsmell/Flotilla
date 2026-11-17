@@ -380,6 +380,64 @@ func TestAPartialLineDoesNotSpoilTheLog(t *testing.T) {
 	}
 }
 
+// TestLastHostSeqIsTheNewestNumberStored pins what a new host for a reused
+// session id continues from: the largest number the log holds, not the last
+// record's, so an unnumbered update at the tail cannot hide it.
+func TestLastHostSeqIsTheNewestNumberStored(t *testing.T) {
+	store, _ := newStore(t)
+
+	if got, err := store.LastHostSeq("sess-1"); err != nil || got != 0 {
+		t.Fatalf("an empty log reports %d (%v), want 0", got, err)
+	}
+
+	push(t, store, "sess-1", 3, "third")
+	push(t, store, "sess-1", 7, "seventh")
+	// An update the host did not number leaves the counter where it was.
+	push(t, store, "sess-1", 0, "unnumbered")
+
+	if got, err := store.LastHostSeq("sess-1"); err != nil || got != 7 {
+		t.Fatalf("LastHostSeq = %d (%v), want the newest number stored", got, err)
+	}
+}
+
+// TestANewHostNumbersPastTheOldLog pins the reuse case the daemon's spawn path
+// relies on: a session id whose first host is gone gets a second run, and its
+// first update must be stored rather than refused as a replay of a number the
+// old run used.
+func TestANewHostNumbersPastTheOldLog(t *testing.T) {
+	store, dir := newStore(t)
+	push(t, store, "sess-1", 1, "the old run")
+	push(t, store, "sess-1", 2, "the old run's last line")
+
+	base, err := store.LastHostSeq("sess-1")
+	if err != nil {
+		t.Fatalf("LastHostSeq: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The second host numbers from base+1, which is what the daemon tells it.
+	reopened := transcript.NewStore(dir)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	seq, err := reopened.Append("sess-1", base+1, update(t, "the new run"))
+	if err != nil {
+		t.Fatalf("the second run's first update = %v, want it stored", err)
+	}
+	if seq != 3 {
+		t.Fatalf("the second run's first update got sequence %d, want 3", seq)
+	}
+
+	page, err := reopened.Page("sess-1", transcript.Window{})
+	if err != nil {
+		t.Fatalf("Page: %v", err)
+	}
+	if got := texts(t, page); len(got) != 3 || got[2] != "the new run" {
+		t.Fatalf("log = %v, want the second run's line appended", got)
+	}
+}
+
 // TestTwoSessionsDoNotShareAFile pins the key: ids are arbitrary text, and an
 // encoding that collapses two ids onto one file would show one session's log in
 // another session's window.

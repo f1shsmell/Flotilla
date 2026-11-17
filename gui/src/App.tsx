@@ -46,6 +46,9 @@ export function App(): React.ReactElement {
   // agentsError is why the catalogue is empty, when it is empty because the
   // daemon could not be reached rather than because the machine has no agents.
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  // agentsLoaded separates "not read yet" from "read, and the machine has
+  // none": an empty list means the second only once an answer arrived.
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   // route is which main panel the window shows: the session view, or the agent
   // settings the picker sends the user to when nothing installed matches.
   const [route, setRoute] = useState<"session" | "agents">("session");
@@ -186,21 +189,31 @@ export function App(): React.ReactElement {
   // the daemon is unreachable instead of claiming this machine has no agents.
   //
   // One read at a time: the retry timer and a click's re-read can overlap, and
-  // an older answer landing last would undo the newer one.
+  // an older answer landing last would undo the newer one. A caller that arrives
+  // while a read is in flight does not get dropped either — its answer would be
+  // the newer one — so the read runs again before it settles.
   const agentsInFlight = useRef(false);
+  const agentsReread = useRef(false);
   const refreshAgents = useCallback(async () => {
     if (agentsInFlight.current) {
+      agentsReread.current = true;
       return;
     }
     agentsInFlight.current = true;
     try {
-      setAgents(parseAgents(await window.flotilla.agents()));
-      setAgentsError(null);
-    } catch (error) {
-      setAgents({ agents: [], problems: [] });
-      setAgentsError(error instanceof Error ? error.message : String(error));
+      do {
+        agentsReread.current = false;
+        try {
+          setAgents(parseAgents(await window.flotilla.agents()));
+          setAgentsError(null);
+        } catch (error) {
+          setAgents({ agents: [], problems: [] });
+          setAgentsError(error instanceof Error ? error.message : String(error));
+        }
+      } while (agentsReread.current);
     } finally {
       agentsInFlight.current = false;
+      setAgentsLoaded(true);
     }
   }, []);
 
@@ -485,6 +498,7 @@ export function App(): React.ReactElement {
         <NewSessionForm
           agents={agents.agents}
           unavailable={agentsError}
+          loaded={agentsLoaded}
           onStart={start}
           onOpenAgentSettings={() => setRoute("agents")}
         />
@@ -536,6 +550,7 @@ export function App(): React.ReactElement {
               agents={agents.agents}
               problems={agents.problems}
               unavailable={agentsError}
+              loaded={agentsLoaded}
               onToggle={toggleAgent}
               onRefresh={() => void refreshAgents()}
               onClose={() => setRoute("session")}

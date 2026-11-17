@@ -154,6 +154,17 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		d.remember(req.ID, head)
 	}
 
+	// A session id can be reused after its first host is gone, and the daemon
+	// keeps that run's transcript. The new host has to number past it: from one
+	// again, its first update would look like a replay of the old run's and be
+	// dropped. A log that cannot be read is not a refusal — the session still
+	// starts, it just numbers from one.
+	seqBase, err := d.transcripts.LastHostSeq(string(req.ID))
+	if err != nil {
+		d.cfg.Log.Warn("cannot read a session's last host number", "session", req.ID, "err", err.Error())
+		seqBase = 0
+	}
+
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
@@ -162,6 +173,7 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		Args:     req.Args,
 		Dir:      req.Dir,
 		Policy:   req.Policy,
+		SeqBase:  seqBase,
 		Cols:     req.Cols,
 		Rows:     req.Rows,
 		Channel:  d.cfg.Channel,

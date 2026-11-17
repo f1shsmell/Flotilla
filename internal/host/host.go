@@ -46,6 +46,8 @@ type Config struct {
 	Rows int
 	// Policy decides what an ACP agent may do without asking.
 	Policy acp.Policy
+	// SeqBase is the host number the first update continues from; zero starts at 1.
+	SeqBase uint64
 	// Ctx is the parent context for the agent process. It is detached from the
 	// caller's cancellation, so a daemon restart never stops an agent.
 	Ctx context.Context

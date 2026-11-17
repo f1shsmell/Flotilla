@@ -61,9 +61,9 @@ func (d *Daemon) recordUpdate(id session.ID, params json.RawMessage) (json.RawMe
 	return stored, true
 }
 
-// history answers a request for a session's stored updates. The daemon serves it,
-// not the host: a transcript outlives the host, and a session whose host died is
-// exactly the one somebody comes back to read.
+// history answers a request for a session's stored updates. The daemon serves it
+// from its own transcript, not from the agent: what was stored is readable
+// without asking the process that produced it.
 func (d *Daemon) history(id session.ID, params json.RawMessage) (any, error) {
 	var req session.HistoryRequest
 	if len(params) > 0 {

@@ -158,6 +158,27 @@ func (s *Store) Page(id string, w Window) (Page, error) {
 	return readFile(s.path(id), w)
 }
 
+// LastHostSeq reports the largest host number the session's log holds, or zero
+// for an empty log. A reused session id numbers past it; from one again, its
+// first update would look like a replay of the old run's.
+func (s *Store) LastHostSeq(id string) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	records, err := scan(s.path(id), func([]byte) bool { return true })
+	if err != nil {
+		return 0, err
+	}
+
+	var newest uint64
+	for _, rec := range records {
+		if rec.HostSeq > newest {
+			newest = rec.HostSeq
+		}
+	}
+	return newest, nil
+}
+
 // Release closes the handle the store holds for one session. The log stays on
 // disk: a session that ended is exactly the one somebody may come back to read.
 func (s *Store) Release(id string) error {

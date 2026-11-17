@@ -68,7 +68,14 @@ func (h *Host) startACP(ctx context.Context) error {
 		return fmt.Errorf("open the acp connection: %w", err)
 	}
 
-	h.acp = &acpSession{sess: sess, pending: make(map[string]chan acp.PermissionAnswer)}
+	h.acp = &acpSession{
+		sess:    sess,
+		pending: make(map[string]chan acp.PermissionAnswer),
+		// A session id can be reused after its first host is gone, and the
+		// transcript is kept. Numbering from one again would make the new
+		// run's first update look like a replay of the old run's.
+		nextSeq: h.cfg.SeqBase,
+	}
 	return nil
 }
 

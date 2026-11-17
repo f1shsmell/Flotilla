@@ -33,6 +33,8 @@ type SpawnRequest struct {
 	Dir string
 	// Policy is the ACP permission policy, ignored for a PTY session.
 	Policy string
+	// SeqBase is the host number the first update continues from; zero starts at 1.
+	SeqBase uint64
 	// Cols and Rows size the initial PTY.
 	Cols int
 	Rows int
@@ -72,6 +74,9 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		}
 		if req.Policy != "" {
 			args = append(args, "--policy", req.Policy)
+		}
+		if req.SeqBase > 0 {
+			args = append(args, "--seq-base", fmt.Sprint(req.SeqBase))
 		}
 		if len(req.Args) > 0 {
 			args = append(args, "--")
