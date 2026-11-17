@@ -48,6 +48,12 @@ jobs:
 
       - run: go test ./...
 
+      # The GUI compiles a contract generated from the Go wire types. A wire
+      # change that did not regenerate it fails here, before a renderer reads a
+      # field no side sends any more.
+      - name: wire contract
+        run: go run ./cmd/flt-contract -out gui/electron/contract.ts -check
+
       - name: coverage floor
         shell: bash
         run: bash scripts/check-coverage.sh

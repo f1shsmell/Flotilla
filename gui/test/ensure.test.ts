@@ -78,8 +78,8 @@ describe.skipIf(!binary)("ensure", () => {
 
   it("starts one daemon when two callers arrive together", async () => {
     const [first, second] = await Promise.all([
-      ensure({ channel, binary: binary! }),
-      ensure({ channel, binary: binary! }),
+      ensure({ channel, client: "test", binary: binary! }),
+      ensure({ channel, client: "test", binary: binary! }),
     ]);
 
     expect(first.alive).toBe(true);
@@ -88,14 +88,14 @@ describe.skipIf(!binary)("ensure", () => {
   }, 20000);
 
   it("starts another once the daemon it deduped is gone", async () => {
-    await ensure({ channel, binary: binary! });
+    await ensure({ channel, client: "test", binary: binary! });
     const before = await listening();
     const pid = before[before.length - 1];
     expect(pid).toBeTypeOf("number");
 
     await gone(pid);
 
-    const client = await ensure({ channel, binary: binary! });
+    const client = await ensure({ channel, client: "test", binary: binary! });
     expect(client.alive).toBe(true);
 
     const after = await listening();

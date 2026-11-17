@@ -42,6 +42,10 @@ export interface StartRequest {
   args: string[];
   dir: string;
   policy?: string;
+  // cols and rows size the initial PTY. They are optional because a structured
+  // session has no terminal, and a terminal that names none gets the default.
+  cols?: number;
+  rows?: number;
   // worktree, when set, runs the session in a fresh worktree of repo.
   worktree?: { repo: string; branch: string };
 }

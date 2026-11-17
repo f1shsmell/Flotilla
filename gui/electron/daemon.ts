@@ -7,6 +7,10 @@ import { endpoint, resolvePaths } from "./home";
 
 export interface EnsureOptions {
   channel: string;
+  // client names this window on every connection it opens. The daemon answers
+  // per-client questions (has this window read the finished turn) from it, so
+  // the control connection and the session connections must share one name.
+  client: string;
   handlers?: ClientHandlers;
   timeoutMs?: number;
   binary?: string;
@@ -15,6 +19,7 @@ export interface EnsureOptions {
 // connect opens one authenticated client on the channel's daemon.
 export async function connect(
   channel: string,
+  client: string,
   handlers?: ClientHandlers,
 ): Promise<DaemonClient> {
   const paths = resolvePaths(channel);
@@ -28,6 +33,7 @@ export async function connect(
     path: endpoint(channel, "daemon", paths.sessions),
     token,
     role: "gui",
+    client,
     handlers,
   });
 }
@@ -135,7 +141,7 @@ async function bundledDaemon(): Promise<string | null> {
 // daemon outlives the window, so a failure to start is reported, never hidden.
 export async function ensure(options: EnsureOptions): Promise<DaemonClient> {
   try {
-    return await connect(options.channel, options.handlers);
+    return await connect(options.channel, options.client, options.handlers);
   } catch (first) {
     const binary =
       options.binary ?? process.env.FLT_DAEMON_BIN ?? (await bundledDaemon()) ?? "flt-daemon";
@@ -146,7 +152,7 @@ export async function ensure(options: EnsureOptions): Promise<DaemonClient> {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       try {
-        return await connect(options.channel, options.handlers);
+        return await connect(options.channel, options.client, options.handlers);
       } catch (error) {
         last = error;
       }
