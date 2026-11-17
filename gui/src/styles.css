@@ -85,6 +85,23 @@ button.primary {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Anchors .agent-settings-overlay. */
+  position: relative;
+}
+
+/* The settings panel sits over the session rather than beside it: the terminal
+   stays mounted underneath, so closing the panel returns to its scrollback. */
+.agent-settings-overlay {
+  position: absolute;
+  inset: 0;
+  /* Painting must not depend on DOM order: the overlay is a sibling of the
+     session view, and one reorder would otherwise bury it. */
+  z-index: 1;
+  background: var(--bg);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .session-view {
@@ -109,6 +126,94 @@ button.primary {
   margin: 0;
   font-size: 16px;
   font-family: var(--mono);
+}
+
+.agent-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-settings header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.agent-settings header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.agent-settings header p {
+  margin: 2px 0 0;
+}
+
+.agent-settings header .row {
+  display: flex;
+  gap: 6px;
+}
+
+.agent-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agent-table th,
+.agent-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-table th {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+/* The three switch columns are narrow and centred; the name column carries the
+   text that matters. */
+.agent-table th:nth-child(n + 3),
+.agent-table td:nth-child(n + 3) {
+  width: 1%;
+  text-align: center;
+}
+
+.agent-table tr.off td {
+  color: var(--muted);
+}
+
+.agent-table input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.agent-name {
+  display: block;
+}
+
+.agent-source,
+.agent-description,
+.agent-needs {
+  display: block;
+  font-size: 12px;
+}
+
+.agent-needs {
+  color: var(--warn);
+}
+
+/* A purpose a preset's protocol cannot serve: no switch, just the reason. */
+.agent-unsupported {
+  cursor: help;
 }
 
 .new-session {
@@ -144,6 +249,62 @@ button.primary {
 
 .new-session .row select {
   flex: 1;
+}
+
+/* The picker's hint lines are sentences, not labels: the uppercase label style
+   above would make a whole sentence shout. */
+.new-session .agent-picker p {
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  /* A long catalogue scrolls inside the panel rather than pushing the fleet
+     list off the bottom of the window. */
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.agent-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 6px;
+}
+
+.agent-option.selected {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.agent-option .mono {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+button.link {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding: 2px 0;
+  text-align: left;
+  font-size: 12px;
+}
+
+button.link:hover:not(:disabled) {
+  border-color: transparent;
+  text-decoration: underline;
 }
 
 .sessions {

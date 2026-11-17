@@ -17,6 +17,8 @@ import (
 	sdk "github.com/coder/acp-go-sdk"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
+	"github.com/f1shsmell/flotilla/internal/agent"
+	"github.com/f1shsmell/flotilla/internal/session"
 )
 
 // DefaultPrompt is what the probe sends. It asks for one short line so a probe
@@ -56,17 +58,29 @@ type Agent struct {
 	NeedsCredential string
 }
 
-// Known lists the agents this build has a name for. The list is a convenience,
-// not a capability claim: what a session host can do still depends on the
-// agent's own ACP dialect, which the probe measures. `docs/support-matrix.md`
-// records which of them were actually driven, and when.
+// Known lists the ACP agents this build has a name for, projected from
+// agent.Builtins() so the picker and `flt probe` cannot drift apart. The list is
+// a convenience, not a capability claim: what a host can do depends on the
+// agent's own dialect, which the probe measures and docs/support-matrix.md
+// records.
 func Known() []Agent {
-	return []Agent{
-		{Name: "reasonix", Command: "reasonix", Args: []string{"acp"}, NeedsCredential: "a logged-in Reasonix Studio"},
-		{Name: "opencode", Command: "opencode", Args: []string{"acp"}, NeedsCredential: "an opencode provider that accepts this machine's token"},
-		{Name: "claude", Command: "claude-agent-acp", NeedsCredential: "a logged-in Claude Code CLI"},
-		{Name: "gemini", Command: "gemini", Args: []string{"--acp"}, NeedsCredential: "a logged-in Gemini CLI"},
+	presets := agent.Builtins()
+
+	out := make([]Agent, 0, len(presets))
+	for _, preset := range presets {
+		// A probe drives ACP only; a preset for another protocol has no turn
+		// for it to run.
+		if preset.Mode != session.ModeACP {
+			continue
+		}
+		out = append(out, Agent{
+			Name:            preset.ID,
+			Command:         preset.Command,
+			Args:            preset.Args,
+			NeedsCredential: preset.Needs,
+		})
 	}
+	return out
 }
 
 // Names lists the agents a user can name on the command line.

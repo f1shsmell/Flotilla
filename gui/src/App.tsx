@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { decodeBase64 } from "./base64";
+import { AgentSettings } from "./components/AgentSettings";
 import { FleetList } from "./components/FleetList";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionView } from "./components/SessionView";
@@ -14,10 +15,13 @@ import {
   loseSession,
   newSession,
   needsAttention,
+  parseAgents,
   parseStatus,
   startTurn,
   summarise,
   withLifecycle,
+  type AgentChange,
+  type AgentListing,
   type SessionState,
   type StartRequest,
   type Status,
@@ -36,6 +40,15 @@ interface WireEvent {
 export function App(): React.ReactElement {
   const [fleet, setFleet] = useState<Status | null>(null);
   const [fleetError, setFleetError] = useState<string | null>(null);
+  // agents is the daemon's catalogue. It changes when the user edits a switch,
+  // so it is read again after every write rather than patched in the renderer.
+  const [agents, setAgents] = useState<AgentListing>({ agents: [], problems: [] });
+  // agentsError is why the catalogue is empty, when it is empty because the
+  // daemon could not be reached rather than because the machine has no agents.
+  const [agentsError, setAgentsError] = useState<string | null>(null);
+  // route is which main panel the window shows: the session view, or the agent
+  // settings the picker sends the user to when nothing installed matches.
+  const [route, setRoute] = useState<"session" | "agents">("session");
   const [selected, setSelected] = useState<string | null>(null);
   const [session, setSession] = useState<SessionState | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -165,6 +178,56 @@ export function App(): React.ReactElement {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  // The catalogue is read once and then after every switch the user flips. It
+  // is not polled: an adapter file lands on the next daemon start, and an
+  // install is discovered when the picker is opened again.
+  //
+  // A failed read is a state, not a rejection: the picker must be able to say
+  // the daemon is unreachable instead of claiming this machine has no agents.
+  //
+  // One read at a time: the retry timer and a click's re-read can overlap, and
+  // an older answer landing last would undo the newer one.
+  const agentsInFlight = useRef(false);
+  const refreshAgents = useCallback(async () => {
+    if (agentsInFlight.current) {
+      return;
+    }
+    agentsInFlight.current = true;
+    try {
+      setAgents(parseAgents(await window.flotilla.agents()));
+      setAgentsError(null);
+    } catch (error) {
+      setAgents({ agents: [], problems: [] });
+      setAgentsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      agentsInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAgents();
+  }, [refreshAgents]);
+
+  // A failed read is retried on its own timer: the daemon can come up after the
+  // window, and an empty picker that never asks again would stay empty.
+  useEffect(() => {
+    if (agentsError === null) {
+      return;
+    }
+    const timer = setInterval(() => void refreshAgents(), 5000);
+    return () => clearInterval(timer);
+  }, [agentsError, refreshAgents]);
+
+  // A switch writes through the daemon and the answer is re-read, so the row
+  // shows what was stored rather than what the click asked for.
+  const toggleAgent = useCallback(
+    async (id: string, change: AgentChange) => {
+      await window.flotilla.setAgent({ id, change });
+      await refreshAgents();
+    },
+    [refreshAgents],
+  );
+
   // Read the stored layout once. Until it lands, nothing may write: the
   // defaults would replace what is on disk before it was ever read.
   useEffect(() => {
@@ -206,6 +269,10 @@ export function App(): React.ReactElement {
   }, [view, layoutLoaded]);
 
   const open = useCallback(async (id: string) => {
+    // Opening a session is what the window shows, and a settings panel on top
+    // would hide the session the user just asked for.
+    setRoute("session");
+
     const previous = selectedId.current;
     if (previous !== null && previous !== id) {
       // Leaving a session detaches it instead of keeping a silent subscriber:
@@ -400,6 +467,12 @@ export function App(): React.ReactElement {
           <button type="button" onClick={() => void refresh(true)}>
             Refresh
           </button>
+          <button
+            type="button"
+            onClick={() => setRoute(route === "agents" ? "session" : "agents")}
+          >
+            {route === "agents" ? "Back" : "Agents"}
+          </button>
         </header>
 
         {fleetError ? <p className="error">{fleetError}</p> : null}
@@ -409,7 +482,12 @@ export function App(): React.ReactElement {
           </p>
         ))}
 
-        <NewSessionForm onStart={start} />
+        <NewSessionForm
+          agents={agents.agents}
+          unavailable={agentsError}
+          onStart={start}
+          onOpenAgentSettings={() => setRoute("agents")}
+        />
 
         <FleetList
           sessions={fleet?.sessions ?? []}
@@ -449,6 +527,21 @@ export function App(): React.ReactElement {
               : "No sessions yet. Start one on the left."}
           </p>
         )}
+        {/* The settings overlay covers the session instead of replacing it:
+            xterm keeps its scrollback and its measured size, so closing the
+            panel returns to the same view rather than a re-created term. */}
+        {route === "agents" ? (
+          <div className="agent-settings-overlay">
+            <AgentSettings
+              agents={agents.agents}
+              problems={agents.problems}
+              unavailable={agentsError}
+              onToggle={toggleAgent}
+              onRefresh={() => void refreshAgents()}
+              onClose={() => setRoute("session")}
+            />
+          </div>
+        ) : null}
       </main>
     </div>
   );

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
+	"github.com/f1shsmell/flotilla/internal/agent"
+	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
 
@@ -116,5 +118,47 @@ func TestHelpExitsCleanly(t *testing.T) {
 		if out.Len() == 0 {
 			t.Fatalf("run(%q) printed nothing", args)
 		}
+	}
+}
+
+// TestAgentLinesShowEverySwitch pins the human form of `flt agents`: a disabled
+// or missing agent has to read as such, because the words are the only signal a
+// terminal gets.
+func TestAgentLinesShowEverySwitch(t *testing.T) {
+	lines := agentLines(agent.Listing{Agents: []agent.Entry{
+		{
+			Preset:    agent.Preset{ID: "reasonix", Command: "reasonix", Mode: session.ModeACP},
+			Installed: true,
+			Enabled:   true,
+			Chat:      true,
+		},
+		{
+			Preset:  agent.Preset{ID: "gemini", Command: "gemini"},
+			Enabled: false,
+		},
+	}})
+
+	if len(lines) != 2 {
+		t.Fatalf("agentLines returned %d lines, want one per agent", len(lines))
+	}
+
+	// An empty mode is the daemon's "acp" default, and it is spelled out rather
+	// than left as a blank column.
+	if got, want := lines[0], "reasonix\tacp\tinstalled\tenabled,chat\treasonix"; got != want {
+		t.Fatalf("first line = %q, want %q", got, want)
+	}
+	if got, want := lines[1], "gemini\tacp\tmissing\t\tgemini"; got != want {
+		t.Fatalf("second line = %q, want %q", got, want)
+	}
+}
+
+// TestAgentsRefusesTrailingArguments closes the same hole as status: a stray
+// flag must not be silently ignored.
+func TestAgentsRefusesTrailingArguments(t *testing.T) {
+	var out bytes.Buffer
+
+	err := run([]string{"agents", "--json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "no arguments") {
+		t.Fatalf("agents with a trailing flag = %v, want it refused", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/worktree"
@@ -18,6 +19,10 @@ import (
 const (
 	// MethodStatus reports the fleet this daemon currently serves.
 	MethodStatus = "daemon.status"
+	// MethodAgents lists the agents this machine can offer, with their switches.
+	MethodAgents = "daemon.agents"
+	// MethodAgentSet changes one agent's switches.
+	MethodAgentSet = "daemon.agent.set"
 	// MethodSessionStart spawns a session host.
 	MethodSessionStart = "session.start"
 	// MethodSessionStop ends a session from the control plane. A client that
@@ -35,6 +40,10 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	switch method {
 	case MethodStatus:
 		return d.status(), nil
+	case MethodAgents:
+		return d.agents.List(), nil
+	case MethodAgentSet:
+		return d.setAgent(params)
 	case MethodSessionStart:
 		return d.startSession(ctx, params)
 	case MethodSessionStop:
@@ -44,6 +53,24 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnknownMethod, method)
 	}
+}
+
+// setAgent applies one switch change. The request names the agent, so a request
+// that names none cannot be guessed at.
+func (d *Daemon) setAgent(params json.RawMessage) (any, error) {
+	var req SetAgentRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", MethodAgentSet, err)
+	}
+	if req.ID == "" {
+		return nil, fmt.Errorf("%s: empty agent id: %w", MethodAgentSet, agent.ErrNoAgent)
+	}
+
+	entry, err := d.agents.Set(req.ID, req.Change)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", MethodAgentSet, err)
+	}
+	return entry, nil
 }
 
 func (d *Daemon) status() Status {

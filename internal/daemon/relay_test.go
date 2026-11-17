@@ -76,7 +76,16 @@ func startACPHost(t *testing.T, dir, id, token string) *host.Host {
 func runDaemon(t *testing.T, dir, token string) *Daemon {
 	t.Helper()
 
-	d := New(Config{Channel: "test", Token: token, StateDir: dir, Log: discardLogger()}, nil)
+	return runDaemonWith(t, Config{Channel: "test", Token: token, StateDir: dir})
+}
+
+// runDaemonWith is runDaemon for a test that also needs its own config
+// directory, which is where the agent adapters and switches live.
+func runDaemonWith(t *testing.T, cfg Config) *Daemon {
+	t.Helper()
+
+	cfg.Log = discardLogger()
+	d := New(cfg, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -95,7 +104,7 @@ func runDaemon(t *testing.T, dir, token string) *Daemon {
 
 	deadline := time.Now().Add(waitFor)
 	for time.Now().Before(deadline) {
-		nc, err := ipc.DialConn(ctx, d.Addr(), dir)
+		nc, err := ipc.DialConn(ctx, d.Addr(), cfg.StateDir)
 		if err == nil {
 			_ = nc.Close()
 			return d

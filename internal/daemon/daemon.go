@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -31,6 +32,8 @@ type Config struct {
 	Token string
 	// StateDir holds host records; it is also the socket directory on Unix.
 	StateDir string
+	// ConfigDir holds adapters and switches; empty means StateDir/config.
+	ConfigDir string
 	// HostBinary is the flt-session-host executable spawned for new sessions.
 	HostBinary string
 	// AttachTimeout bounds the wait for one host during a fleet scan. Zero uses
@@ -76,6 +79,13 @@ type StatusEntry struct {
 	// session's host. A session whose host died, or that another client
 	// attached to directly, reports false.
 	Reachable bool `json:"reachable"`
+}
+
+// SetAgentRequest changes one agent's switches. The id names the agent, so a
+// request without one is refused rather than applied to a guess.
+type SetAgentRequest struct {
+	ID     string       `json:"id"`
+	Change agent.Change `json:"change"`
 }
 
 // StartRequest asks the daemon for a session.
@@ -147,10 +157,17 @@ type Daemon struct {
 	// sees each update exactly once, and because a log has to outlive the host
 	// that produced it.
 	transcripts *transcript.Store
+	// agents is the catalogue this machine can offer; it holds no handles.
+	agents *agent.Catalog
 }
 
 // New builds a daemon. Call Run to serve.
 func New(cfg Config, spawn Spawner) *Daemon {
+	configDir := cfg.ConfigDir
+	if configDir == "" {
+		configDir = filepath.Join(cfg.StateDir, "config")
+	}
+
 	return &Daemon{
 		cfg:         cfg,
 		reg:         session.NewRegistry(cfg.StateDir),
@@ -160,6 +177,7 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		baselines:   make(map[session.ID]string),
 		comments:    comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
 		transcripts: transcript.NewStore(filepath.Join(cfg.StateDir, "transcripts")),
+		agents:      agent.New(configDir),
 	}
 }
 

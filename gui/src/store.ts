@@ -97,6 +97,124 @@ export function splitArgs(line: string): string[] {
   return args;
 }
 
+// AgentEntry is one agent as the daemon describes it. The record is a preset
+// plus this machine's and the user's answers, and the GUI shows it as given: a
+// picker that reshaped it could offer an agent the daemon cannot start.
+export interface AgentEntry {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  mode: string;
+  // needs names what the agent requires besides its binary, such as a login.
+  needs: string;
+  description: string;
+  // source is "builtin" or the adapter file that defined the preset.
+  source: string;
+  installed: boolean;
+  path: string;
+  enabled: boolean;
+  chat: boolean;
+  cli: boolean;
+}
+
+export interface AgentListing {
+  agents: AgentEntry[];
+  // problems are adapter or switch files the daemon could not read. They are
+  // reported beside the list rather than instead of it.
+  problems: string[];
+}
+
+// AgentChange is one switch update. An absent field keeps the stored value, so a
+// click sends only what it flipped.
+export interface AgentChange {
+  enabled?: boolean;
+  chat?: boolean;
+  cli?: boolean;
+}
+
+// SetAgentRequest names the agent a change applies to.
+export interface SetAgentRequest {
+  id: string;
+  change: AgentChange;
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+// parseAgents reads the daemon's listing without trusting it. A missing switch
+// becomes the conservative value: not installed, not enabled, because offering
+// an agent this build cannot start is worse than a shorter list.
+export function parseAgents(raw: unknown): AgentListing {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const agents = Array.isArray(value.agents) ? value.agents : [];
+
+  return {
+    agents: agents.map((entry) => {
+      const agent = (entry ?? {}) as Record<string, unknown>;
+      const id = asString(agent.id);
+      return {
+        id,
+        name: asString(agent.name, id),
+        command: asString(agent.command),
+        args: asStringList(agent.args),
+        mode: asString(agent.mode, "acp"),
+        needs: asString(agent.needs),
+        description: asString(agent.description),
+        source: asString(agent.source, "builtin"),
+        installed: asBoolean(agent.installed),
+        path: asString(agent.path),
+        enabled: asBoolean(agent.enabled),
+        chat: asBoolean(agent.chat),
+        cli: asBoolean(agent.cli),
+      };
+    }),
+    problems: asStringList(value.problems),
+  };
+}
+
+// matchesAgent is what the picker's search box means: every word the user typed
+// has to appear somewhere they can see or would type — the name, the id, the
+// command they might already know, the one-line description — in any case.
+function matchesAgent(agent: AgentEntry, words: string[]): boolean {
+  const haystack = [agent.name, agent.id, agent.command, agent.description]
+    .join(" ")
+    .toLowerCase();
+  return words.every((word) => haystack.includes(word));
+}
+
+// filterAgents narrows what a search box typed. An empty query keeps the order
+// the daemon chose, which is the order the builtins were listed in.
+export function filterAgents(agents: readonly AgentEntry[], query: string): AgentEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter((word) => word !== "");
+  if (words.length === 0) {
+    return agents.slice();
+  }
+  return agents.filter((agent) => matchesAgent(agent, words));
+}
+
+// usableAgents is what a new session of this mode may start. A preset is one
+// complete recipe — command, args and mode together — so an agent whose own mode
+// differs is not offered: its args would launch the other protocol.
+//
+// The switch has to agree too: the purpose follows the mode, and the user can
+// turn an agent off for it. This is the only place that decides, so the picker
+// and the settings page cannot disagree about what is available.
+export function usableAgents(
+  agents: readonly AgentEntry[],
+  mode: "acp" | "pty",
+): AgentEntry[] {
+  const purpose = mode === "acp" ? "chat" : "cli";
+  return agents.filter(
+    (agent) =>
+      agent.installed &&
+      agent.enabled &&
+      agent.mode === mode &&
+      (purpose === "chat" ? agent.chat : agent.cli),
+  );
+}
+
 export interface DiffFile {
   path: string;
   old_path?: string;

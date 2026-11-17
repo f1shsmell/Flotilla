@@ -174,25 +174,75 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   try {
     if (form !== "") {
       await waitFor(target, "Start", deadline);
+
+      // The picker replaced the two free-text command fields with a list, so a
+      // form run names an agent (or asks for the custom form) instead of typing
+      // into positional inputs. The mode is set first: the list it offers
+      // depends on it.
+      await target.webContents.executeJavaScript(`(() => {
+        const fields = ${form};
+        if (!fields.mode) { return; }
+        const select = document.querySelector(".agent-picker select");
+        if (!select) { return; }
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype, "value").set;
+        setter.call(select, fields.mode);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      await step();
+
+      const formMode = (await target.webContents.executeJavaScript(`(() => {
+        const fields = ${form};
+        if (fields.agent !== undefined) {
+          // Match the name span exactly: a substring match would pick whichever
+          // longer name happens to contain it first.
+          const options = [...document.querySelectorAll(".agent-option")];
+          const option = options.find(
+            (button) => (button.querySelector("span")?.textContent ?? "").trim()
+              === fields.agent);
+          if (!option) {
+            throw new Error("no agent option named " + fields.agent + "; options were: " +
+              options.map((button) => button.innerText).join(", "));
+          }
+          option.click();
+          return "agent";
+        }
+        const link = [...document.querySelectorAll(".new-session button")]
+          .find((button) => button.textContent.includes("custom command"));
+        if (!link) { throw new Error("no custom-command link"); }
+        link.click();
+        return "custom";
+      })()`)) as string;
+      await step();
+
       await target.webContents.executeJavaScript(`(() => {
         const fields = ${form};
         const setValue = (element, value) => {
-          const proto = element.tagName === "SELECT"
-            ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, "value").set;
           setter.call(element, value);
-          element.dispatchEvent(new Event(
-            element.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+          element.dispatchEvent(new Event("input", { bubbles: true }));
         };
-        const [command, args, dir, repo, branch] =
-          document.querySelectorAll(".new-session input");
-        setValue(command, fields.command);
-        setValue(args, fields.args ?? "");
-        setValue(dir, fields.dir ?? "");
-        setValue(repo, fields.repo ?? "");
-        setValue(branch, fields.branch ?? "");
-        if (fields.mode) {
-          setValue(document.querySelector(".new-session select"), fields.mode);
+        const inputs = [...document.querySelectorAll(".new-session input")];
+        const set = (placeholder, value) => {
+          if (value === undefined || value === null) { return; }
+          const input = inputs.find(
+            (element) => (element.placeholder ?? "").includes(placeholder));
+          if (!input) { throw new Error("no input with placeholder " + placeholder); }
+          setValue(input, value);
+        };
+        if (${JSON.stringify(formMode)} === "custom") {
+          set("agent command", fields.command);
+          set("arguments", fields.args ?? "");
+        }
+        set("working directory", fields.dir ?? "");
+        set("worktree of repository", fields.repo ?? "");
+        set("new branch", fields.branch ?? "");
+        const submit = document.querySelector(".new-session button[type=submit]");
+        if (!submit || submit.disabled) {
+          // requestSubmit() on a disabled button does nothing, so a form the
+          // smoke meant to submit would otherwise wait out the whole deadline.
+          throw new Error("the form's Start button is disabled");
         }
         document.querySelector(".new-session").requestSubmit();
       })()`);
