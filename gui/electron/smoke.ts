@@ -152,6 +152,33 @@ async function waitForTerminal(
   throw new Error(`${needle} never reached the terminal; screen was:\n${text}`);
 }
 
+// waitForCondition polls one expression until it is truthy. Class changes are
+// what the settings page uses to show a switch that has been stored, and they
+// never reach innerText, so the body text waits above cannot see them.
+async function waitForCondition(
+  target: BrowserWindow,
+  expression: string,
+  what: string,
+  deadline: number,
+): Promise<void> {
+  let last = "";
+  while (Date.now() < deadline) {
+    last = (await target.webContents.executeJavaScript(
+      `(() => { try { return (${expression}) ? "yes" : ""; } catch (cause) { return "error: " + cause.message; } })()`,
+    )) as string;
+    if (last === "yes") {
+      return;
+    }
+    await step();
+  }
+  throw new Error(`${what} never happened (last: ${last}); body was:\n${await body(target)}`);
+}
+
+// switchFor is the enabled checkbox of one agent on the settings page.
+function switchFor(name: string): string {
+  return `document.querySelector('input[aria-label="enable ${name}"]')`;
+}
+
 export async function run(target: BrowserWindow): Promise<boolean> {
   const expect = process.env.FLT_GUI_SMOKE_EXPECT ?? "";
   const expectTerminal = process.env.FLT_GUI_SMOKE_TERMINAL ?? "";
@@ -162,6 +189,9 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const diffFile = process.env.FLT_GUI_SMOKE_DIFF ?? "";
   const diffLine = process.env.FLT_GUI_SMOKE_PATCH ?? "";
   const note = process.env.FLT_GUI_SMOKE_NOTE ?? "";
+  // FLT_GUI_SMOKE_AGENTS names an agent whose Enabled switch the run flips on
+  // the settings page, then flips back. It is the settings page's walk.
+  const agentsAgent = process.env.FLT_GUI_SMOKE_AGENTS ?? "";
   const deadline = Date.now() + 120000;
 
   target.webContents.on("render-process-gone", (_event, details) => {
@@ -274,6 +304,64 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (agentsAgent !== "") {
+      // Open the settings page from the fleet header, flip the named agent's
+      // Enabled switch, flip it back, and close the page. The switch is stored
+      // through the daemon, so what this waits for is the round trip, not a
+      // local state change.
+      await target.webContents.executeJavaScript(`(() => {
+        const open = [...document.querySelectorAll(".fleet header button")]
+          .find((button) => button.textContent.trim() === "Agents");
+        if (!open) { throw new Error("no Agents button in the fleet header"); }
+        open.click();
+      })()`);
+      // Wait for the switch itself, not for the page's header: the header says
+      // "0 installed · 0 known" before the catalogue has been read, so a text
+      // wait would pass on an empty table and then look for a row that is not
+      // there yet.
+      await waitForCondition(
+        target,
+        `${switchFor(agentsAgent)} !== null`,
+        `the settings page to list a switch for ${agentsAgent}`,
+        deadline,
+      );
+
+      const before = (await target.webContents.executeJavaScript(
+        `(() => { const input = ${switchFor(agentsAgent)}; return input ? input.checked : null; })()`,
+      )) as boolean | null;
+      if (before === null) {
+        throw new Error(`the settings page has no enable switch for ${agentsAgent}`);
+      }
+
+      for (const wanted of [!before, before]) {
+        await target.webContents.executeJavaScript(
+          `(() => { ${switchFor(agentsAgent)}.click(); })()`,
+        );
+        await waitForCondition(
+          target,
+          `${switchFor(agentsAgent)}?.checked === ${wanted}`,
+          `${agentsAgent}'s switch to read ${wanted}`,
+          deadline,
+        );
+      }
+
+      await target.webContents.executeJavaScript(`(() => {
+        const back = [...document.querySelectorAll(".agent-settings header button")]
+          .find((button) => button.textContent.trim() === "Back");
+        if (!back) { throw new Error("no Back button on the settings page"); }
+        back.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!document.querySelector(".agent-settings")`,
+        "the settings page to close",
+        deadline,
+      );
+
+      console.log(`smoke: ok (agents: ${agentsAgent})`);
+      return true;
     }
 
     if (diffFile !== "") {
