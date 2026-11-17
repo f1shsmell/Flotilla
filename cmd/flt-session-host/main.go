@@ -40,6 +40,7 @@ func run(args []string) error {
 		seqBase    = fs.Uint64("seq-base", 0, "host number the first update continues from; zero starts at 1")
 		cols       = fs.Int("cols", 80, "initial PTY columns")
 		rows       = fs.Int("rows", 24, "initial PTY rows")
+		adapter    = fs.String("adapter", "", "JSON operational knowledge for the agent: blocked patterns, paste mode, resume arguments")
 		channel    = fs.String("channel", version.Channel, "release channel this host serves")
 		showVer    = fs.Bool("version", false, "print the build version and exit")
 		flagOutput = fs.Output()
@@ -72,6 +73,11 @@ func run(args []string) error {
 		return err
 	}
 
+	parsedAdapter, err := parseAdapter(*adapter)
+	if err != nil {
+		return err
+	}
+
 	paths, err := home.Resolve(*channel)
 	if err != nil {
 		return fmt.Errorf("resolve state paths: %w", err)
@@ -100,6 +106,7 @@ func run(args []string) error {
 		Args:     fs.Args(),
 		Dir:      *dir,
 		Policy:   parsedPolicy,
+		Adapter:  parsedAdapter,
 		SeqBase:  *seqBase,
 		Cols:     *cols,
 		Rows:     *rows,

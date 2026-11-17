@@ -22,7 +22,7 @@ import (
 )
 
 // errUnknownMethod reports a call this daemon does not serve.
-var errUnknownMethod = errors.New("daemon: unknown method")
+var errUnknownMethod = ipc.Class(errors.New("daemon: unknown method"), ipc.CodeUnknownMethod)
 
 // Config is what a daemon needs to serve a fleet.
 type Config struct {
@@ -169,11 +169,16 @@ func New(cfg Config, spawn Spawner) *Daemon {
 	}
 
 	return &Daemon{
-		cfg:         cfg,
-		reg:         session.NewRegistry(cfg.StateDir),
-		addr:        ipc.Address{Channel: cfg.Channel, Name: "daemon"},
-		spawn:       spawn,
-		relay:       newRelay(),
+		cfg:   cfg,
+		reg:   session.NewRegistry(cfg.StateDir),
+		addr:  ipc.Address{Channel: cfg.Channel, Name: "daemon"},
+		spawn: spawn,
+		// A frame that could not be delivered is worth a debug line: the client
+		// learns from its own connection closing, and this is what a postmortem
+		// reads when it asks why one window stopped updating.
+		relay: newRelay(func(err error) {
+			cfg.Log.Debug("deliver a queued frame failed", "err", err.Error())
+		}),
 		baselines:   make(map[session.ID]string),
 		comments:    comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
 		transcripts: transcript.NewStore(filepath.Join(cfg.StateDir, "transcripts")),
@@ -199,6 +204,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	l, err := ipc.Listen(d.addr, d.cfg.StateDir)
 	if err != nil {
+		// A channel this process cannot bind is a channel a live daemon already
+		// serves. Saying so, rather than "access denied", is what tells the GUI
+		// that the daemon it tried to start is not needed.
 		return fmt.Errorf("listen on %s: %w", d.addr, err)
 	}
 	defer func() { _ = l.Close() }()
@@ -235,6 +243,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 				return
 			}
 			d.cfg.Log.Info("client connected", "peer", conn.Peer())
+
+			// The window's name is what the per-client seen map is keyed by, and it is
+			// remembered for as long as the daemon runs — bounded by a table
+			// size, not by connection lifetime. A poll that failed and
+			// reconnected must not turn a turn the user already read back into
+			// an unread badge.
+			d.relay.track(conn.Client())
 		}(nc)
 	}
 }

@@ -162,7 +162,7 @@ func TestDaemonReportsSessionsItCanReach(t *testing.T) {
 	}
 	defer d.Detach()
 
-	raw, err := json.Marshal(d.status())
+	raw, err := json.Marshal(d.status(""))
 	if err != nil {
 		t.Fatalf("encode status: %v", err)
 	}

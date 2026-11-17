@@ -34,12 +34,12 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	// A bound connection speaks for one session, so every call on it belongs to
 	// that session rather than to the control plane.
 	if id, ok := d.relay.sessionOf(peer); ok {
-		return d.relayCall(ctx, id, method, params)
+		return d.relayCall(ctx, peer, id, method, params)
 	}
 
 	switch method {
 	case MethodStatus:
-		return d.status(), nil
+		return d.status(peer.Client()), nil
 	case MethodAgents:
 		return d.agents.List(), nil
 	case MethodAgentSet:
@@ -49,7 +49,7 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	case MethodSessionStop:
 		return d.stopSession(ctx, params)
 	case session.MethodAttach:
-		return d.attachClient(peer, params)
+		return d.attachClient(ctx, peer, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnknownMethod, method)
 	}
@@ -73,7 +73,12 @@ func (d *Daemon) setAgent(params json.RawMessage) (any, error) {
 	return entry, nil
 }
 
-func (d *Daemon) status() Status {
+// status reports the fleet to one client. A finished turn that client has
+// already looked at is idle for it and stays done for every other: `seen` is per
+// client, so the daemon — the only layer that knows which client asked — is what
+// projects it. A caller with no client name (a test, a raw CLI) sees what the
+// host said.
+func (d *Daemon) status(client string) Status {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -95,6 +100,7 @@ func (d *Daemon) status() Status {
 		if !reachable || !state.Valid() {
 			state = session.StateUnknown
 		}
+		state = projectSeen(state, d.relay.hasSeen(att.Record.ID, client))
 
 		st.Sessions = append(st.Sessions, StatusEntry{
 			ID:        att.Record.ID,
@@ -165,6 +171,12 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		seqBase = 0
 	}
 
+	// The adapter's operational knowledge comes from the catalogue, not from
+	// the caller: the request names a command, and the definition that belongs
+	// to that command is what decides how a blocked screen is recognised. A
+	// caller cannot hand the host patterns of its own.
+	adapter, _ := d.agents.AdapterForCommand(req.Command)
+
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
@@ -176,6 +188,7 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		SeqBase:  seqBase,
 		Cols:     req.Cols,
 		Rows:     req.Rows,
+		Adapter:  adapter,
 		Channel:  d.cfg.Channel,
 		StateDir: d.cfg.StateDir,
 	})
@@ -241,13 +254,17 @@ func worktreeFor(ctx context.Context, req StartRequest) (dir string, included, s
 	return created.Dir, created.Included, created.Skipped, nil
 }
 
+// lookup returns the attachment for id. The value is a copy, not a pointer into
+// the fleet: a caller reads it long after the lock is released, and the host's
+// own state changes underneath it.
 func (d *Daemon) lookup(id session.ID) *Attachment {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	for i := range d.fleet.Attachments {
 		if d.fleet.Attachments[i].Record.ID == id {
-			return &d.fleet.Attachments[i]
+			snapshot := d.fleet.Attachments[i]
+			return &snapshot
 		}
 	}
 	return nil
