@@ -30,6 +30,12 @@ func listen(addr Address, _ string) (Listener, error) {
 		SecurityDescriptor: sddl,
 	})
 	if err != nil {
+		// A pipe name that exists already belongs to a live daemon: Windows
+		// makes the second first-instance creation fail rather than hand over
+		// a second endpoint, and that is what keeps one channel to one daemon.
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return nil, fmt.Errorf("listen on %s: %w", addr, ErrLocked)
+		}
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
