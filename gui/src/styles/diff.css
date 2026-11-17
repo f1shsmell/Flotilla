@@ -1,0 +1,231 @@
+/* The diff review: the file list, the patch, and the notes on a line. */
+
+.diff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 0;
+  flex: 1;
+}
+
+.diff-bar {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.diff-bar select {
+  font: inherit;
+  color: var(--text);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-3);
+}
+
+/* The commit/push/PR row. It wraps because the window can be narrow, and a
+   control that scrolls out of reach is a control the user cannot find. */
+.git-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.git-actions input {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.git-actions p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.git-result {
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: var(--fs-tiny);
+}
+
+.git-result a {
+  color: var(--accent);
+}
+
+.diff-body {
+  display: grid;
+  grid-template-columns: var(--fleet-width) 1fr;
+  gap: var(--sp-4);
+  min-height: 0;
+  flex: 1;
+}
+
+.diff-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.diff-file {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--sp-3);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.diff-file.selected {
+  background: var(--panel);
+}
+
+.diff-path {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-status {
+  font-size: var(--fs-label);
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.diff-counts {
+  grid-column: 1 / -1;
+  font-size: var(--fs-label);
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.diff-patch {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: var(--sp-3) 0;
+}
+
+.patch-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--sp-3);
+  padding: 0 var(--sp-4);
+}
+
+.line-no {
+  min-width: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  text-align: right;
+  cursor: pointer;
+}
+
+.line-no:hover {
+  color: var(--accent);
+}
+
+.line-text {
+  white-space: pre;
+  flex: 1;
+}
+
+.patch-line.add .line-text {
+  background: var(--add-bg);
+  color: var(--add-text);
+}
+
+.patch-line.del .line-text {
+  background: var(--del-bg);
+  color: var(--del-text);
+}
+
+.patch-line.hunk .line-text {
+  color: var(--accent);
+}
+
+.patch-line.meta .line-text {
+  color: var(--muted);
+}
+
+/* The two spellings below are the whole-patch fallback the diff view keeps for
+   a patch it does not lay out line by line. They read the same tokens as the
+   per-line rules so one change re-colours both. */
+.diff-patch .add {
+  background: var(--add-bg);
+  color: var(--add-text);
+}
+
+.diff-patch .del {
+  background: var(--del-bg);
+  color: var(--del-text);
+}
+
+.diff-patch .hunk {
+  color: var(--accent);
+}
+
+.diff-patch .meta {
+  color: var(--muted);
+}
+
+.note {
+  flex-basis: 100%;
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+  margin: 2px 0 2px 52px;
+  padding: var(--sp-1) var(--sp-3);
+  border-left: 2px solid var(--warn);
+  background: var(--note-bg);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+.note-text {
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+.note-remove {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.note-compose {
+  flex-basis: 100%;
+  display: flex;
+  gap: var(--sp-2);
+  margin: 2px 0 var(--sp-1) 52px;
+}
+
+.note-compose input {
+  flex: 1;
+  font: inherit;
+  color: var(--text);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-3);
+}

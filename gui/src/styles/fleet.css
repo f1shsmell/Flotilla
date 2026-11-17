@@ -1,0 +1,202 @@
+/* The window frame and the fleet column: everything the user reads before a
+   session is open. */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--fleet-width) 1fr;
+  height: 100%;
+}
+
+.fleet {
+  border-right: 1px solid var(--line);
+  padding: var(--sp-6);
+  overflow-y: auto;
+}
+
+.fleet header {
+  display: grid;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-5);
+}
+
+.fleet h1 {
+  font-size: 18px;
+  margin: 0;
+  letter-spacing: 0.04em;
+}
+
+.sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.session-row-wrap {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.session-row {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--sp-3);
+  background: transparent;
+  border-color: transparent;
+}
+
+.session-row.selected {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.session-id {
+  font-family: var(--mono);
+}
+
+/* Ending a session is rare and must not read as the row's primary action. */
+.session-stop {
+  font-size: var(--fs-label);
+  padding: 2px var(--sp-2);
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.session-stop:hover {
+  border-color: var(--line);
+  color: inherit;
+}
+
+.badge {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.badge.ok {
+  color: var(--ok);
+}
+
+.badge.down {
+  color: var(--down);
+}
+
+/* Lifecycle badges. blocked and done are the states that ask something of the
+   user, so only they get colour; working is a quiet accent and idle/unknown
+   stay muted rather than claiming attention. */
+.badge.blocked {
+  color: var(--warn);
+}
+
+.badge.done {
+  color: var(--ok);
+}
+
+.badge.working {
+  color: var(--accent);
+}
+
+.badge.idle,
+.badge.unknown {
+  color: var(--muted);
+}
+
+.new-session {
+  display: grid;
+  gap: var(--sp-2);
+  /* 14px in the file this layout came from, which is between two scale steps:
+     keeping it is what makes the refactor a token change rather than a change
+     of look. */
+  margin-bottom: 14px;
+  padding-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.new-session p {
+  margin: 0;
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.new-session input,
+.new-session select {
+  font: inherit;
+  color: var(--text);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-3);
+  min-width: 0;
+}
+
+.new-session .row {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.new-session .row select {
+  flex: 1;
+}
+
+/* The picker's hint lines are sentences, not labels: the uppercase label style
+   above would make a whole sentence shout. */
+.new-session .agent-picker p {
+  font-size: var(--fs-tiny);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  /* A long catalogue scrolls inside the panel instead of pushing the fleet
+     list off the bottom of the window. */
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.agent-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--sp-3);
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 3px var(--sp-2);
+}
+
+.agent-option.selected {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.agent-option .mono {
+  font-size: var(--fs-label);
+  color: var(--muted);
+}
+
+button.link {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding: 2px 0;
+  text-align: left;
+  font-size: var(--fs-tiny);
+}
+
+button.link:hover:not(:disabled) {
+  border-color: transparent;
+  text-decoration: underline;
+}

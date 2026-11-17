@@ -1,0 +1,68 @@
+/* Reset and the elements every view shares. Nothing here names a component:
+   a rule that belongs to one belongs in that component's file. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--fs-body) / 1.5 var(--ui);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-4);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1220;
+  font-weight: 600;
+}
+
+/* Text helpers. They are classes because several components need the same
+   three meanings, and a component may not restyle a word it did not define. */
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.error {
+  color: var(--down);
+}
+
+.warn {
+  color: var(--warn);
+  font-size: var(--fs-tiny);
+}
+
+.empty {
+  color: var(--muted);
+}
