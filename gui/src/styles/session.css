@@ -85,6 +85,15 @@
   font-style: italic;
 }
 
+/* The user's own message. It is the one line in the log the agent did not
+   write, so it is marked by its place and its edge rather than by colour: a
+   status colour here would read as a state the session is in. */
+.entry.user {
+  border-left: 2px solid var(--line);
+  padding-left: var(--sp-3);
+  color: var(--dim);
+}
+
 .entry.tool {
   font-size: var(--fs-small);
   color: var(--dim);

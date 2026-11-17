@@ -78,6 +78,7 @@ export const constants = {
     TokenSize: "32",
   },
   session: {
+    KindUser: "user",
     ModeACP: "acp",
     ModePTY: "pty",
     StateBlocked: "blocked",
@@ -284,6 +285,7 @@ export const wireTypes = {
     "id": { go: "ID", type: "ID" },
   },
   "session.UpdateMessage": {
+    "cont": { go: "Continued", type: "bool", optional: true },
     "host_seq": { go: "HostSeq", type: "uint64", optional: true },
     "kind": { go: "Kind", type: "string" },
     "seq": { go: "Seq", type: "uint64", optional: true },

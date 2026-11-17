@@ -334,7 +334,7 @@ export function commentPrompt(list: Comment[]): string {
     .join("\n");
 }
 
-export type EntryKind = "message" | "thought" | "tool" | "plan" | "other";
+export type EntryKind = "message" | "thought" | "tool" | "plan" | "user" | "other";
 
 export interface Entry {
   key: string;
@@ -499,6 +499,10 @@ function foldUpdate(state: SessionState, value: Record<string, unknown>): Sessio
   const toolCallId = asString(value.tool_call_id);
   const toolTitle = asString(value.tool_title);
   const toolStatus = asString(value.tool_status);
+  // cont marks a piece of one update that was split to fit a frame. The wire says
+  // so explicitly because the kind and the text cannot: a second prompt is the
+  // same shape as the second piece of a long one.
+  const continued = value.cont === true;
 
   if (kind === "tool" && toolCallId !== "") {
     const index = state.entries.findIndex((entry) => entry.key === toolCallId);
@@ -527,12 +531,13 @@ function foldUpdate(state: SessionState, value: Record<string, unknown>): Sessio
     return state;
   }
 
-  // An agent streams one message in pieces. They belong in one paragraph, so a
-  // chunk of the same kind as the last entry extends it instead of starting a
-  // new one; anything else (a thought after a message, a tool call) breaks the
-  // run.
+  // An agent streams one message in pieces, and one that is too large for a
+  // frame is split on the wire. Both belong in one paragraph, so a chunk that
+  // says it continues the line before extends it instead of starting a new one;
+  // anything else (a thought after a message, a tool call, a second prompt)
+  // breaks the run.
   const last = state.entries[state.entries.length - 1];
-  if (last && last.kind === kind && (kind === "message" || kind === "thought")) {
+  if (last && last.kind === kind && (continued || kind === "message" || kind === "thought")) {
     const entries = state.entries.slice();
     entries[entries.length - 1] = { ...last, text: last.text + text };
     return { ...state, entries };

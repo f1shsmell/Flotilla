@@ -244,6 +244,67 @@ describe("session log", () => {
     ]);
   });
 
+  it("keeps the user's message as its own entry, ahead of the reply", () => {
+    // The daemon stores the prompt before the turn runs, so it arrives first
+    // and the agent's reply follows it.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { seq: 1, kind: "user", text: "why" });
+    state = applyUpdate(state, { seq: 2, kind: "message", text: "because" });
+    state = applyUpdate(state, { seq: 3, kind: "user", text: "and then" });
+    state = applyUpdate(state, { seq: 4, kind: "message", text: "that" });
+
+    expect(state.entries.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["user", "why"],
+      ["message", "because"],
+      ["user", "and then"],
+      ["message", "that"],
+    ]);
+  });
+
+  it("does not merge a user message into a streamed reply", () => {
+    // Both carry text, so a merge rule that keyed on text alone would run the
+    // question into the answer as one paragraph.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "message", text: "answer" });
+    state = applyUpdate(state, { kind: "user", text: "question" });
+
+    expect(state.entries.map((entry) => entry.kind)).toEqual(["message", "user"]);
+    expect(state.entries[0].text).toBe("answer");
+    expect(state.entries[1].text).toBe("question");
+  });
+
+  it("puts two prompts in a row in separate entries", () => {
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "user", text: "first" });
+    state = applyUpdate(state, { kind: "user", text: "second" });
+
+    expect(state.entries.map((entry) => entry.text)).toEqual(["first", "second"]);
+  });
+
+  it("joins the pieces of one message the wire had to split", () => {
+    // cont is the wire's own statement that the piece belongs to the line
+    // above; the kind alone cannot tell a split from a second message.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "user", text: "a long prom" });
+    state = applyUpdate(state, { kind: "user", text: "pt, split", cont: true });
+    state = applyUpdate(state, { kind: "user", text: " on a frame", cont: true });
+
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0].text).toBe("a long prompt, split on a frame");
+  });
+
+  it("does not join a continuation to a line of another kind", () => {
+    // cont says the piece belongs to the line above, not that it belongs to
+    // whatever the last entry happens to be: a split message that follows a
+    // thought still starts its own line.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "thought", text: "thinking" });
+    state = applyUpdate(state, { kind: "message", text: "the reply", cont: true });
+
+    expect(state.entries.map((entry) => entry.kind)).toEqual(["thought", "message"]);
+    expect(state.entries[1].text).toBe("the reply");
+  });
+
   it("ignores an update that carries nothing", () => {
     const state = applyUpdate(newSession("s", "acp"), { kind: "other" });
     expect(state.entries).toHaveLength(0);
