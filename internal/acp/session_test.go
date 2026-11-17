@@ -247,6 +247,56 @@ func sessErrPlaceholder(ctx context.Context) error {
 	return nil
 }
 
+// TestAnEmptyWorkspaceFallsBackToTheLaunchDirectory pins the fix for a session
+// the agent used to refuse: an empty workspace is not sent as an empty cwd, and
+// the directory the agent runs in is the one its file requests are checked
+// against.
+//
+// The fake names a session after the last segment of its cwd, so the id says
+// which directory the agent was told to run in.
+func TestAnEmptyWorkspaceFallsBackToTheLaunchDirectory(t *testing.T) {
+	binary := fakeAgentBinary(t)
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	t.Cleanup(cancel)
+
+	sess, err := Open(ctx, Launch{Command: binary, Dir: dir}, Config{Policy: Auto})
+	if err != nil {
+		t.Fatalf("open a session with no workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	if got, want := string(sess.ID()), "fake-"+filepath.Base(dir); got != want {
+		t.Fatalf("session %q, want %q: the agent was told the wrong cwd", got, want)
+	}
+}
+
+// TestANamedWorkspaceWinsOverTheLaunchDirectory pins the order: a caller that
+// names a workspace keeps it even when the agent process runs somewhere else,
+// so the file boundary and the session agree on the directory the caller chose.
+func TestANamedWorkspaceWinsOverTheLaunchDirectory(t *testing.T) {
+	binary := fakeAgentBinary(t)
+	workspace := t.TempDir()
+	launchDir := t.TempDir()
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	t.Cleanup(cancel)
+
+	sess, err := Open(ctx, Launch{Command: binary, Dir: launchDir}, Config{
+		Workspace: workspace,
+		Policy:    Auto,
+	})
+	if err != nil {
+		t.Fatalf("open a session: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	if got, want := string(sess.ID()), "fake-"+filepath.Base(workspace); got != want {
+		t.Fatalf("session %q, want %q: the launch directory overrode the workspace", got, want)
+	}
+}
+
 // TestCloseStopsTheAgentProcess pins the teardown: the child is gone after
 // Close, so a session cannot leak an agent.
 func TestCloseStopsTheAgentProcess(t *testing.T) {
