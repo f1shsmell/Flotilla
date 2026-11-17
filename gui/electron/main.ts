@@ -1,13 +1,23 @@
 import path from "node:path";
 
-import { app, BrowserWindow, ipcMain, type WebContents } from "electron";
+import { randomUUID } from "node:crypto";
+
+import { app, BrowserWindow, ipcMain, shell, type WebContents } from "electron";
 
 import { DaemonClient } from "./client";
+import { methods } from "./contract";
 import { STREAM_INPUT } from "./wire";
 import { ensure } from "./daemon";
+import { Coalescer } from "./stream";
 import { readUiState, saveUiState, type UiState } from "./uiState";
 
 const channel = process.env.FLT_CHANNEL ?? "stable";
+
+// clientId names this window on every connection it opens. The daemon answers a
+// per-window question from it — has this window already read the finished turn —
+// so the control connection that polls the fleet and the session connection
+// that reports seen must carry the same name.
+const clientId = `gui-${randomUUID()}`;
 
 function userData(): string {
   return app.getPath("userData");
@@ -22,8 +32,16 @@ const turnTimeoutMs = 30 * 60 * 1000;
 const writeTimeoutMs = 5 * 60 * 1000;
 
 // links are the session connections this window holds. The daemon is the only
-// client a host has, so every window asks the daemon for its own link.
-const links = new Map<string, { client: DaemonClient; attached: unknown }>();
+// client a host has, so every window asks the daemon for its own link. The
+// coalescer is per link: one session's bytes merge among themselves and never
+// wait on another session's flood.
+interface Link {
+  client: DaemonClient;
+  attached: unknown;
+  bytes: Coalescer;
+}
+
+const links = new Map<string, Link>();
 
 let control: DaemonClient | null = null;
 let window: BrowserWindow | null = null;
@@ -40,32 +58,44 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
     return existing.attached;
   }
 
+  // Terminal bytes are merged here, in the main process, before they cross the
+  // renderer boundary: one message per stream per turn of the event loop is
+  // what keeps a log flood from becoming a frame per PTY read.
+  const bytes = new Coalescer((chunk) => {
+    send(target, {
+      type: "data",
+      session: chunk.session,
+      stream: chunk.stream,
+      bytes: chunk.bytes,
+    });
+  });
+
   const client = await ensure({
     channel,
+    client: clientId,
     handlers: {
       onNotification: (method, params) => {
-        if (method === "session.update") {
+        if (method === methods.session.MethodUpdate) {
           send(target, { type: "update", session: sessionId, update: params });
         }
-        if (method === "session.permission") {
+        if (method === methods.session.MethodPermission) {
           send(target, { type: "permission", session: sessionId, question: params });
         }
         // A lifecycle change is what lets the fleet show a session as blocked
         // or done without polling the host for it.
-        if (method === "session.state") {
+        if (method === methods.session.MethodState) {
           send(target, { type: "state", session: sessionId, state: params });
         }
       },
       onData: (stream, payload) => {
-        send(target, {
-          type: "data",
-          session: sessionId,
-          stream,
-          base64: payload.toString("base64"),
-        });
+        bytes.push(sessionId, stream, payload);
       },
       onClose: (error) => {
         links.delete(sessionId);
+        // Bytes already accepted still reach the renderer: the view they belong
+        // to is what the close event is about to end, and dropping them would
+        // truncate the screen a user is reading.
+        bytes.close();
         send(target, { type: "closed", session: sessionId, error: error?.message });
       },
     },
@@ -73,7 +103,7 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
 
   let attached: unknown;
   try {
-    attached = await client.call("session.attach", { id: sessionId });
+    attached = await client.call(methods.session.MethodAttach, { id: sessionId });
   } catch (error) {
     // A connection that never attached has nothing to carry: closing it here is
     // what keeps a failed click from leaving a pipe open on the daemon.
@@ -81,7 +111,7 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
     throw error;
   }
 
-  links.set(sessionId, { client, attached });
+  links.set(sessionId, { client, attached, bytes });
   return attached;
 }
 
@@ -95,15 +125,28 @@ function link(sessionId: string): DaemonClient {
   return held.client;
 }
 
+// dropLink closes one session's connection and releases its queue. The bytes it
+// was still holding go out first: a view that is being torn down may still be
+// painting what already arrived.
+function dropLink(sessionId: string): void {
+  const held = links.get(sessionId);
+  if (held === undefined) {
+    return;
+  }
+  links.delete(sessionId);
+  held.bytes.close();
+  held.client.close();
+}
+
 function register(): void {
   ipcMain.handle("flotilla:fleet", async () => {
     // One control connection is reused: the fleet is polled, and a handshake per
     // poll would be noise on the daemon's accept loop.
     if (!control || !control.alive) {
-      control = await ensure({ channel });
+      control = await ensure({ channel, client: clientId });
     }
     try {
-      return await control.call("daemon.status");
+      return await control.call(methods.daemon.MethodStatus);
     } catch (error) {
       control?.close();
       control = null;
@@ -115,10 +158,10 @@ function register(): void {
   // what is installed or which agent a switch turned off.
   ipcMain.handle("flotilla:agents", async () => {
     if (!control || !control.alive) {
-      control = await ensure({ channel });
+      control = await ensure({ channel, client: clientId });
     }
     try {
-      return await control.call("daemon.agents");
+      return await control.call(methods.daemon.MethodAgents);
     } catch (error) {
       // control is shared with the fleet poll, start and stop. A daemon that
       // speaks the wire but not this method (one from before an upgrade) answers
@@ -133,28 +176,27 @@ function register(): void {
 
   ipcMain.handle("flotilla:agent:set", async (_event, request: unknown) => {
     if (!control || !control.alive) {
-      control = await ensure({ channel });
+      control = await ensure({ channel, client: clientId });
     }
-    return control.call("daemon.agent.set", request);
+    return control.call(methods.daemon.MethodAgentSet, request);
   });
 
   ipcMain.handle("flotilla:start", async (_event, request: unknown) => {
     if (!control || !control.alive) {
-      control = await ensure({ channel });
+      control = await ensure({ channel, client: clientId });
     }
     // Starting a session spawns a host, which spawns an agent: give it room.
-    return control.call("session.start", request, 60000);
+    return control.call(methods.daemon.MethodSessionStart, request, 60000);
   });
 
   ipcMain.handle("flotilla:stop", async (_event, sessionId: string) => {
     if (!control || !control.alive) {
-      control = await ensure({ channel });
+      control = await ensure({ channel, client: clientId });
     }
     // The window may hold a link to this session; stopping ends it too, so the
     // link is dropped here rather than left pointing at a closed pipe.
-    links.get(sessionId)?.client.close();
-    links.delete(sessionId);
-    return control.call("session.stop", { id: sessionId }, 30000);
+    dropLink(sessionId);
+    return control.call(methods.session.MethodStop, { id: sessionId }, 30000);
   });
 
   ipcMain.handle("flotilla:detach", async (_event, sessionId: string) => {
@@ -162,8 +204,7 @@ function register(): void {
     // session then keeps its recent output for the next visit instead of
     // streaming it to a view that no longer exists. The session itself keeps
     // running, which is the whole point of the two-process model.
-    links.get(sessionId)?.client.close();
-    links.delete(sessionId);
+    dropLink(sessionId);
   });
 
   ipcMain.handle("flotilla:open", async (event, sessionId: string) =>
@@ -171,24 +212,25 @@ function register(): void {
   );
 
   ipcMain.handle("flotilla:prompt", async (_event, sessionId: string, text: string) =>
-    link(sessionId).call("session.prompt", { text }, turnTimeoutMs),
+    link(sessionId).call(methods.session.MethodPrompt, { text }, turnTimeoutMs),
   );
 
   ipcMain.handle("flotilla:seen", async (_event, sessionId: string) => {
-    // Looking at a session is what turns done into idle. It goes to the host
-    // through the session's own link, because seen state belongs to the
-    // session, not to the control plane.
-    await link(sessionId).call("session.seen", {});
+    // Looking at a session is what turns done into idle, and it belongs to the
+    // window that looked: the daemon records it against this window's client
+    // name, so another window's badge stays up. The call travels on the
+    // session's own link because that is the connection bound to the session.
+    await link(sessionId).call(methods.session.MethodSeen, {});
   });
 
   ipcMain.handle("flotilla:cancel", async (_event, sessionId: string) => {
-    await link(sessionId).call("session.cancel", {});
+    await link(sessionId).call(methods.session.MethodCancel, {});
   });
 
   ipcMain.handle(
     "flotilla:answer",
     async (_event, sessionId: string, questionId: string, optionId: string) => {
-      await link(sessionId).call("session.permission.reply", {
+      await link(sessionId).call(methods.session.MethodPermissionReply, {
         id: questionId,
         option_id: optionId,
       });
@@ -203,11 +245,11 @@ function register(): void {
     "flotilla:diff",
     async (_event, sessionId: string, scope: string, path?: string) =>
       // git can be slow on a large repository; this is a read, not a turn.
-      link(sessionId).call("session.diff", { scope, path }, 30000),
+      link(sessionId).call(methods.session.MethodDiff, { scope, path }, 30000),
   );
 
   ipcMain.handle("flotilla:comments", async (_event, sessionId: string) =>
-    link(sessionId).call("session.comment.list", {}),
+    link(sessionId).call(methods.session.MethodCommentList, {}),
   );
 
   // The three writes a review ends with. They are long calls: a push waits on
@@ -215,35 +257,35 @@ function register(): void {
   ipcMain.handle(
     "flotilla:commit",
     async (_event, sessionId: string, message: string) =>
-      link(sessionId).call("session.commit", { message }, 60000),
+      link(sessionId).call(methods.session.MethodCommit, { message }, 60000),
   );
 
   ipcMain.handle("flotilla:push", async (_event, sessionId: string) =>
-    link(sessionId).call("session.push", {}, writeTimeoutMs),
+    link(sessionId).call(methods.session.MethodPush, {}, writeTimeoutMs),
   );
 
   ipcMain.handle(
     "flotilla:pr",
     async (_event, sessionId: string, request: unknown) =>
-      link(sessionId).call("session.pr", request, writeTimeoutMs),
+      link(sessionId).call(methods.session.MethodPullRequest, request, writeTimeoutMs),
   );
 
   ipcMain.handle(
     "flotilla:comment:add",
     async (_event, sessionId: string, comment: unknown) =>
-      link(sessionId).call("session.comment.add", comment),
+      link(sessionId).call(methods.session.MethodCommentAdd, comment),
   );
 
   ipcMain.handle(
     "flotilla:comment:remove",
     async (_event, sessionId: string, id: string) =>
-      link(sessionId).call("session.comment.remove", { id }),
+      link(sessionId).call(methods.session.MethodCommentRemove, { id }),
   );
 
   ipcMain.handle(
     "flotilla:resize",
     async (_event, sessionId: string, cols: number, rows: number) => {
-      await link(sessionId).call("session.resize", { cols, rows });
+      await link(sessionId).call(methods.session.MethodResize, { cols, rows });
     },
   );
 
@@ -282,6 +324,27 @@ function createWindow(): void {
     }
   });
 
+  // The renderer is a local page with a known set of destinations. A link that
+  // leaves it — a pull request URL rendered in the diff panel — belongs to the
+  // user's browser, and anything else is a navigation this window does not
+  // serve: letting either through would turn one click into a second window
+  // with its own privileges.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url === window?.webContents.getURL()) {
+      return;
+    }
+    event.preventDefault();
+    if (/^https?:\/\//.test(url)) {
+      void shell.openExternal(url);
+    }
+  });
+
   window.once("ready-to-show", () => window?.show());
   void window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
@@ -298,11 +361,11 @@ function createWindow(): void {
   window.on("closed", () => {
     window = null;
     // The sessions keep running in their hosts; this window's connections do
-    // not outlive it.
-    for (const [, held] of links) {
-      held.client.close();
+    // not outlive it. Anything still queued goes out first: a window that is
+    // closing has a last frame worth painting.
+    for (const [sessionId] of [...links]) {
+      dropLink(sessionId);
     }
-    links.clear();
   });
 }
 
