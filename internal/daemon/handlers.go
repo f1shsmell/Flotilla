@@ -177,11 +177,17 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	// caller cannot hand the host patterns of its own.
 	adapter, _ := d.agents.AdapterForCommand(req.Command)
 
+	// A bundled agent ships beside this build rather than on PATH, and the host
+	// spawns it with exec, which does not look there. The name is turned into
+	// the path the build was tested with before the spawn names it; anything
+	// this build does not ship comes back unchanged.
+	command := d.agents.Resolve(req.Command)
+
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
 		Mode:     req.Mode,
-		Command:  req.Command,
+		Command:  command,
 		Args:     req.Args,
 		Dir:      req.Dir,
 		Policy:   req.Policy,
