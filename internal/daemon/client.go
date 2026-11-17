@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -44,6 +45,20 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("decode daemon status: %w", err)
 	}
 	return st, nil
+}
+
+// Agents lists the agents this machine can offer, with their switches.
+func (c *Client) Agents(ctx context.Context) (agent.Listing, error) {
+	raw, err := c.conn.Call(ctx, MethodAgents, struct{}{})
+	if err != nil {
+		return agent.Listing{}, fmt.Errorf("ask the daemon for its agents: %w", err)
+	}
+
+	var list agent.Listing
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return agent.Listing{}, fmt.Errorf("decode the agent listing: %w", err)
+	}
+	return list, nil
 }
 
 // StartSession asks the daemon to take a session.

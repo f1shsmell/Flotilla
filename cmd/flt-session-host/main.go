@@ -37,6 +37,7 @@ func run(args []string) error {
 		command    = fs.String("command", "", "agent command to run")
 		dir        = fs.String("dir", "", "working directory for the agent")
 		policy     = fs.String("policy", acp.Supervised.String(), "ACP permission policy: supervised, accept-edits, auto or full-access")
+		seqBase    = fs.Uint64("seq-base", 0, "host number the first update continues from; zero starts at 1")
 		cols       = fs.Int("cols", 80, "initial PTY columns")
 		rows       = fs.Int("rows", 24, "initial PTY rows")
 		channel    = fs.String("channel", version.Channel, "release channel this host serves")
@@ -99,6 +100,7 @@ func run(args []string) error {
 		Args:     fs.Args(),
 		Dir:      *dir,
 		Policy:   parsedPolicy,
+		SeqBase:  *seqBase,
 		Cols:     *cols,
 		Rows:     *rows,
 	}, session.NewRegistry(paths.Sessions), logger)

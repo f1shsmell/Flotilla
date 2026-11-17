@@ -54,6 +54,14 @@ func buildFakeAgent(t *testing.T) string {
 func startACPHost(t *testing.T, policy acp.Policy) (*Host, string) {
 	t.Helper()
 
+	return startACPHostFrom(t, policy, 0)
+}
+
+// startACPHostFrom is startACPHost with the host number its first update
+// continues from, which is what a reused session id needs.
+func startACPHostFrom(t *testing.T, policy acp.Policy, seqBase uint64) (*Host, string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	binary := buildFakeAgent(t)
 
@@ -65,6 +73,7 @@ func startACPHost(t *testing.T, policy acp.Policy) (*Host, string) {
 		Command:  binary,
 		Dir:      dir,
 		Policy:   policy,
+		SeqBase:  seqBase,
 	}, session.NewRegistry(dir), discardLogger())
 	if err != nil {
 		t.Fatalf("Start in ACP mode: %v", err)
@@ -168,6 +177,42 @@ func TestACPHostRunsATurnEndToEnd(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatalf("the update stream was %v, want message, thought and two tool updates", kinds)
+		}
+	}
+}
+
+// TestACPHostNumbersPastASeed pins the reuse case the daemon's spawn path
+// relies on: a host told to continue from a seed numbers its first update past
+// it, so a session id whose old run is still in the transcript cannot have its
+// new run mistaken for a replay of the old one.
+func TestACPHostNumbersPastASeed(t *testing.T) {
+	const seed = 5
+	_, dir := startACPHostFrom(t, acp.Auto, seed)
+
+	updates := make(chan session.UpdateMessage, 64)
+	conn := dialHost(t, dir, func(msg session.UpdateMessage) { updates <- msg }, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "say hello"}); err != nil {
+		t.Fatalf("session.prompt: %v", err)
+	}
+
+	// The fake answers one turn with a message, a thought and two tool updates,
+	// so the first four numbers are the seed plus one through four.
+	want := uint64(seed)
+	deadline := time.After(waitFor)
+	for seen := 0; seen < 4; {
+		select {
+		case u := <-updates:
+			want++
+			if u.HostSeq != want {
+				t.Fatalf("update %d carried host number %d, want %d", seen+1, u.HostSeq, want)
+			}
+			seen++
+		case <-deadline:
+			t.Fatalf("only %d updates arrived, want the single turn's four", seen)
 		}
 	}
 }

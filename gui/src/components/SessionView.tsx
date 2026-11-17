@@ -131,6 +131,12 @@ export function SessionView({
         <DiffPanel sessionId={state.id} />
       ) : state.mode === "pty" ? null : (
         <div className="log">
+          {/* The log can start mid-turn: the daemon keeps a bounded transcript,
+              and presenting the first line it has as the session's first line
+              would be a claim about work nobody can see. */}
+          {state.moreHistory ? (
+            <p className="muted log-more">Earlier updates are not shown.</p>
+          ) : null}
           {state.entries.length === 0 ? (
             <p className="empty">Nothing yet. Send a prompt.</p>
           ) : (

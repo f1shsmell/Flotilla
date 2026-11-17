@@ -213,6 +213,14 @@ type AttachRequest struct {
 type AttachResponse struct {
 	ID   ID   `json:"id"`
 	Info Info `json:"info"`
+	// History is what the agent produced before this client attached, oldest
+	// first. The daemon keeps it, because the host's own buffer is bounded and
+	// dies with the process: a window that opens a long turn should still see
+	// how it got to where it is.
+	History []UpdateMessage `json:"history,omitempty"`
+	// HistoryMore is true when older updates exist and were left out, so the
+	// window does not present its first line as the session's first line.
+	HistoryMore bool `json:"history_more,omitempty"`
 }
 
 // PromptRequest is one turn's input.
@@ -247,8 +255,39 @@ type PermissionReply struct {
 	OptionID string `json:"option_id,omitempty"`
 }
 
+// MethodHistory returns the agent updates a session produced before the caller
+// started watching. The daemon answers it from its transcript, so a window that
+// opens a long turn shows what the agent did instead of an empty log.
+const MethodHistory = "session.history"
+
+// HistoryRequest selects the part of a transcript the caller wants.
+type HistoryRequest struct {
+	// After restricts the answer to updates past this sequence, which is what a
+	// reconnecting client sends. Zero asks for the tail of the whole log.
+	After uint64 `json:"after,omitempty"`
+	// Tail bounds the answer by count. Zero lets the daemon choose.
+	Tail int `json:"tail,omitempty"`
+}
+
+// HistoryResponse carries the updates a caller missed, oldest first.
+type HistoryResponse struct {
+	Updates []UpdateMessage `json:"updates"`
+	// More is true when older updates exist and were left out, so a window does
+	// not present the first line it has as the session's first line.
+	More bool `json:"more,omitempty"`
+}
+
 // UpdateMessage is one agent update as the daemon and the GUI receive it.
 type UpdateMessage struct {
+	// Seq places the update in the session's log. The host leaves it zero; the
+	// daemon fills it in as it stores the update, which is what lets a client
+	// tell an update it already has from one it does not.
+	Seq uint64 `json:"seq,omitempty"`
+	// HostSeq is the number the host gave this update as it produced it. A host
+	// replays its buffer to a daemon that reconnects, so the daemon needs a way
+	// to recognise an update its log already holds; without one, a restart would
+	// store and show the same work twice.
+	HostSeq uint64 `json:"host_seq,omitempty"`
 	// Kind is "message", "thought", "tool", "plan" or "other".
 	Kind string `json:"kind"`
 	// Text is the message or thought text.

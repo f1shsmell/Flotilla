@@ -76,6 +76,7 @@ func run(args []string) error {
 		Channel:    *channel,
 		Token:      token,
 		StateDir:   paths.Sessions,
+		ConfigDir:  paths.Config,
 		HostBinary: hostBinary,
 		Log:        logger,
 	}, daemon.ExecSpawner(logger))

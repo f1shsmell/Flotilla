@@ -1,8 +1,10 @@
-import type { Status } from "./store";
+import type { AgentListing, Status } from "./store";
 
 interface FlotillaBridge {
   smoke: boolean;
   fleet(): Promise<unknown>;
+  agents(): Promise<unknown>;
+  setAgent(request: unknown): Promise<unknown>;
   start(request: unknown): Promise<unknown>;
   stop(sessionId: string): Promise<unknown>;
   detach(sessionId: string): Promise<unknown>;
@@ -31,4 +33,4 @@ declare global {
   }
 }
 
-export type { Status };
+export type { AgentListing, Status };

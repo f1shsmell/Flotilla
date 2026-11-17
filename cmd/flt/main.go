@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
@@ -66,6 +67,11 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return status(*channel, *asJSON, out)
+	case "agents":
+		if err := rejectArgs(fs, command); err != nil {
+			return err
+		}
+		return listAgents(*channel, *asJSON, out)
 	case "probe":
 		return probeAgent(fs.Args()[1:], out)
 	default:
@@ -134,6 +140,94 @@ func status(channel string, asJSON bool, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// listAgents reports the agents a running daemon offers, with the switches the
+// settings page writes. It is the picker's data from a terminal.
+func listAgents(channel string, asJSON bool, out io.Writer) error {
+	paths, err := home.Resolve(channel)
+	if err != nil {
+		return fmt.Errorf("resolve state paths: %w", err)
+	}
+
+	token, err := ipc.ReadTokenFile(paths.Token)
+	if err != nil {
+		return fmt.Errorf("read the connection token: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+
+	client, err := daemon.Connect(ctx, channel, token, paths.Sessions)
+	if err != nil {
+		return fmt.Errorf("the %s daemon is not running: %w", channel, err)
+	}
+	defer client.Close()
+
+	list, err := client.Agents(ctx)
+	if err != nil {
+		return fmt.Errorf("read the agent catalogue: %w", err)
+	}
+
+	if asJSON {
+		payload, err := json.MarshalIndent(list, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode agents: %w", err)
+		}
+		return print(out, string(payload))
+	}
+
+	if len(list.Agents) == 0 {
+		return print(out, "no agents")
+	}
+	for _, line := range agentLines(list) {
+		if err := print(out, line); err != nil {
+			return err
+		}
+	}
+	// A file the daemon could not read is part of the answer: a shorter list
+	// with no reason would look like an agent that was removed.
+	for _, problem := range list.Problems {
+		if err := print(out, "! "+problem); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// agentLines renders one line per agent. The switches and the install state are
+// printed as words, so a disabled or missing agent reads as such without a
+// second lookup.
+func agentLines(list agent.Listing) []string {
+	lines := make([]string, 0, len(list.Agents))
+	for _, e := range list.Agents {
+		state := "missing"
+		if e.Installed {
+			state = "installed"
+		}
+
+		switches := make([]string, 0, 3)
+		for _, on := range []struct {
+			name string
+			set  bool
+		}{
+			{"enabled", e.Enabled},
+			{"chat", e.Chat},
+			{"cli", e.CLI},
+		} {
+			if on.set {
+				switches = append(switches, on.name)
+			}
+		}
+
+		mode := string(e.Mode)
+		if mode == "" {
+			mode = "acp"
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
+			e.ID, mode, state, strings.Join(switches, ","), e.Command))
+	}
+	return lines
 }
 
 // probeTimeout bounds one probe turn. A real agent turn is slow, but a hung
@@ -221,7 +315,7 @@ func probeTarget(command string, rest []string) (probe.Agent, error) {
 	return agent, nil
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  probe    run one real turn against an agent and report what came back\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent and report what came back\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {

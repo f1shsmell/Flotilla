@@ -44,6 +44,23 @@ type Session struct {
 	closed bool
 }
 
+// workspaceOf returns the first candidate a session can run in, falling back to
+// this process's own directory. The agent rejects an empty cwd, and create and
+// resume have to be told the same one, so the fallback happens here rather than
+// at either call site.
+func workspaceOf(candidates ...string) string {
+	for _, candidate := range candidates {
+		if candidate != "" {
+			return candidate
+		}
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 // Open starts the agent, initializes the connection, and opens a session. The
 // returned Session is ready for Prompt.
 func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
@@ -51,10 +68,17 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		return nil, errors.New("open an acp session: empty command")
 	}
 
+	// One workspace serves the process, the session and the file boundary, so a
+	// caller that names none still gets a session the agent will accept.
+	cfg.Workspace = workspaceOf(cfg.Workspace, launch.Dir)
+	if cfg.Workspace == "" {
+		return nil, errors.New("open an acp session: no working directory")
+	}
+
 	// The agent's lifetime is the session's, not the caller's: a cancelled
 	// context ends the call, and Close ends the agent.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), launch.Command, launch.Args...)
-	cmd.Dir = launch.Dir
+	cmd.Dir = cfg.Workspace
 	cmd.Env = launch.Env
 
 	stdin, err := cmd.StdinPipe()

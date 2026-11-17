@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("flotilla", {
   // the DOM. Nothing else sets this.
   smoke: process.env.FLT_GUI_SMOKE === "1",
   fleet: () => ipcRenderer.invoke("flotilla:fleet"),
+  agents: () => ipcRenderer.invoke("flotilla:agents"),
+  setAgent: (request: unknown) => ipcRenderer.invoke("flotilla:agent:set", request),
   start: (request: unknown) => ipcRenderer.invoke("flotilla:start", request),
   stop: (sessionId: string) => ipcRenderer.invoke("flotilla:stop", sessionId),
   detach: (sessionId: string) => ipcRenderer.invoke("flotilla:detach", sessionId),

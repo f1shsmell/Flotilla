@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   addPermission,
   answerPermission,
+  applyHistory,
   applyUpdate,
   endTurn,
   loseSession,
   newSession,
   commentPrompt,
   commentsOn,
+  parseAgents,
   parsePatch,
   parseStatus,
   splitArgs,
@@ -16,6 +18,8 @@ import {
   worktreeOf,
   summarise,
   needsAttention,
+  usableAgents,
+  filterAgents,
   withLifecycle,
   type Status,
 } from "../src/store";
@@ -289,6 +293,58 @@ describe("session log", () => {
     state = loseSession(state, "host gone");
     expect(state).toMatchObject({ turn: "lost", error: "host gone" });
   });
+
+  it("folds the history a window is given when it attaches", () => {
+    const state = applyHistory(newSession("s", "acp"), {
+      updates: [
+        { seq: 1, kind: "message", text: "reading" },
+        { seq: 2, kind: "tool", tool_call_id: "call-1", tool_title: "grep" },
+      ],
+      more: false,
+    });
+
+    expect(state.entries.map((entry) => entry.kind)).toEqual(["message", "tool"]);
+    expect(state.lastSeq).toBe(2);
+    expect(state.moreHistory).toBe(false);
+  });
+
+  it("says so when the history starts after the session did", () => {
+    const state = applyHistory(newSession("s", "acp"), {
+      updates: [{ seq: 40, kind: "message", text: "still working" }],
+      more: true,
+    });
+
+    expect(state.moreHistory).toBe(true);
+    expect(state.lastSeq).toBe(40);
+  });
+
+  it("folds a replayed update once", () => {
+    // A reattach hands the window the stored log and then live traffic from
+    // before it attached. Folding both would double the paragraph.
+    let state = applyHistory(newSession("s", "acp"), {
+      updates: [{ seq: 1, kind: "message", text: "hel" }],
+    });
+    state = applyUpdate(state, { seq: 1, kind: "message", text: "hel" });
+    state = applyUpdate(state, { seq: 2, kind: "message", text: "lo" });
+
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0].text).toBe("hello");
+    // The fold is not ordered by arrival: an update older than the newest one
+    // already in the log is one the window has.
+    state = applyUpdate(state, { seq: 1, kind: "thought", text: "old" });
+    expect(state.entries).toHaveLength(1);
+  });
+
+  it("keeps folding updates that carry no sequence", () => {
+    // The host says nothing about sequence; only the daemon numbers an update.
+    // A window talking to a host directly must still show the log.
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, { kind: "message", text: "a" });
+    state = applyUpdate(state, { kind: "message", text: "b" });
+
+    expect(state.entries[0].text).toBe("ab");
+    expect(state.lastSeq).toBe(0);
+  });
 });
 
 describe("fleet lifecycle", () => {
@@ -358,5 +414,163 @@ describe("fleet lifecycle", () => {
     expect(needsAttention("unknown")).toBe(false);
     expect(needsAttention("idle")).toBe(false);
     expect(needsAttention("working")).toBe(false);
+  });
+});
+
+function agentEntries(): ReturnType<typeof parseAgents>["agents"] {
+  return parseAgents({
+    agents: [
+      {
+        id: "reasonix",
+        name: "Reasonix Studio",
+        command: "reasonix",
+        args: ["acp"],
+        mode: "acp",
+        installed: true,
+        enabled: true,
+        chat: true,
+        cli: false,
+      },
+      {
+        id: "gemini",
+        name: "Gemini CLI",
+        command: "gemini",
+        args: ["--acp"],
+        mode: "acp",
+        installed: false,
+        enabled: true,
+        chat: true,
+        cli: false,
+      },
+      {
+        id: "my-shell",
+        name: "My Shell",
+        command: "pwsh",
+        mode: "pty",
+        installed: true,
+        enabled: true,
+        chat: false,
+        cli: true,
+      },
+      {
+        id: "off",
+        name: "Turned Off",
+        command: "off",
+        installed: true,
+        enabled: false,
+        chat: true,
+        cli: true,
+      },
+    ],
+  }).agents;
+}
+
+describe("parseAgents", () => {
+  it("reads the daemon's listing and keeps its order", () => {
+    const listing = parseAgents({
+      agents: [
+        {
+          id: "reasonix",
+          name: "Reasonix Studio",
+          command: "reasonix",
+          args: ["acp"],
+          mode: "acp",
+          needs: "a login",
+          source: "builtin",
+          installed: true,
+          path: "C:\\bin\\reasonix.exe",
+          enabled: true,
+          chat: true,
+          cli: false,
+        },
+      ],
+      problems: ["adapter \"broken.json\": empty command"],
+    });
+
+    expect(listing.agents).toHaveLength(1);
+    expect(listing.agents[0]).toMatchObject({
+      id: "reasonix",
+      args: ["acp"],
+      installed: true,
+      path: "C:\\bin\\reasonix.exe",
+      chat: true,
+      cli: false,
+    });
+    expect(listing.problems).toEqual(["adapter \"broken.json\": empty command"]);
+  });
+
+  it("fills what the daemon left out with conservative values", () => {
+    const listing = parseAgents({ agents: [{ id: "x", command: "x" }] });
+
+    // Nothing says this agent can be started, so the picker must not offer it.
+    expect(listing.agents[0]).toMatchObject({
+      id: "x",
+      name: "x",
+      mode: "acp",
+      source: "builtin",
+      installed: false,
+      enabled: false,
+      chat: false,
+      cli: false,
+    });
+    expect(listing.problems).toEqual([]);
+  });
+
+  it("survives a reply that is not a listing", () => {
+    expect(parseAgents(null)).toEqual({ agents: [], problems: [] });
+    expect(parseAgents({ agents: "nope" }).agents).toEqual([]);
+  });
+});
+
+describe("filterAgents", () => {
+  const agents = agentEntries();
+
+  it("keeps the daemon's order for an empty query", () => {
+    expect(filterAgents(agents, "  ").map((agent) => agent.id)).toEqual([
+      "reasonix",
+      "gemini",
+      "my-shell",
+      "off",
+    ]);
+  });
+
+  it("matches the name, the id and the command without case", () => {
+    expect(filterAgents(agents, "GEM").map((agent) => agent.id)).toEqual(["gemini"]);
+    // A command someone already knows is a name they will type.
+    expect(filterAgents(agents, "pwsh").map((agent) => agent.id)).toEqual(["my-shell"]);
+  });
+
+  it("requires every word the user typed", () => {
+    expect(filterAgents(agents, "gemini cli").map((agent) => agent.id)).toEqual(["gemini"]);
+    expect(filterAgents(agents, "gemini shell")).toEqual([]);
+  });
+
+  it("returns a copy so a caller cannot reorder the daemon's list", () => {
+    const kept = filterAgents(agents, "");
+    kept.reverse();
+    expect(agents[0].id).toBe("reasonix");
+  });
+});
+
+describe("usableAgents", () => {
+  const agents = agentEntries();
+
+  it("offers only what is installed, enabled and on for the session mode", () => {
+    expect(usableAgents(agents, "acp").map((agent) => agent.id)).toEqual(["reasonix"]);
+    expect(usableAgents(agents, "pty").map((agent) => agent.id)).toEqual(["my-shell"]);
+  });
+
+  it("never offers an agent the user turned off", () => {
+    // "off" is installed and on for both purposes, but disabled wins.
+    expect(usableAgents(agents, "acp").map((agent) => agent.id)).not.toContain("off");
+  });
+
+  it("never offers a preset in the protocol its args do not speak", () => {
+    // The switch alone is not enough: a preset's args are written for its own
+    // mode, so offering a pty preset to an acp session would contradict them.
+    const ptyOnly = agents.map((agent) =>
+      agent.id === "my-shell" ? { ...agent, chat: true } : agent,
+    );
+    expect(usableAgents(ptyOnly, "acp").map((agent) => agent.id)).not.toContain("my-shell");
   });
 });

@@ -17,8 +17,10 @@ import (
 )
 
 // bufferedUpdates bounds how many agent updates a detached ACP session keeps for
-// its next client. Past that the oldest go: a reattach shows recent work, not a
-// full transcript, because the transcript belongs in the daemon's store.
+// its next client. Past that the oldest go. This is the first of two layers: the
+// host keeps the last few for a client that is only briefly away, and the daemon
+// stores every update for a window that opens later, or for one that arrives
+// after this process is gone.
 const bufferedUpdates = 256
 
 // permissionWait is how long an ACP turn waits for the client's answer before
@@ -41,6 +43,10 @@ type acpSession struct {
 	pending map[string]chan acp.PermissionAnswer
 	nextID  int
 	buffer  []session.UpdateMessage
+	// nextSeq numbers every update this host produces. A host hands its buffer
+	// to a daemon that reconnects, and this is the number that lets that daemon
+	// tell a replay of work it already stored from new work.
+	nextSeq uint64
 }
 
 // startACP opens an ACP conversation for this host. Policy zero is Supervised,
@@ -62,7 +68,14 @@ func (h *Host) startACP(ctx context.Context) error {
 		return fmt.Errorf("open the acp connection: %w", err)
 	}
 
-	h.acp = &acpSession{sess: sess, pending: make(map[string]chan acp.PermissionAnswer)}
+	h.acp = &acpSession{
+		sess:    sess,
+		pending: make(map[string]chan acp.PermissionAnswer),
+		// A session id can be reused after its first host is gone, and the
+		// transcript is kept. Numbering from one again would make the new
+		// run's first update look like a replay of the old run's.
+		nextSeq: h.cfg.SeqBase,
+	}
 	return nil
 }
 
@@ -70,6 +83,9 @@ func (h *Host) startACP(ctx context.Context) error {
 // it is buffered, so a reattach shows what happened while nobody listened. An
 // update too large for one frame is split: a streaming client already renders
 // pieces of one message, so dropping it would lose what splitting keeps.
+//
+// Every piece carries the number this host gave it, because a daemon that
+// reconnects is handed the buffer again and must recognise what it already has.
 func (h *Host) forwardUpdate(u acp.Update) {
 	msg := session.UpdateMessage{
 		Kind:       u.Kind,
@@ -87,6 +103,8 @@ func (h *Host) forwardUpdate(u acp.Update) {
 // deliverUpdate pushes one update to the client, or buffers it when nobody is
 // listening.
 func (h *Host) deliverUpdate(msg session.UpdateMessage) {
+	msg.HostSeq = h.nextUpdateSeq()
+
 	h.mu.Lock()
 	conn := h.conn
 	h.mu.Unlock()
@@ -104,6 +122,17 @@ func (h *Host) deliverUpdate(msg session.UpdateMessage) {
 	if err := conn.Notify(session.MethodUpdate, msg); err != nil {
 		h.log.Debug("forward an update failed", "session", h.cfg.ID, "err", err.Error())
 	}
+}
+
+// nextUpdateSeq hands out the next number for an update. It is one counter for
+// the whole session rather than one for the buffer: a number has to keep its
+// meaning after the update it belongs to has been trimmed away.
+func (h *Host) nextUpdateSeq() uint64 {
+	h.acp.mu.Lock()
+	defer h.acp.mu.Unlock()
+
+	h.acp.nextSeq++
+	return h.acp.nextSeq
 }
 
 // updateTextBudget bounds the text one update carries. A frame holds

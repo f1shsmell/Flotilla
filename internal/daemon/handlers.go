@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/worktree"
@@ -18,6 +19,10 @@ import (
 const (
 	// MethodStatus reports the fleet this daemon currently serves.
 	MethodStatus = "daemon.status"
+	// MethodAgents lists the agents this machine can offer, with their switches.
+	MethodAgents = "daemon.agents"
+	// MethodAgentSet changes one agent's switches.
+	MethodAgentSet = "daemon.agent.set"
 	// MethodSessionStart spawns a session host.
 	MethodSessionStart = "session.start"
 	// MethodSessionStop ends a session from the control plane. A client that
@@ -35,6 +40,10 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	switch method {
 	case MethodStatus:
 		return d.status(), nil
+	case MethodAgents:
+		return d.agents.List(), nil
+	case MethodAgentSet:
+		return d.setAgent(params)
 	case MethodSessionStart:
 		return d.startSession(ctx, params)
 	case MethodSessionStop:
@@ -44,6 +53,24 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnknownMethod, method)
 	}
+}
+
+// setAgent applies one switch change. The request names the agent, so a request
+// that names none cannot be guessed at.
+func (d *Daemon) setAgent(params json.RawMessage) (any, error) {
+	var req SetAgentRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", MethodAgentSet, err)
+	}
+	if req.ID == "" {
+		return nil, fmt.Errorf("%s: empty agent id: %w", MethodAgentSet, agent.ErrNoAgent)
+	}
+
+	entry, err := d.agents.Set(req.ID, req.Change)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", MethodAgentSet, err)
+	}
+	return entry, nil
 }
 
 func (d *Daemon) status() Status {
@@ -127,6 +154,17 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		d.remember(req.ID, head)
 	}
 
+	// A session id can be reused after its first host is gone, and the daemon
+	// keeps that run's transcript. The new host has to number past it: from one
+	// again, its first update would look like a replay of the old run's and be
+	// dropped. A log that cannot be read is not a refusal — the session still
+	// starts, it just numbers from one.
+	seqBase, err := d.transcripts.LastHostSeq(string(req.ID))
+	if err != nil {
+		d.cfg.Log.Warn("cannot read a session's last host number", "session", req.ID, "err", err.Error())
+		seqBase = 0
+	}
+
 	endpoint, err := d.spawn(ctx, SpawnRequest{
 		Binary:   d.cfg.HostBinary,
 		Session:  req.ID,
@@ -135,6 +173,7 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		Args:     req.Args,
 		Dir:      req.Dir,
 		Policy:   req.Policy,
+		SeqBase:  seqBase,
 		Cols:     req.Cols,
 		Rows:     req.Rows,
 		Channel:  d.cfg.Channel,

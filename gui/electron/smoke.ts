@@ -152,6 +152,33 @@ async function waitForTerminal(
   throw new Error(`${needle} never reached the terminal; screen was:\n${text}`);
 }
 
+// waitForCondition polls one expression until it is truthy. Class changes are
+// what the settings page uses to show a switch that has been stored, and they
+// never reach innerText, so the body text waits above cannot see them.
+async function waitForCondition(
+  target: BrowserWindow,
+  expression: string,
+  what: string,
+  deadline: number,
+): Promise<void> {
+  let last = "";
+  while (Date.now() < deadline) {
+    last = (await target.webContents.executeJavaScript(
+      `(() => { try { return (${expression}) ? "yes" : ""; } catch (cause) { return "error: " + cause.message; } })()`,
+    )) as string;
+    if (last === "yes") {
+      return;
+    }
+    await step();
+  }
+  throw new Error(`${what} never happened (last: ${last}); body was:\n${await body(target)}`);
+}
+
+// switchFor is the enabled checkbox of one agent on the settings page.
+function switchFor(name: string): string {
+  return `document.querySelector('input[aria-label="enable ${name}"]')`;
+}
+
 export async function run(target: BrowserWindow): Promise<boolean> {
   const expect = process.env.FLT_GUI_SMOKE_EXPECT ?? "";
   const expectTerminal = process.env.FLT_GUI_SMOKE_TERMINAL ?? "";
@@ -162,6 +189,9 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const diffFile = process.env.FLT_GUI_SMOKE_DIFF ?? "";
   const diffLine = process.env.FLT_GUI_SMOKE_PATCH ?? "";
   const note = process.env.FLT_GUI_SMOKE_NOTE ?? "";
+  // FLT_GUI_SMOKE_AGENTS names an agent whose Enabled switch the run flips on
+  // the settings page, then flips back. It is the settings page's walk.
+  const agentsAgent = process.env.FLT_GUI_SMOKE_AGENTS ?? "";
   const deadline = Date.now() + 120000;
 
   target.webContents.on("render-process-gone", (_event, details) => {
@@ -174,25 +204,75 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   try {
     if (form !== "") {
       await waitFor(target, "Start", deadline);
+
+      // The picker replaced the two free-text command fields with a list, so a
+      // form run names an agent (or asks for the custom form) instead of typing
+      // into positional inputs. The mode is set first: the list it offers
+      // depends on it.
+      await target.webContents.executeJavaScript(`(() => {
+        const fields = ${form};
+        if (!fields.mode) { return; }
+        const select = document.querySelector(".agent-picker select");
+        if (!select) { return; }
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype, "value").set;
+        setter.call(select, fields.mode);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      await step();
+
+      const formMode = (await target.webContents.executeJavaScript(`(() => {
+        const fields = ${form};
+        if (fields.agent !== undefined) {
+          // Match the name span exactly: a substring match would pick whichever
+          // longer name happens to contain it first.
+          const options = [...document.querySelectorAll(".agent-option")];
+          const option = options.find(
+            (button) => (button.querySelector("span")?.textContent ?? "").trim()
+              === fields.agent);
+          if (!option) {
+            throw new Error("no agent option named " + fields.agent + "; options were: " +
+              options.map((button) => button.innerText).join(", "));
+          }
+          option.click();
+          return "agent";
+        }
+        const link = [...document.querySelectorAll(".new-session button")]
+          .find((button) => button.textContent.includes("custom command"));
+        if (!link) { throw new Error("no custom-command link"); }
+        link.click();
+        return "custom";
+      })()`)) as string;
+      await step();
+
       await target.webContents.executeJavaScript(`(() => {
         const fields = ${form};
         const setValue = (element, value) => {
-          const proto = element.tagName === "SELECT"
-            ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, "value").set;
           setter.call(element, value);
-          element.dispatchEvent(new Event(
-            element.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+          element.dispatchEvent(new Event("input", { bubbles: true }));
         };
-        const [command, args, dir, repo, branch] =
-          document.querySelectorAll(".new-session input");
-        setValue(command, fields.command);
-        setValue(args, fields.args ?? "");
-        setValue(dir, fields.dir ?? "");
-        setValue(repo, fields.repo ?? "");
-        setValue(branch, fields.branch ?? "");
-        if (fields.mode) {
-          setValue(document.querySelector(".new-session select"), fields.mode);
+        const inputs = [...document.querySelectorAll(".new-session input")];
+        const set = (placeholder, value) => {
+          if (value === undefined || value === null) { return; }
+          const input = inputs.find(
+            (element) => (element.placeholder ?? "").includes(placeholder));
+          if (!input) { throw new Error("no input with placeholder " + placeholder); }
+          setValue(input, value);
+        };
+        if (${JSON.stringify(formMode)} === "custom") {
+          set("agent command", fields.command);
+          set("arguments", fields.args ?? "");
+        }
+        set("working directory", fields.dir ?? "");
+        set("worktree of repository", fields.repo ?? "");
+        set("new branch", fields.branch ?? "");
+        const submit = document.querySelector(".new-session button[type=submit]");
+        if (!submit || submit.disabled) {
+          // requestSubmit() on a disabled button does nothing, so a form the
+          // smoke meant to submit would otherwise wait out the whole deadline.
+          throw new Error("the form's Start button is disabled");
         }
         document.querySelector(".new-session").requestSubmit();
       })()`);
@@ -224,6 +304,64 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (agentsAgent !== "") {
+      // Open the settings page from the fleet header, flip the named agent's
+      // Enabled switch, flip it back, and close the page. The switch is stored
+      // through the daemon, so what this waits for is the round trip, not a
+      // local state change.
+      await target.webContents.executeJavaScript(`(() => {
+        const open = [...document.querySelectorAll(".fleet header button")]
+          .find((button) => button.textContent.trim() === "Agents");
+        if (!open) { throw new Error("no Agents button in the fleet header"); }
+        open.click();
+      })()`);
+      // Wait for the switch itself, not for the page's header: the header says
+      // "0 installed · 0 known" before the catalogue has been read, so a text
+      // wait would pass on an empty table and then look for a row that is not
+      // there yet.
+      await waitForCondition(
+        target,
+        `${switchFor(agentsAgent)} !== null`,
+        `the settings page to list a switch for ${agentsAgent}`,
+        deadline,
+      );
+
+      const before = (await target.webContents.executeJavaScript(
+        `(() => { const input = ${switchFor(agentsAgent)}; return input ? input.checked : null; })()`,
+      )) as boolean | null;
+      if (before === null) {
+        throw new Error(`the settings page has no enable switch for ${agentsAgent}`);
+      }
+
+      for (const wanted of [!before, before]) {
+        await target.webContents.executeJavaScript(
+          `(() => { ${switchFor(agentsAgent)}.click(); })()`,
+        );
+        await waitForCondition(
+          target,
+          `${switchFor(agentsAgent)}?.checked === ${wanted}`,
+          `${agentsAgent}'s switch to read ${wanted}`,
+          deadline,
+        );
+      }
+
+      await target.webContents.executeJavaScript(`(() => {
+        const back = [...document.querySelectorAll(".agent-settings header button")]
+          .find((button) => button.textContent.trim() === "Back");
+        if (!back) { throw new Error("no Back button on the settings page"); }
+        back.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!document.querySelector(".agent-settings")`,
+        "the settings page to close",
+        deadline,
+      );
+
+      console.log(`smoke: ok (agents: ${agentsAgent})`);
+      return true;
     }
 
     if (diffFile !== "") {

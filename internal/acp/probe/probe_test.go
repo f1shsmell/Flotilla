@@ -10,7 +10,43 @@ import (
 
 	"github.com/f1shsmell/flotilla/internal/acp"
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
+	"github.com/f1shsmell/flotilla/internal/agent"
+	"github.com/f1shsmell/flotilla/internal/session"
 )
+
+// TestKnownProjectsTheBuiltinPresets keeps the two lists from drifting: the
+// picker offers what agent.Builtins() holds, and `flt probe` accepts exactly
+// the ACP ones of those. A new builtin must reach both without a second edit.
+func TestKnownProjectsTheBuiltinPresets(t *testing.T) {
+	presets := agent.Builtins()
+	want := make(map[string]agent.Preset, len(presets))
+	for _, preset := range presets {
+		if preset.Mode == session.ModeACP {
+			want[preset.ID] = preset
+		}
+	}
+
+	known := probe.Known()
+	if len(known) != len(want) {
+		t.Fatalf("the probe knows %d agents, the builtins hold %d ACP presets", len(known), len(want))
+	}
+
+	for _, one := range known {
+		preset, ok := want[one.Name]
+		if !ok {
+			t.Fatalf("the probe knows %q, which is not a builtin ACP preset", one.Name)
+		}
+		if one.Command != preset.Command {
+			t.Fatalf("%q probes %q, the preset runs %q", one.Name, one.Command, preset.Command)
+		}
+		if strings.Join(one.Args, " ") != strings.Join(preset.Args, " ") {
+			t.Fatalf("%q probes with %q, the preset runs with %q", one.Name, one.Args, preset.Args)
+		}
+		if one.NeedsCredential != preset.Needs {
+			t.Fatalf("%q says it needs %q, the preset says %q", one.Name, one.NeedsCredential, preset.Needs)
+		}
+	}
+}
 
 // TestKnownAgentsAreWellFormed pins the probe's catalogue: every entry names a
 // command and says what login it needs, so a failed probe can explain itself.

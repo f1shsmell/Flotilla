@@ -134,11 +134,11 @@ type Client struct {
 
 var _ sdk.Client = (*Client)(nil)
 
-// NewClient returns a client that keeps the agent inside cfg.Workspace.
+// NewClient returns a client that keeps the agent inside cfg.Workspace. A
+// caller that names none falls back the same way Open does, so the file
+// boundary and the session's cwd are always the same directory.
 func NewClient(cfg Config) *Client {
-	if cfg.Workspace == "" {
-		cfg.Workspace, _ = os.Getwd()
-	}
+	cfg.Workspace = workspaceOf(cfg.Workspace)
 	return &Client{cfg: cfg}
 }
 

@@ -68,6 +68,20 @@ true before a signed one ships.
 | `FLT_GUI_SMOKE_OPEN` | session id to click before asserting |
 | `FLT_GUI_SMOKE_PROMPT` | prompt to type and send |
 | `FLT_GUI_SMOKE_EXPECT` | text that must appear before the smoke passes |
+| `FLT_GUI_SMOKE_TERMINAL` | text that must reach the terminal's buffer |
+| `FLT_GUI_SMOKE_START` | JSON start request to send through the bridge |
+| `FLT_GUI_SMOKE_FORM` | JSON form fields: `agent` (a picker name) or `command`/`args`, plus `mode`, `dir`, `repo`, `branch` |
+| `FLT_GUI_SMOKE_AGENTS` | agent display name whose Enabled switch is flipped on the settings page, then flipped back |
+| `FLT_GUI_SMOKE_DIFF` | file to open in the diff panel |
+| `FLT_GUI_SMOKE_PATCH` | added line to find in that file's patch |
+| `FLT_GUI_SMOKE_NOTE` | note to leave on that line |
+
+`FLT_GUI_SMOKE_FORM` and `FLT_GUI_SMOKE_AGENTS` are the two paths that walk this
+build's agent catalogue: the first picks an agent by name in the new-session
+form, the second opens the settings page and flips a switch. Either needs an
+agent the daemon can actually start; an adapter file under
+`$FLT_HOME/config/adapters` pointing at `flt-fake-acp-agent` is the cheap way to
+get one without spending a real provider's tokens.
 
 A headless run against a real daemon and a real agent:
 

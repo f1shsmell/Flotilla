@@ -111,6 +111,33 @@ function register(): void {
     }
   });
 
+  // The agent catalogue is the daemon's answer, so the renderer never guesses
+  // what is installed or which agent a switch turned off.
+  ipcMain.handle("flotilla:agents", async () => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel });
+    }
+    try {
+      return await control.call("daemon.agents");
+    } catch (error) {
+      // control is shared with the fleet poll, start and stop. A daemon that
+      // speaks the wire but not this method (one from before an upgrade) answers
+      // an error without dropping the pipe, so only a dead connection is
+      // discarded here; anything else is reported to the renderer as is.
+      if (!control.alive) {
+        control = null;
+      }
+      throw error;
+    }
+  });
+
+  ipcMain.handle("flotilla:agent:set", async (_event, request: unknown) => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel });
+    }
+    return control.call("daemon.agent.set", request);
+  });
+
   ipcMain.handle("flotilla:start", async (_event, request: unknown) => {
     if (!control || !control.alive) {
       control = await ensure({ channel });
