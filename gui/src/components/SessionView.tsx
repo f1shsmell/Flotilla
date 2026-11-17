@@ -20,6 +20,10 @@ interface Props {
 
 function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
   switch (entry.kind) {
+    case "user":
+      // The person's own words: the only line in the log the agent did not
+      // produce, so it reads as a distinct turn rather than agent output.
+      return <p className="entry user">{entry.text}</p>;
     case "message":
       return <p className="entry message">{entry.text}</p>;
     case "thought":

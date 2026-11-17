@@ -142,7 +142,9 @@ const updateTextBudget = ipc.MaxFrameSize / 8
 
 // chunkUpdate splits an update whose text does not fit the budget into
 // consecutive updates of the same kind, cutting on rune boundaries so a split
-// never breaks a character.
+// never breaks a character. Every piece after the first is marked as a
+// continuation, so a client joins the pieces of one message and still starts a
+// new line for a second message of the same kind.
 func chunkUpdate(msg session.UpdateMessage, budget int) []session.UpdateMessage {
 	if budget <= 0 || len(msg.Text) <= budget {
 		return []session.UpdateMessage{msg}
@@ -162,12 +164,14 @@ func chunkUpdate(msg session.UpdateMessage, budget int) []session.UpdateMessage 
 
 		part := msg
 		part.Text = text[:cut]
+		part.Continued = len(parts) > 0
 		parts = append(parts, part)
 		text = text[cut:]
 	}
 
 	part := msg
 	part.Text = text
+	part.Continued = len(parts) > 0
 	return append(parts, part)
 }
 
@@ -275,6 +279,13 @@ func (h *Host) promptACP(ctx context.Context, req session.PromptRequest) (sessio
 	if h.acp == nil {
 		return session.PromptResponse{}, fmt.Errorf("session %q is not an ACP session: %w", h.cfg.ID, errWrongMode)
 	}
+
+	// The agent reports only its own side of the conversation, so the question
+	// is recorded here, before the turn: a client that opens the session later
+	// would otherwise read the reply as an answer to nothing. It goes through
+	// the same path as an agent update, which is what numbers it, buffers it for
+	// a client that is away, and hands it to the daemon's log.
+	h.forwardUpdate(acp.Update{Kind: session.KindUser, Text: req.Text})
 
 	// The turn is now running. An ACP session knows this exactly: the call is
 	// synchronous and returns when the agent stops.

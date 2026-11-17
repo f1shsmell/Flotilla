@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
@@ -99,6 +100,39 @@ func TestASecondWindowSeesTheLogTheFirstOneWatched(t *testing.T) {
 	}
 }
 
+// readHistoryUntilStable asks a client for a session's log until two reads in a
+// row agree. The daemon stores each update as the host reports it, so a turn
+// that has finished still drains into the log for a moment afterwards; a single
+// read races that drain and would make the count a coin toss.
+func readHistoryUntilStable(t *testing.T, client *ipc.Conn, ctx context.Context, id string) session.HistoryResponse {
+	t.Helper()
+
+	read := func() session.HistoryResponse {
+		raw, err := client.Call(ctx, session.MethodHistory, session.HistoryRequest{})
+		if err != nil {
+			t.Fatalf("session.history: %v", err)
+		}
+		var got session.HistoryResponse
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("decode the history: %v", err)
+		}
+		return got
+	}
+
+	deadline := time.Now().Add(waitFor)
+	previous := -1
+	for time.Now().Before(deadline) {
+		got := read()
+		if len(got.Updates) == previous {
+			return got
+		}
+		previous = len(got.Updates)
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the log of %q never settled", id)
+	return session.HistoryResponse{}
+}
+
 // TestTheLogOutlivesTheDaemon is the other half of the same promise: the host
 // holds a bounded memory buffer that dies with it, so the daemon's store has to
 // hold the turn.
@@ -122,14 +156,13 @@ func TestTheLogOutlivesTheDaemon(t *testing.T) {
 
 	// Read the log through the call a window uses, so the assertion is about
 	// what a client is told rather than about the file's shape.
-	raw, err := client.Call(ctx, session.MethodHistory, session.HistoryRequest{})
-	if err != nil {
-		t.Fatalf("session.history: %v", err)
-	}
-	var stored session.HistoryResponse
-	if err := json.Unmarshal(raw, &stored); err != nil {
-		t.Fatalf("decode the history: %v", err)
-	}
+	//
+	// The turn's updates reach the daemon as notifications, and each is stored
+	// as it arrives: a prompt that has returned does not mean the whole turn is
+	// on disk yet. The read is retried until the count settles, because the
+	// assertion is about what a restart sees, not about how fast the log is
+	// written.
+	stored := readHistoryUntilStable(t, client, ctx, "sess-survives")
 	if len(stored.Updates) == 0 {
 		t.Fatal("the daemon stored no updates for a turn that produced some")
 	}
@@ -235,6 +268,102 @@ func TestAStoppedSessionKeepsItsLog(t *testing.T) {
 	if len(page.Records) != 1 {
 		t.Fatalf("the stopped session's log holds %d updates, want the one it wrote",
 			len(page.Records))
+	}
+}
+
+// TestTheLogCarriesWhatTheUserSaid is the other half of a conversation: the agent
+// reports only its own side, so a log built from agent updates alone leaves out
+// the message every later turn is an answer to.
+func TestTheLogCarriesWhatTheUserSaid(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	startACPHost(t, dir, "sess-said", token)
+	runDaemon(t, dir, token)
+
+	client := dialDaemon(t, dir, token, allowTools(t), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-said"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	const said = "what does this repository do?"
+	if _, err := client.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: said}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+
+	stored := readHistoryUntilStable(t, client, ctx, "sess-said")
+
+	// The person's message comes first: everything the agent did answers it, so
+	// a log that put it after the reply would read as a different conversation.
+	if len(stored.Updates) == 0 {
+		t.Fatal("the log is empty after a turn")
+	}
+	first := stored.Updates[0]
+	if first.Kind != session.KindUser {
+		t.Fatalf("the log starts with a %q update, want the user's message", first.Kind)
+	}
+	if first.Text != said {
+		t.Fatalf("the stored message is %q, want %q", first.Text, said)
+	}
+
+	for i, msg := range stored.Updates {
+		if msg.Kind == session.KindUser && msg.Text != said {
+			t.Fatalf("update %d is a user message with text %q, want only the one that was sent", i, msg.Text)
+		}
+	}
+}
+
+// TestTheUserMessageIsNumberedOnce pins the log's shape: the message is stored
+// exactly once, so a reattach replays the conversation and not the question
+// twice.
+func TestTheUserMessageIsNumberedOnce(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	startACPHost(t, dir, "sess-once", token)
+	runDaemon(t, dir, token)
+
+	client := dialDaemon(t, dir, token, allowTools(t), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-once"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := client.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "hello"}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+
+	// A second window attaches to the same session: what it folds is the log the
+	// first window watched, and a message stored twice would show twice.
+	second := dialDaemon(t, dir, token, nil, nil)
+	raw, err := second.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-once"})
+	if err != nil {
+		t.Fatalf("the second client could not attach: %v", err)
+	}
+
+	var attached session.AttachResponse
+	if err := json.Unmarshal(raw, &attached); err != nil {
+		t.Fatalf("decode the attach response: %v", err)
+	}
+
+	var said int
+	var seqs []uint64
+	for _, msg := range attached.History {
+		if msg.Kind == session.KindUser {
+			said++
+		}
+		seqs = append(seqs, msg.Seq)
+	}
+	if said != 1 {
+		t.Fatalf("the log holds %d user messages, want the one that was sent", said)
+	}
+	for i := 1; i < len(seqs); i++ {
+		if seqs[i] <= seqs[i-1] {
+			t.Fatalf("history sequence %d is followed by %d", seqs[i-1], seqs[i])
+		}
 	}
 }
 

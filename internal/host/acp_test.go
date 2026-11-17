@@ -172,11 +172,14 @@ func TestACPHostRunsATurnEndToEnd(t *testing.T) {
 		select {
 		case u := <-updates:
 			kinds = append(kinds, u.Kind)
-			if strings.Join(kinds, ",") == "message,thought,tool,tool" {
+			// The person's message comes first: the agent's updates answer it,
+			// and a log that started with the reply would read as a different
+			// conversation.
+			if strings.Join(kinds, ",") == "user,message,thought,tool,tool" {
 				return
 			}
 		case <-deadline:
-			t.Fatalf("the update stream was %v, want message, thought and two tool updates", kinds)
+			t.Fatalf("the update stream was %v, want the user's message, a message, a thought and two tool updates", kinds)
 		}
 	}
 }
@@ -320,6 +323,41 @@ func TestPTYHostRejectsACPCalls(t *testing.T) {
 	}
 }
 
+// TestACPHostRecordsTheUsersMessage pins the other side of the conversation: the
+// agent reports only its own updates, so the host has to put the prompt in the
+// stream itself. A log that began with the reply would be an answer to nothing.
+func TestACPHostRecordsTheUsersMessage(t *testing.T) {
+	_, dir := startACPHost(t, acp.Auto)
+
+	updates := make(chan session.UpdateMessage, 64)
+	conn := dialHost(t, dir, func(msg session.UpdateMessage) { updates <- msg }, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	const said = "how does the relay work?"
+	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: said}); err != nil {
+		t.Fatalf("session.prompt: %v", err)
+	}
+
+	// The message is the first thing on the stream, before the agent's own
+	// output, and it carries the text the caller sent.
+	select {
+	case got := <-updates:
+		if got.Kind != session.KindUser {
+			t.Fatalf("the first update is %q, want the user's message", got.Kind)
+		}
+		if got.Text != said {
+			t.Fatalf("the stored message is %q, want %q", got.Text, said)
+		}
+		if got.HostSeq == 0 {
+			t.Fatal("the user's message carries no host number, so a replay would store it twice")
+		}
+	case <-time.After(waitFor):
+		t.Fatal("the host never recorded the user's message")
+	}
+}
+
 // TestChunkUpdateKeepsEveryCharacter pins the split itself: a piece never
 // exceeds the budget and never cuts a rune in half.
 func TestChunkUpdateKeepsEveryCharacter(t *testing.T) {
@@ -343,6 +381,12 @@ func TestChunkUpdateKeepsEveryCharacter(t *testing.T) {
 		}
 		if part.Kind != msg.Kind {
 			t.Fatalf("part %d lost its kind", i)
+		}
+		// Only the first piece starts the line; every later one is the wire
+		// saying it continues it. Without the mark a client cannot tell these
+		// pieces from a second message of the same kind.
+		if part.Continued != (i > 0) {
+			t.Fatalf("part %d has continued=%v", i, part.Continued)
 		}
 		joined.WriteString(part.Text)
 	}

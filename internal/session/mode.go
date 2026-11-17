@@ -277,6 +277,11 @@ type HistoryResponse struct {
 	More bool `json:"more,omitempty"`
 }
 
+// KindUser is the update the host records for the person's own message. The
+// agent reports only its own side of the conversation, so a log built from its
+// updates alone leaves out the message every turn is an answer to.
+const KindUser = "user"
+
 // UpdateMessage is one agent update as the daemon and the GUI receive it.
 type UpdateMessage struct {
 	// Seq places the update in the session's log. The host leaves it zero; the
@@ -288,7 +293,7 @@ type UpdateMessage struct {
 	// to recognise an update its log already holds; without one, a restart would
 	// store and show the same work twice.
 	HostSeq uint64 `json:"host_seq,omitempty"`
-	// Kind is "message", "thought", "tool", "plan" or "other".
+	// Kind is "message", "thought", "tool", "plan", "user" or "other".
 	Kind string `json:"kind"`
 	// Text is the message or thought text.
 	Text string `json:"text,omitempty"`
@@ -296,4 +301,9 @@ type UpdateMessage struct {
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolTitle  string `json:"tool_title,omitempty"`
 	ToolStatus string `json:"tool_status,omitempty"`
+	// Continued marks a piece of an update that was split to fit one frame. A
+	// client joins it to the line before instead of starting a new one: the kind
+	// and the text alone cannot tell one message in pieces from a second message
+	// of the same kind, and a second prompt must not run into the first.
+	Continued bool `json:"cont,omitempty"`
 }
