@@ -112,8 +112,12 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	turn := a.nextTurn()
 
 	for _, update := range turn.Updates {
-		if err := ctx.Err(); err != nil {
+		// A cancelled context ends the turn cleanly: the client asked to stop,
+		// so there is nothing to report as a failure.
+		select {
+		case <-ctx.Done():
 			return sdk.PromptResponse{StopReason: sdk.StopReasonCancelled}, nil
+		default:
 		}
 		if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
 			SessionId: params.SessionId,

@@ -393,7 +393,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 		return print(out, string(payload))
 	}
 	if err := scenario.Save(*target); err != nil {
-		return err
+		return fmt.Errorf("write the scenario to %q: %w", *target, err)
 	}
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }

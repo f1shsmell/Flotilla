@@ -228,7 +228,7 @@ func TestReplaySendsTheToolCallTwice(t *testing.T) {
 				}
 				kinds = append(kinds, "start:"+n.Update.ToolCall.Title)
 			case n.Update.ToolCallUpdate != nil:
-				kinds = append(kinds, "update:"+string(derefStatus(n.Update.ToolCallUpdate.Status)))
+				kinds = append(kinds, "update:"+derefStatus(n.Update.ToolCallUpdate.Status))
 			default:
 				kinds = append(kinds, "other")
 			}
