@@ -128,17 +128,52 @@ func executableDir() string {
 	return filepath.Dir(exe)
 }
 
+// bundledCommands lists the agent binaries a release carries beside the daemon.
+// It is the whole of what "this build ships" means, and it is deliberately a
+// list rather than every preset: the other presets name a vendor CLI the user
+// installed, and looking beside the executable for one of those would let a
+// stray file shadow the copy on PATH.
+//
+// gui/scripts/bundle-binaries.mjs copies these into the app's resources, so a
+// name added here that the packaging does not carry is an agent the picker
+// offers and cannot start. TestEveryShippedBinaryIsAPresetThePackagingCarries
+// holds the lists together.
+var bundledCommands = []string{"flt-replay-agent"}
+
 // Bundled resolves one of this build's own agents as it ships: a bare command
 // name is looked for beside the executable, with the platform's extension
 // appended as well. It is exported because `flt probe` offers the same names and
 // has to find them the same way — a probe that only asked PATH would offer an
 // agent and then fail on every install.
 //
-// Only a bare name is looked up: a command that names a directory, absolute or
-// relative, is the caller's to run, and joining it under the binary directory
-// would quietly rewrite a path the user typed.
+// Only an agent this build actually travels with is looked up, and only by a
+// bare name. Anything else is the user's own install: PATH is the one place it
+// lives, so a file that happens to share its name cannot shadow it. And a
+// command that names a directory, absolute or relative, is the caller's to run:
+// joining it under the binary directory would quietly rewrite a path the user
+// typed.
 func Bundled(command string) (string, bool) {
-	dir := executableDir()
+	if !shipped(command) {
+		return "", false
+	}
+	return besideDir(executableDir(), command)
+}
+
+// bundled finds one of this build's own agents next to the executable, using the
+// directory this catalog was built with. The rule lives in Bundled so `flt
+// probe` resolves the same names the same way; this method only supplies the
+// directory, which tests replace.
+func (c *Catalog) bundled(command string) (string, bool) {
+	if !shipped(command) {
+		return "", false
+	}
+	return besideDir(c.selfDir, command)
+}
+
+// besideDir looks for command inside dir, with the platform's extension appended
+// as well. An empty dir, an empty name, or a name that is not bare finds
+// nothing: nothing is guessed about where a caller's own files live.
+func besideDir(dir, command string) (string, bool) {
 	if dir == "" || command == "" || command != filepath.Base(command) {
 		return "", false
 	}
@@ -151,21 +186,20 @@ func Bundled(command string) (string, bool) {
 	return "", false
 }
 
-// bundled finds one of this build's own agents next to the executable, using the
-// directory this catalog was built with. The rule lives in Bundled so `flt
-// probe` resolves the same names the same way; this method only supplies the
-// directory, which tests replace.
-func (c *Catalog) bundled(command string) (string, bool) {
-	if c.selfDir == "" || command == "" || command != filepath.Base(command) {
-		return "", false
+// shipped reports whether command names an agent binary that travels with this
+// build. It is the gate that keeps the lookup honest: beside-the-executable is
+// the right place only for a binary the build itself carries, because every
+// other agent is installed by the user and PATH is where it is found.
+func shipped(command string) bool {
+	if command == "" {
+		return false
 	}
-	candidate := filepath.Join(c.selfDir, command)
-	for _, path := range []string{candidate + ".exe", candidate} {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, true
+	for _, bundled := range bundledCommands {
+		if commandBase(bundled) == commandBase(command) {
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 // List projects every preset with this machine's and the user's answers. The
@@ -349,10 +383,11 @@ func (c *Catalog) AdapterForCommand(command string) (adapters.Adapter, bool) {
 }
 
 // Resolve turns a command into what a spawn should execute. A command this
-// build ships is looked for beside the executable first, because a bundled
-// agent is not installed by the user and exec does not search there. Anything
-// else is handed back unchanged: PATH and an absolute path the user typed keep
-// working exactly as they did.
+// build actually ships is looked for beside the executable first, because a
+// bundled agent is not installed by the user and exec does not search there.
+// Anything else is handed back unchanged: a vendor CLI is the user's install, so
+// PATH and an absolute path they typed keep working exactly as they did, and a
+// file that happens to share its name cannot shadow it.
 func (c *Catalog) Resolve(command string) string {
 	if path, ok := c.bundled(command); ok {
 		return path
@@ -406,7 +441,8 @@ func (c *Catalog) project(preset Preset, set Change) Entry {
 	//
 	// A bundled agent is looked for beside the executable first, then on PATH: a
 	// release ships its own agents there, and a user who also installed one on
-	// PATH should still get the one the build was tested with.
+	// PATH should still get the one the build was tested with. A vendor CLI is
+	// not looked for there, so the entry points at the copy the user installed.
 	if path, ok := c.bundled(preset.Command); ok {
 		entry.Installed = true
 		entry.Path = path

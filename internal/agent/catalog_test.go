@@ -223,25 +223,104 @@ func TestResolvePrefersTheBundledBinaryOverPath(t *testing.T) {
 
 // TestABundledLookupTakesOnlyABareName pins the guard: a command that names a
 // directory is the caller's to run, and joining it under the binary directory
-// would quietly rewrite a path the user typed.
+// would quietly rewrite a path the user typed. The name used here is one this
+// build ships, so the guard is what refuses it rather than the shipped gate.
 func TestABundledLookupTakesOnlyABareName(t *testing.T) {
 	c := newCatalog(t)
 	dir := t.TempDir()
 	c.selfDir = dir
 
 	// A file that exists, reached through a relative path, must not be found.
-	if err := os.WriteFile(filepath.Join(dir, "agent"+exeSuffix()), []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "flt-replay-agent"+exeSuffix()), []byte("x"), 0o600); err != nil {
 		t.Fatalf("write the file: %v", err)
 	}
 
 	for _, command := range []string{
-		"../agent",
-		"./agent",
-		filepath.Join(dir, "agent"),
-		"sub/agent",
+		"../flt-replay-agent",
+		"./flt-replay-agent",
+		filepath.Join(dir, "flt-replay-agent"),
+		"sub/flt-replay-agent",
 	} {
 		if got := c.Resolve(command); got != command {
 			t.Errorf("Resolve(%q) = %q, want the path left alone", command, got)
+		}
+	}
+}
+
+// TestOnlyAnAgentThisBuildShipsIsLookedUpBesideTheExecutable pins the boundary
+// the lookup sits on: a vendor CLI belongs to the user, who installed it
+// somewhere on PATH, so a file that happens to share its name must not win by
+// sitting next to the daemon. Only a binary the build itself carries is looked
+// for there.
+func TestOnlyAnAgentThisBuildShipsIsLookedUpBesideTheExecutable(t *testing.T) {
+	c := newCatalog(t, "claude-agent-acp")
+	c.selfDir = t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(c.selfDir, "claude-agent-acp"+exeSuffix()), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write the file: %v", err)
+	}
+
+	entry := entryFor(t, c.List(), "claude")
+	if entry.Path != "/usr/local/bin/claude-agent-acp" {
+		t.Fatalf("the claude entry resolved to %q, want the copy on PATH", entry.Path)
+	}
+	if got := c.Resolve("claude-agent-acp"); got != "claude-agent-acp" {
+		t.Fatalf("Resolve(%q) = %q, want the name unchanged", "claude-agent-acp", got)
+	}
+}
+
+// TestEveryShippedBinaryIsAPresetThePackagingCarries holds the lists that have
+// to agree: a name in bundledCommands that no builtin runs is a binary nobody
+// starts, and one the packaging does not copy is an agent the picker offers and
+// cannot start.
+func TestEveryShippedBinaryIsAPresetThePackagingCarries(t *testing.T) {
+	presets := make(map[string]bool, len(Builtins()))
+	for _, preset := range Builtins() {
+		presets[commandBase(preset.Command)] = true
+	}
+	for _, bundled := range bundledCommands {
+		if !presets[commandBase(bundled)] {
+			t.Errorf("%q is shipped beside the build but no builtin preset runs it", bundled)
+		}
+	}
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate this test file")
+	}
+	script := filepath.Join(filepath.Dir(file), "..", "..", "gui", "scripts", "bundle-binaries.mjs")
+	payload, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("read %s: %v", script, err)
+	}
+	for _, bundled := range bundledCommands {
+		if !strings.Contains(string(payload), `"`+bundled+`"`) {
+			t.Errorf("gui/scripts/bundle-binaries.mjs does not copy %q", bundled)
+		}
+	}
+}
+
+// TestOnlyThisBuildsAgentsAreShipped covers the gate itself, so a name that
+// nobody declared bundled is refused before the filesystem is even asked.
+func TestOnlyThisBuildsAgentsAreShipped(t *testing.T) {
+	for _, command := range []string{
+		"",
+		"claude-agent-acp",
+		"opencode",
+		"gemini",
+		"reasonix",
+		"flotilla-no-such-agent-binary",
+	} {
+		if shipped(command) {
+			t.Errorf("%q is treated as a binary this build ships", command)
+		}
+	}
+
+	// The replay agent is the one this build carries, with or without the
+	// extension a packaging on this platform may write.
+	for _, command := range []string{"flt-replay-agent", "flt-replay-agent.exe"} {
+		if !shipped(command) {
+			t.Errorf("%q is not treated as a binary this build ships", command)
 		}
 	}
 }
