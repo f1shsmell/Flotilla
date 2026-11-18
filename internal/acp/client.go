@@ -331,6 +331,23 @@ func inside(root, path string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// planText renders a plan's entries as the task list the agent wrote, one per
+// line. An empty plan yields empty text, which the store already treats as no
+// update: an agent that has not filled in a plan yet said nothing.
+func planText(entries []sdk.PlanEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Content == "" {
+			continue
+		}
+		lines = append(lines, entry.Content)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func sliceLines(content string, line, limit *int) string {
 	if line == nil && limit == nil {
 		return content
@@ -383,6 +400,11 @@ func flatten(update sdk.SessionUpdate) Update {
 		out.ToolStatus = string(deref(update.ToolCallUpdate.Status))
 	case update.Plan != nil:
 		out.Kind = kindPlan
+		// A plan's content lives in its entries, never in a text field, so a
+		// client that only carried Text would show an empty line — and a
+		// recording built from that client would drop the plan entirely. The
+		// entries are rendered as the task list the agent wrote, one per line.
+		out.Text = planText(update.Plan.Entries)
 	}
 
 	if raw, err := json.Marshal(update); err == nil {

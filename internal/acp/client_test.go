@@ -317,6 +317,57 @@ func TestTerminalRequestsAreRefused(t *testing.T) {
 	}
 }
 
+// TestAPlanUpdateCarriesItsEntries pins the shape a plan has: its content lives
+// in the entries, never in a text field, so a client that only carried Text
+// showed an empty line and a recording built from it dropped the plan.
+func TestAPlanUpdateCarriesItsEntries(t *testing.T) {
+	var got []Update
+	c := NewClient(Config{
+		Workspace: t.TempDir(),
+		OnUpdate:  func(u Update) { got = append(got, u) },
+	})
+	ctx := context.Background()
+
+	plan := sdk.UpdatePlan(
+		sdk.PlanEntry{Content: "read the relay", Status: sdk.PlanEntryStatusPending, Priority: sdk.PlanEntryPriorityHigh},
+		sdk.PlanEntry{Content: "fix the fan-out", Status: sdk.PlanEntryStatusPending, Priority: sdk.PlanEntryPriorityMedium},
+	)
+	if err := c.SessionUpdate(ctx, sdk.SessionNotification{SessionId: "s", Update: plan}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("received %d updates, want the one plan", len(got))
+	}
+	if got[0].Kind != UpdatePlan {
+		t.Fatalf("plan update = %+v, want kind plan", got[0])
+	}
+	want := "read the relay\nfix the fan-out"
+	if got[0].Text != want {
+		t.Fatalf("plan text = %q, want %q", got[0].Text, want)
+	}
+}
+
+// TestAnEmptyPlanCarriesNoText keeps the store's rule: an agent that has not
+// filled in a plan yet said nothing, and a blank line would claim otherwise.
+func TestAnEmptyPlanCarriesNoText(t *testing.T) {
+	var got []Update
+	c := NewClient(Config{
+		Workspace: t.TempDir(),
+		OnUpdate:  func(u Update) { got = append(got, u) },
+	})
+
+	if err := c.SessionUpdate(context.Background(), sdk.SessionNotification{
+		SessionId: "s",
+		Update:    sdk.UpdatePlan(),
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+	if len(got) != 1 || got[0].Text != "" {
+		t.Fatalf("an empty plan = %+v, want kind plan and no text", got)
+	}
+}
+
 func TestSessionUpdateIsFlattened(t *testing.T) {
 	var got []Update
 	c := NewClient(Config{

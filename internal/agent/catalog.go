@@ -102,14 +102,70 @@ type Catalog struct {
 	presets  []Preset
 	problems []string
 	lookPath func(string) (string, error)
+	// selfDir is where this build's own agent binaries sit: the directory of the
+	// executable, which is where a release puts them beside the daemon. A preset
+	// for an agent this build ships is found there when PATH does not have it,
+	// because a bundled binary is not installed by the user.
+	selfDir string
 }
 
 // New returns the catalog rooted at dir: adapters live in dir/adapters and the
 // user's switches in dir/agents.json. Nothing is created until a switch is set.
 func New(dir string) *Catalog {
-	c := &Catalog{dir: dir, lookPath: exec.LookPath}
+	c := &Catalog{dir: dir, lookPath: exec.LookPath, selfDir: executableDir()}
 	c.load()
 	return c
+}
+
+// executableDir is the directory of this process's binary, or empty when it
+// cannot be known. An empty value makes every bundled lookup fail, which is the
+// cautious outcome: an agent this build did not ship stays missing.
+func executableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+// Bundled resolves one of this build's own agents as it ships: a bare command
+// name is looked for beside the executable, with the platform's extension
+// appended as well. It is exported because `flt probe` offers the same names and
+// has to find them the same way — a probe that only asked PATH would offer an
+// agent and then fail on every install.
+//
+// Only a bare name is looked up: a command that names a directory, absolute or
+// relative, is the caller's to run, and joining it under the binary directory
+// would quietly rewrite a path the user typed.
+func Bundled(command string) (string, bool) {
+	dir := executableDir()
+	if dir == "" || command == "" || command != filepath.Base(command) {
+		return "", false
+	}
+	candidate := filepath.Join(dir, command)
+	for _, path := range []string{candidate + ".exe", candidate} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// bundled finds one of this build's own agents next to the executable, using the
+// directory this catalog was built with. The rule lives in Bundled so `flt
+// probe` resolves the same names the same way; this method only supplies the
+// directory, which tests replace.
+func (c *Catalog) bundled(command string) (string, bool) {
+	if c.selfDir == "" || command == "" || command != filepath.Base(command) {
+		return "", false
+	}
+	candidate := filepath.Join(c.selfDir, command)
+	for _, path := range []string{candidate + ".exe", candidate} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // List projects every preset with this machine's and the user's answers. The
@@ -185,6 +241,14 @@ func (c *Catalog) Set(id string, change Change) (Entry, error) {
 // is measured by `flt probe` and recorded in docs/support-matrix.md.
 func Builtins() []Preset {
 	return []Preset{
+		{
+			ID:          "replay",
+			Name:        "Replay",
+			Command:     "flt-replay-agent",
+			Mode:        session.ModeACP,
+			Needs:       "nothing: it answers from a recorded scenario",
+			Description: "A recorded turn, replayed. No model, no login, no spend.",
+		},
 		{
 			ID:          "reasonix",
 			Name:        "Reasonix Studio",
@@ -284,6 +348,18 @@ func (c *Catalog) AdapterForCommand(command string) (adapters.Adapter, bool) {
 	return adapters.Adapter{}, false
 }
 
+// Resolve turns a command into what a spawn should execute. A command this
+// build ships is looked for beside the executable first, because a bundled
+// agent is not installed by the user and exec does not search there. Anything
+// else is handed back unchanged: PATH and an absolute path the user typed keep
+// working exactly as they did.
+func (c *Catalog) Resolve(command string) string {
+	if path, ok := c.bundled(command); ok {
+		return path
+	}
+	return command
+}
+
 // commandBase is the program name a command names, without its directory or the
 // Windows extension a shell would add.
 func commandBase(command string) string {
@@ -327,7 +403,14 @@ func (c *Catalog) project(preset Preset, set Change) Entry {
 	// A command that does not resolve is not an error: the entry says the agent
 	// is not installed, which is what the settings page shows and what the picker
 	// uses to keep an unavailable agent out of the way.
-	if path, err := c.lookPath(preset.Command); err == nil {
+	//
+	// A bundled agent is looked for beside the executable first, then on PATH: a
+	// release ships its own agents there, and a user who also installed one on
+	// PATH should still get the one the build was tested with.
+	if path, ok := c.bundled(preset.Command); ok {
+		entry.Installed = true
+		entry.Path = path
+	} else if path, err := c.lookPath(preset.Command); err == nil {
 		entry.Installed = true
 		entry.Path = path
 	}

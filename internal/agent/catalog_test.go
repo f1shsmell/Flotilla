@@ -12,12 +12,24 @@ import (
 	"github.com/f1shsmell/flotilla/internal/session"
 )
 
+// exeSuffix is the extension this platform puts on a binary. A bundled agent is
+// written with it, and the catalogue's lookup has to find it without the preset
+// naming the extension.
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
+}
+
 // newCatalog builds a catalog with a stubbed PATH, so tests never depend on
-// what this machine happens to have installed.
+// what this machine happens to have installed. The binary directory is an empty
+// temp dir for the same reason: nothing found next to the test binary leaks in.
 func newCatalog(t *testing.T, installed ...string) *Catalog {
 	t.Helper()
 
 	c := New(t.TempDir())
+	c.selfDir = t.TempDir()
 	c.lookPath = func(command string) (string, error) {
 		for _, name := range installed {
 			if name == command {
@@ -67,6 +79,169 @@ func TestListProjectsEveryBuiltin(t *testing.T) {
 		}
 		if entry.Name == "" || entry.Command != preset.Command {
 			t.Fatalf("%s was projected as %+v", preset.ID, entry)
+		}
+	}
+}
+
+// TestTheReplayPresetShipsWithTheBuild pins the point of the preset: a demo, a
+// GIF recording or a smoke run can start a session with nothing prepared and no
+// token spent, so the catalogue has to offer it like any other agent.
+func TestTheReplayPresetShipsWithTheBuild(t *testing.T) {
+	entry := entryFor(t, newCatalog(t).List(), "replay")
+
+	if entry.Source != BuiltinSource {
+		t.Fatalf("the replay preset came from %q, want %q", entry.Source, BuiltinSource)
+	}
+	if entry.Mode != session.ModeACP || !entry.Chat || entry.CLI {
+		t.Fatalf("the replay preset = %+v, want an acp agent offered to chat", entry)
+	}
+	// It needs nothing from the user: that is what makes it usable for a demo on
+	// a machine with no agent installed at all.
+	if entry.Needs == "" || !strings.Contains(entry.Needs, "nothing") {
+		t.Fatalf("the replay preset needs %q, want it to say it needs nothing", entry.Needs)
+	}
+}
+
+// TestABundledAgentIsFoundBesideTheExecutable pins why the replay preset is
+// usable at all: its binary ships next to the daemon rather than on PATH, so a
+// lookup that only asked PATH would report the agent missing on every install.
+func TestABundledAgentIsFoundBesideTheExecutable(t *testing.T) {
+	c := newCatalog(t)
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	// A release on Windows carries the .exe suffix; the lookup has to see it
+	// without the preset naming it.
+	path := filepath.Join(dir, "flt-replay-agent"+exeSuffix())
+	if err := os.WriteFile(path, []byte("not really a binary"), 0o600); err != nil {
+		t.Fatalf("write the bundled agent: %v", err)
+	}
+
+	entry := entryFor(t, c.List(), "replay")
+	if !entry.Installed {
+		t.Fatal("a bundled agent was reported as missing")
+	}
+	if entry.Path != path {
+		t.Fatalf("the bundled agent resolved to %q, want %q", entry.Path, path)
+	}
+}
+
+// TestABundledAgentWinsOverOneOnPath pins the precedence: a user who also
+// installed the agent on PATH gets the one this build was tested with, not a
+// different version that happens to be first in PATH.
+func TestABundledAgentWinsOverOneOnPath(t *testing.T) {
+	c := newCatalog(t, "flt-replay-agent")
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	bundled := filepath.Join(dir, "flt-replay-agent"+exeSuffix())
+	if err := os.WriteFile(bundled, []byte("bundled"), 0o600); err != nil {
+		t.Fatalf("write the bundled agent: %v", err)
+	}
+
+	entry := entryFor(t, c.List(), "replay")
+	if entry.Path != bundled {
+		t.Fatalf("the replay agent resolved to %q, want the bundled %q", entry.Path, bundled)
+	}
+}
+
+// TestAMissingBundledAgentStaysMissing pins the cautious outcome: a build whose
+// binary was not copied over must not claim the agent is installed, because the
+// picker would then start a session that cannot spawn.
+func TestAMissingBundledAgentStaysMissing(t *testing.T) {
+	c := newCatalog(t)
+	c.selfDir = t.TempDir()
+
+	entry := entryFor(t, c.List(), "replay")
+	if entry.Installed || entry.Path != "" {
+		t.Fatalf("the replay preset = %+v, want it missing", entry)
+	}
+}
+
+// TestAnEmptySelfDirIsNotAGuess pins the fallback: a process that cannot name
+// its own directory looks on PATH only, rather than treating the working
+// directory as the place its agents live.
+func TestAnEmptySelfDirIsNotAGuess(t *testing.T) {
+	c := newCatalog(t)
+	c.selfDir = ""
+
+	if entry := entryFor(t, c.List(), "replay"); entry.Installed {
+		t.Fatalf("the replay preset = %+v, want it missing with no binary directory", entry)
+	}
+}
+
+// TestResolveTurnsABundledNameIntoItsPath pins the step that makes a bundled
+// preset usable: the picker sends a command name, and the host spawns it with
+// exec, which does not look beside the daemon. Resolve is what closes the gap,
+// so a name this build ships becomes an absolute path before the spawn.
+func TestResolveTurnsABundledNameIntoItsPath(t *testing.T) {
+	c := newCatalog(t)
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	path := filepath.Join(dir, "flt-replay-agent"+exeSuffix())
+	if err := os.WriteFile(path, []byte("bundled"), 0o600); err != nil {
+		t.Fatalf("write the bundled agent: %v", err)
+	}
+
+	if got := c.Resolve("flt-replay-agent"); got != path {
+		t.Fatalf("Resolve = %q, want the bundled %q", got, path)
+	}
+}
+
+// TestResolveLeavesAnUnknownCommandAlone pins the fallback: a command this build
+// does not ship is handed to exec unchanged, so PATH and an absolute path the
+// user typed keep working exactly as before.
+func TestResolveLeavesAnUnknownCommandAlone(t *testing.T) {
+	c := newCatalog(t)
+
+	if got := c.Resolve("claude-agent-acp"); got != "claude-agent-acp" {
+		t.Fatalf("Resolve = %q, want the name unchanged", got)
+	}
+	if got := c.Resolve("/opt/bin/claude-agent-acp"); got != "/opt/bin/claude-agent-acp" {
+		t.Fatalf("Resolve = %q, want the absolute path unchanged", got)
+	}
+}
+
+// TestResolvePrefersTheBundledBinaryOverPath pins the same precedence the
+// listing shows: the preset is offered pointing at the bundled copy, so the
+// spawn has to use that copy rather than a different version on PATH.
+func TestResolvePrefersTheBundledBinaryOverPath(t *testing.T) {
+	c := newCatalog(t, "flt-replay-agent")
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	bundled := filepath.Join(dir, "flt-replay-agent"+exeSuffix())
+	if err := os.WriteFile(bundled, []byte("bundled"), 0o600); err != nil {
+		t.Fatalf("write the bundled agent: %v", err)
+	}
+
+	if got := c.Resolve("flt-replay-agent"); got != bundled {
+		t.Fatalf("Resolve = %q, want the bundled %q", got, bundled)
+	}
+}
+
+// TestABundledLookupTakesOnlyABareName pins the guard: a command that names a
+// directory is the caller's to run, and joining it under the binary directory
+// would quietly rewrite a path the user typed.
+func TestABundledLookupTakesOnlyABareName(t *testing.T) {
+	c := newCatalog(t)
+	dir := t.TempDir()
+	c.selfDir = dir
+
+	// A file that exists, reached through a relative path, must not be found.
+	if err := os.WriteFile(filepath.Join(dir, "agent"+exeSuffix()), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write the file: %v", err)
+	}
+
+	for _, command := range []string{
+		"../agent",
+		"./agent",
+		filepath.Join(dir, "agent"),
+		"sub/agent",
+	} {
+		if got := c.Resolve(command); got != command {
+			t.Errorf("Resolve(%q) = %q, want the path left alone", command, got)
 		}
 	}
 }

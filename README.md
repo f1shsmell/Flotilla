@@ -20,6 +20,9 @@ its discipline.
   is not implemented yet. OS restarts restore layout and history only.
 - **BYO subscription**: no token resale, no model lock-in.
 - **Adapters are data**: most new agents are one JSON definition.
+- **Replay for demos**: a recorded turn answers from disk, so demos, GIFs and
+  smoke runs cost nothing and need no login. `flt replay export <session>`
+  turns a real session's log into one.
 
 ## Development
 

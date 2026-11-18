@@ -78,10 +78,14 @@ true before a signed one ships.
 
 `FLT_GUI_SMOKE_FORM` and `FLT_GUI_SMOKE_AGENTS` are the two paths that walk this
 build's agent catalogue: the first picks an agent by name in the new-session
-form, the second opens the settings page and flips a switch. Either needs an
-agent the daemon can actually start; an adapter file under
-`$FLT_HOME/config/adapters` pointing at `flt-fake-acp-agent` is the cheap way to
-get one without spending a real provider's tokens.
+form, the second opens the settings page and flips a switch.
+
+The cheapest agent to walk them with is the builtin **Replay** preset: it answers
+from a recorded scenario, so a smoke run spends no provider tokens and needs no
+login. Its binary (`flt-replay-agent`) ships beside the daemon, and the catalogue
+looks for it there before PATH. An adapter file under
+`$FLT_HOME/config/adapters` pointing at `flt-fake-acp-agent` is the other way to
+get an agent that costs nothing.
 
 A headless run against a real daemon and a real agent:
 

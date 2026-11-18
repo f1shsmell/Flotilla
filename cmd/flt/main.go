@@ -11,14 +11,17 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
+	"github.com/f1shsmell/flotilla/internal/acp/replay"
 	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/transcript"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
 
@@ -74,6 +77,8 @@ func run(args []string, out io.Writer) error {
 		return listAgents(*channel, *asJSON, out)
 	case "probe":
 		return probeAgent(fs.Args()[1:], out)
+	case "replay":
+		return replayCommand(fs.Args()[1:], *channel, out)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -315,7 +320,85 @@ func probeTarget(command string, rest []string) (probe.Agent, error) {
 	return agent, nil
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent and report what came back\n"
+// replayCommand records a session's turn as a scenario the replay agent can
+// answer from. It reads the daemon's own transcript rather than a live session,
+// so a recording can be made after the turn that produced it, and without a
+// daemon running.
+func replayCommand(args []string, channel string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: flt replay export <session> [--out <path>]")
+	}
+	if args[0] != "export" {
+		return fmt.Errorf("unknown replay command %q: only export is supported", args[0])
+	}
+
+	fs := flag.NewFlagSet("flt replay export", flag.ContinueOnError)
+	fs.SetOutput(out)
+	target := fs.String("out", "", "file to write the scenario to; empty prints it")
+
+	fs.Usage = func() {
+		_, _ = fmt.Fprint(out, "usage: flt replay export <session> [--out <path>]\n\n"+
+			"Turns a session's stored log into a scenario the replay agent answers from.\n"+
+			"The person's own messages are the turn boundaries and are not kept: the\n"+
+			"replay records each prompt as it arrives, so keeping them would show every\n"+
+			"question twice.\n\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("parse arguments: %w", err)
+	}
+	// The flag package stops at the first non-flag, so `replay export sess --out
+	// path` would leave --out unread and write to stdout instead. The same
+	// refusal probe uses keeps a stray flag from being silently ignored.
+	if fs.NArg() != 1 {
+		return fmt.Errorf("name one session to export, got %q: flags go before the session", fs.Args())
+	}
+	id := fs.Arg(0)
+
+	paths, err := home.Resolve(channel)
+	if err != nil {
+		return fmt.Errorf("resolve state paths: %w", err)
+	}
+
+	store := transcript.NewStore(filepath.Join(paths.Sessions, "transcripts"))
+	defer func() { _ = store.Close() }()
+
+	page, err := store.Page(id, transcript.Window{})
+	if err != nil {
+		return fmt.Errorf("read the log of session %q: %w", id, err)
+	}
+	if len(page.Records) == 0 {
+		return fmt.Errorf("session %q has no stored log: %w", id, replay.ErrNothingToExport)
+	}
+
+	raw := make([]json.RawMessage, 0, len(page.Records))
+	for _, rec := range page.Records {
+		raw = append(raw, rec.Update)
+	}
+	scenario, err := replay.ExportJSON(raw)
+	if err != nil {
+		return fmt.Errorf("export session %q: %w", id, err)
+	}
+	scenario.Name = id
+
+	if *target == "" {
+		payload, err := json.MarshalIndent(scenario, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode the scenario: %w", err)
+		}
+		return print(out, string(payload))
+	}
+	if err := scenario.Save(*target); err != nil {
+		return fmt.Errorf("write the scenario to %q: %w", *target, err)
+	}
+	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
+}
+
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent and report what came back\n  replay   export a session's log as a replay scenario\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {
