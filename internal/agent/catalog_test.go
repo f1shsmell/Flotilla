@@ -316,9 +316,9 @@ func TestOnlyThisBuildsAgentsAreShipped(t *testing.T) {
 		}
 	}
 
-	// The replay agent is the one this build carries, with or without the
-	// extension a packaging on this platform may write.
-	for _, command := range []string{"flt-replay-agent", "flt-replay-agent.exe"} {
+	// The replay agent is the one this build carries, whatever extension or
+	// capitalisation a packaging or a user on Windows may write.
+	for _, command := range []string{"flt-replay-agent", "flt-replay-agent.exe", "FLT-Replay-Agent"} {
 		if !shipped(command) {
 			t.Errorf("%q is not treated as a binary this build ships", command)
 		}

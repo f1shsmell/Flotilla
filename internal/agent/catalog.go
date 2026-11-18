@@ -190,12 +190,15 @@ func besideDir(dir, command string) (string, bool) {
 // build. It is the gate that keeps the lookup honest: beside-the-executable is
 // the right place only for a binary the build itself carries, because every
 // other agent is installed by the user and PATH is where it is found.
+//
+// The comparison is case-insensitive for the same reason AdapterForCommand's is:
+// a user on Windows may type the capitalisation the catalogue does not.
 func shipped(command string) bool {
 	if command == "" {
 		return false
 	}
 	for _, bundled := range bundledCommands {
-		if commandBase(bundled) == commandBase(command) {
+		if strings.EqualFold(commandBase(bundled), commandBase(command)) {
 			return true
 		}
 	}
