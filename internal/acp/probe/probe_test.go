@@ -95,33 +95,38 @@ func TestLookupFindsAKnownNameAndRejectsTheRest(t *testing.T) {
 	}
 }
 
-// TestAvailableReportsAMissingBinary is the honest failure a maintainer sees
-// before any token is spent.
-func TestAvailableReportsAMissingBinary(t *testing.T) {
+// TestResolveReportsAMissingBinary is the honest failure a maintainer sees
+// before any token is spent, and it names the same path the spawn then uses: a
+// gate that resolved one binary and Run another could pass here and fail there.
+func TestResolveReportsAMissingBinary(t *testing.T) {
 	missing := probe.Agent{
 		Name:            "absent",
 		Command:         "flotilla-no-such-agent-binary",
 		NeedsCredential: "nothing: the binary does not exist",
 	}
-	if err := missing.Available(); err == nil {
-		t.Fatal("Available reported a missing binary as present")
+	if _, err := missing.Resolve(); err == nil {
+		t.Fatal("Resolve reported a missing binary as present")
 	}
 
 	// A command the user names has no login hint, so the message must not
 	// carry an empty pair of parentheses.
 	bare := probe.Agent{Name: "absent", Command: "flotilla-no-such-agent-binary"}
-	err := bare.Available()
+	_, err := bare.Resolve()
 	if err == nil {
-		t.Fatal("Available reported a missing binary as present")
+		t.Fatal("Resolve reported a missing binary as present")
 	}
 	if strings.Contains(err.Error(), "()") {
 		t.Fatalf("error %q carries an empty hint", err)
 	}
 
 	present := probe.Agent{Name: "go", Command: "go"}
-	if _, err := exec.LookPath("go"); err == nil {
-		if err := present.Available(); err != nil {
-			t.Fatalf("Available on a binary that exists: %v", err)
+	if want, lookErr := exec.LookPath("go"); lookErr == nil {
+		got, err := present.Resolve()
+		if err != nil {
+			t.Fatalf("Resolve on a binary that exists: %v", err)
+		}
+		if got != want {
+			t.Fatalf("Resolve = %q, want the PATH copy %q", got, want)
 		}
 	}
 }

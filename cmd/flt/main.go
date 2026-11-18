@@ -268,8 +268,10 @@ func probeAgent(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// A missing binary or a missing login fails before any token is spent.
-	if err := agent.Available(); err != nil {
+	// A missing binary or a missing login fails before any token is spent. The
+	// spawn applies this same resolution, so the gate and the launch cannot name
+	// different binaries.
+	if _, err := agent.Resolve(); err != nil {
 		return fmt.Errorf("probe %s: %w", agent.Command, err)
 	}
 

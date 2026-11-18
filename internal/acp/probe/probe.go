@@ -103,23 +103,28 @@ func Lookup(name string) (Agent, error) {
 	return Agent{}, fmt.Errorf("unknown agent %q: known names are %s", name, strings.Join(Names(), ", "))
 }
 
-// Available reports whether the agent's command can be run: beside this build
-// when the binary ships with it, otherwise on PATH.
+// Resolve turns the agent's command into what a spawn should execute: the copy
+// this build carries beside its executable when there is one, otherwise the copy
+// on PATH, named by its full path so the spawn cannot find a different one than
+// the gate looked at. It is the only answer to "can this agent run here", because
+// the gate and the launch have to agree: a probe that passed availability and
+// then spawned a second lookup could report success and fail on every install.
 //
 // The bundled lookup is not optional. The catalogue offers an agent that ships
-// beside the daemon, and a probe that only asked PATH would accept the name and
+// beside the daemon, and a lookup that only asked PATH would accept the name and
 // then fail on every install — the one case the name was added for.
-func (a Agent) Available() error {
-	if _, ok := agent.Bundled(a.Command); ok {
-		return nil
+func (a Agent) Resolve() (string, error) {
+	if path, ok := agent.Bundled(a.Command); ok {
+		return path, nil
 	}
-	if _, err := exec.LookPath(a.Command); err != nil {
+	path, err := exec.LookPath(a.Command)
+	if err != nil {
 		if a.NeedsCredential == "" {
-			return fmt.Errorf("%s is not on PATH: %w", a.Command, err)
+			return "", fmt.Errorf("%s is not on PATH: %w", a.Command, err)
 		}
-		return fmt.Errorf("%s is not on PATH (%s): %w", a.Command, a.NeedsCredential, err)
+		return "", fmt.Errorf("%s is not on PATH (%s): %w", a.Command, a.NeedsCredential, err)
 	}
-	return nil
+	return path, nil
 }
 
 // Run opens one session with the agent, sends one prompt, and reports what came
@@ -129,11 +134,16 @@ func Run(ctx context.Context, agent Agent, workspace, prompt string) (Result, er
 		prompt = DefaultPrompt
 	}
 
+	binary, err := agent.Resolve()
+	if err != nil {
+		return Result{}, fmt.Errorf("probe %s: %w", agent.Command, err)
+	}
+
 	res := Result{Command: agent.Command}
 
 	started := time.Now()
 	session, err := acp.Open(ctx, acp.Launch{
-		Command: agent.Command,
+		Command: binary,
 		Args:    agent.Args,
 		Dir:     workspace,
 	}, acp.Config{
