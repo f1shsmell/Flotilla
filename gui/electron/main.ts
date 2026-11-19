@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, ipcMain, shell, type WebContents } from "electron";
 
 import { DaemonClient } from "./client";
-import { methods } from "./contract";
-import { STREAM_INPUT } from "./wire";
+import { constants, methods } from "./contract";
+import { STREAM_INPUT, RpcError } from "./wire";
 import { ensure } from "./daemon";
+import { reconnect, type ReconnectTask } from "./reconnect";
 import { Coalescer } from "./stream";
 import { readUiState, saveUiState, type UiState } from "./uiState";
 
@@ -43,6 +44,15 @@ interface Link {
 
 const links = new Map<string, Link>();
 
+// healing is the retry loop per session whose link died on its own. opening
+// dedupes a dial: a user click and a healing attempt naming one session must
+// share one connection, not race two onto the daemon. wanted separates the two
+// callers: a heal whose dial outlived its cancel must not discard a link the
+// user reopened through the same shared dial.
+const healing = new Map<string, ReconnectTask>();
+const opening = new Map<string, Promise<unknown>>();
+const wanted = new Set<string>();
+
 let control: DaemonClient | null = null;
 let window: BrowserWindow | null = null;
 
@@ -57,7 +67,22 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
   if (existing) {
     return existing.attached;
   }
+  const pending = opening.get(sessionId);
+  if (pending) {
+    return pending;
+  }
+  const attempt = (async () => {
+    try {
+      return await dial(sessionId, target);
+    } finally {
+      opening.delete(sessionId);
+    }
+  })();
+  opening.set(sessionId, attempt);
+  return attempt;
+}
 
+async function dial(sessionId: string, target: WebContents): Promise<unknown> {
   // Terminal bytes are merged here, in the main process, before they cross the
   // renderer boundary: one message per stream per turn of the event loop is
   // what keeps a log flood from becoming a frame per PTY read.
@@ -103,6 +128,9 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
         // truncate the screen a user is reading.
         bytes.close();
         send(target, { type: "closed", session: sessionId, error: error?.message });
+        // close() on purpose never reaches here — DaemonClient.fail guards on
+        // closed — so this is always a death the window did not ask for.
+        heal(sessionId, target);
       },
     },
   });
@@ -117,8 +145,64 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
     throw error;
   }
 
+  // A window that closed mid-dial owns nothing: keeping the link would leave a
+  // pipe streaming to a view that no longer exists (macOS outlives its windows).
+  if (target.isDestroyed()) {
+    client.close();
+    throw new Error(`window closed while attaching session ${sessionId}`);
+  }
+
   links.set(sessionId, { client, attached, bytes });
   return attached;
+}
+
+// heal retries a link that died on its own. ensure() inside the dial respawns
+// the daemon when nobody is listening, so a daemon restart heals here too. An
+// in-flight prompt is never resent: its call already rejected when the pipe
+// died, and sending it again could run the turn twice.
+function heal(sessionId: string, target: WebContents): void {
+  if (healing.has(sessionId) || target.isDestroyed()) {
+    return;
+  }
+  const task = reconnect({
+    attempt: async () => {
+      try {
+        return { status: "attached", attached: await openLink(sessionId, target) };
+      } catch (error) {
+        // A session the daemon no longer serves is gone for good; retrying
+        // would poll a name nothing will ever answer to again.
+        if (
+          error instanceof RpcError &&
+          (error.is(Number(constants.ipc.CodeUnknownSession)) ||
+            error.is(Number(constants.ipc.CodeHostUnreachable)))
+        ) {
+          return { status: "gone" };
+        }
+        throw error;
+      }
+    },
+    onAttached: (attached) => {
+      if (healing.get(sessionId) !== task) {
+        // Superseded or cancelled mid-dial: a newer open shares this dial and
+        // renders its own answer, so only an unwanted link is dropped here.
+        if (!wanted.has(sessionId)) {
+          dropLink(sessionId);
+        }
+        return;
+      }
+      healing.delete(sessionId);
+      send(target, { type: "reattached", session: sessionId, attached });
+    },
+    onGone: () => {
+      if (healing.get(sessionId) === task) {
+        healing.delete(sessionId);
+      }
+    },
+  });
+  healing.set(sessionId, task);
+  // The loop reports its own failures through the callbacks; a throw escaping
+  // them is a bug worth a line, not an unhandled rejection in the main process.
+  void task.done.catch((error) => console.error(`heal for ${sessionId} failed`, error));
 }
 
 function link(sessionId: string): DaemonClient {
@@ -133,8 +217,15 @@ function link(sessionId: string): DaemonClient {
 
 // dropLink closes one session's connection and releases its queue. The bytes it
 // was still holding go out first: a view that is being torn down may still be
-// painting what already arrived.
+// painting what already arrived. A heal in progress is cancelled with it: the
+// window asked for silence, not a reconnection.
 function dropLink(sessionId: string): void {
+  wanted.delete(sessionId);
+  const retry = healing.get(sessionId);
+  if (retry) {
+    healing.delete(sessionId);
+    retry.cancel();
+  }
   const held = links.get(sessionId);
   if (held === undefined) {
     return;
@@ -213,9 +304,25 @@ function register(): void {
     dropLink(sessionId);
   });
 
-  ipcMain.handle("flotilla:open", async (event, sessionId: string) =>
-    openLink(sessionId, event.sender),
-  );
+  ipcMain.handle("flotilla:open", async (event, sessionId: string) => {
+    wanted.add(sessionId);
+    try {
+      return await openLink(sessionId, event.sender);
+    } catch (error) {
+      // A click that could not be honoured wants nothing: the renderer clears
+      // its selection, so the heal it may have started goes too.
+      wanted.delete(sessionId);
+      throw error;
+    } finally {
+      // The click supersedes any heal: a retry waking later must not rebuild
+      // the view from a snapshot older than what this open just rendered.
+      const retry = healing.get(sessionId);
+      if (retry) {
+        healing.delete(sessionId);
+        retry.cancel();
+      }
+    }
+  });
 
   ipcMain.handle("flotilla:prompt", async (_event, sessionId: string, text: string) =>
     link(sessionId).call(methods.session.MethodPrompt, { text }, turnTimeoutMs),
@@ -372,10 +479,10 @@ function createWindow(): void {
   }
   window.on("closed", () => {
     window = null;
-    // The sessions keep running in their hosts; this window's connections do
-    // not outlive it. Anything still queued goes out first: a window that is
-    // closing has a last frame worth painting.
-    for (const [sessionId] of [...links]) {
+    // The sessions keep running in their hosts; this window's connections and
+    // heals do not outlive it. Anything still queued goes out first: a window
+    // that is closing has a last frame worth painting.
+    for (const sessionId of new Set([...links.keys(), ...healing.keys()])) {
       dropLink(sessionId);
     }
   });

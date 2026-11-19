@@ -29,17 +29,39 @@ import {
 } from "./store";
 
 interface WireEvent {
-  type: "update" | "permission" | "state" | "surface" | "data" | "closed";
+  type: "update" | "permission" | "state" | "surface" | "data" | "closed" | "reattached";
   session: string;
   update?: unknown;
   question?: unknown;
   state?: unknown;
   controls?: unknown;
+  // attached is the fresh attach answer a heal delivers, shaped like open's.
+  attached?: unknown;
   // bytes is one coalesced run of terminal output. It crosses the preload
   // boundary as a Uint8Array: structured clone copies the bytes, and nothing
   // has to decode them.
   bytes?: Uint8Array;
   error?: string;
+}
+
+interface Attached {
+  info?: { mode?: string; state?: unknown };
+  history?: unknown;
+  history_more?: boolean;
+  surface?: unknown;
+}
+
+// attachedState folds an attach answer into a view: the log the daemon kept
+// goes in before any live update, and the surface rides along so the selectors
+// are filled on the first frame. Open and heal read one definition.
+function attachedState(id: string, attached: Attached): SessionState {
+  return withControls(
+    applyHistory(newSession(id, attached.info?.mode ?? "pty"), {
+      updates: attached.history,
+      more: attached.history_more === true,
+    }),
+    attached.surface,
+  );
 }
 
 export function App(): React.ReactElement {
@@ -158,6 +180,26 @@ export function App(): React.ReactElement {
       if (event.type === "state") {
         const update = (event.state ?? {}) as { state?: unknown };
         setFleet((current) => withLifecycle(current, event.session, update.state));
+        return;
+      }
+
+      // A heal rebuilt the link. The view starts over from the fresh attach
+      // answer, exactly as an open would: the history it carries already
+      // contains anything the dead link delivered.
+      if (event.type === "reattached") {
+        if (event.session !== selectedId.current) {
+          return;
+        }
+        const attached = (event.attached ?? {}) as Attached;
+        // Events queued from the dead link must not land on the rebuilt state:
+        // the history already has them, and a stale "closed" would re-lose it.
+        queue.current = queue.current.filter((queued) => queued.session !== event.session);
+        setSession(attachedState(event.session, attached));
+        if ((attached.info?.state ?? "") === "done") {
+          void window.flotilla.seen(event.session).catch(() => {
+            // A host that went away cannot record seen; the row keeps its badge.
+          });
+        }
         return;
       }
 
@@ -313,26 +355,12 @@ export function App(): React.ReactElement {
     pendingOutput.current = [];
     setOpenError(null);
     try {
-      const attached = (await window.flotilla.open(id)) as {
-        info?: { mode?: string; state?: unknown };
-        history?: unknown;
-        history_more?: boolean;
-        surface?: unknown;
-      };
+      const attached = (await window.flotilla.open(id)) as Attached;
 
       // The log the daemon kept for this session goes in with the state, before
       // any live update: a window that opens a turn an hour old should show how
-      // the agent got there, not start at its own arrival. The surface rides
-      // along for the same reason: the selectors are filled on the first frame.
-      setSession(
-        withControls(
-          applyHistory(newSession(id, attached.info?.mode ?? "pty"), {
-            updates: attached.history,
-            more: attached.history_more === true,
-          }),
-          attached.surface,
-        ),
-      );
+      // the agent got there, not start at its own arrival.
+      setSession(attachedState(id, attached));
 
       // Opening a session is looking at it, which is what separates done from
       // idle. Only a finished turn is marked: marking a working session seen
@@ -566,7 +594,12 @@ export function App(): React.ReactElement {
               }
             }}
             onInput={(data) => void window.flotilla.input(session.id, data)}
-            onResize={(cols, rows) => void window.flotilla.resize(session.id, cols, rows)}
+            onResize={(cols, rows) => {
+              // A resize while the link is healing has no pipe to travel on.
+              // It is best-effort: the PTY keeps the size it last heard, and
+              // the next measure sends the new one.
+              void window.flotilla.resize(session.id, cols, rows).catch(() => {});
+            }}
           />
         ) : (
           <p className="empty">
