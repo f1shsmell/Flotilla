@@ -100,6 +100,12 @@ type Host struct {
 	// the read path for every ACP session and for a terminal agent nobody
 	// described.
 	detector *adapters.Detector
+	// injectMu serialises structured prompt injections: two pastes
+	// interleaving in one terminal would shred both.
+	injectMu sync.Mutex
+	// outputTick carries one token per terminal read, so a line-mode paste
+	// can wait for the agent to answer before sending the next line.
+	outputTick chan struct{}
 
 	mu   sync.Mutex
 	conn *ipc.Conn
@@ -194,6 +200,7 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 		return nil, fmt.Errorf("create pty: %w", err)
 	}
 	h.pty = ptmx
+	h.outputTick = make(chan struct{}, 1)
 
 	// The agent's lifetime is the host's, not the caller's: a cancelled context
 	// stops Serve, and Close is what stops the agent afterwards.
@@ -407,6 +414,9 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		if err != nil {
 			return nil, err
 		}
+		if h.pty != nil {
+			return h.promptPTY(ctx, req)
+		}
 		return h.promptACP(ctx, req)
 	case session.MethodCancel:
 		return struct{}{}, h.cancelACP(ctx)
@@ -466,8 +476,7 @@ func (h *Host) info() session.Info {
 	}
 }
 
-// resize sizes the terminal. A structured session has no terminal, so it is the
-// same refusal as a prompt sent to a PTY session.
+// resize sizes the terminal. A structured session has no terminal to size.
 func (h *Host) resize(req session.ResizeRequest) error {
 	if h.pty == nil {
 		return fmt.Errorf("session %q has no terminal: %w", h.cfg.ID, errWrongMode)
@@ -584,6 +593,10 @@ func (h *Host) pumpOutput() {
 			chunk := buf[:n]
 			h.observe(chunk)
 			h.send(session.StreamOutput, chunk)
+			select {
+			case h.outputTick <- struct{}{}:
+			default:
+			}
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
