@@ -9,7 +9,17 @@
 import { constants } from "./contract";
 
 export const PROTOCOL_VERSION = Number(constants.ipc.ProtocolVersion);
+// MIN_PROTOCOL_VERSION is the oldest dialect this client can still talk to. It
+// is a floor, not an equality: a newer daemon answers with a higher number and
+// that is a newer dialect, not a rejection. What actually crosses the wire is
+// decided by the capability set below.
+export const MIN_PROTOCOL_VERSION = Number(constants.ipc.MinProtocolVersion);
 export const MAX_FRAME_SIZE = Number(constants.ipc.MaxFrameSize);
+
+// CAPABILITIES is what this window understands, sent in every handshake so the
+// daemon can trim what an older peer would not read. It is read from the same
+// contract the daemon's own set is generated from, so the two cannot drift.
+export const CAPABILITIES: string[] = [constants.ipc.CapabilityDiagnostics];
 export const STREAM_OUTPUT = Number(constants.session.StreamOutput);
 export const STREAM_INPUT = Number(constants.session.StreamInput);
 
@@ -90,6 +100,10 @@ export class FrameDecoder {
 
 export interface Handshake {
   version: number;
+  // capabilities names what the sender understands, so the peer can trim what
+  // it sends instead of refusing the connection. An older build omits it, which
+  // reads as "understands only what was always there".
+  capabilities?: string[];
   token?: string;
   role?: string;
   // client names the window behind the connection. It is the same for every

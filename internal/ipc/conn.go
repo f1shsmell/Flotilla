@@ -34,6 +34,10 @@ type Config struct {
 	Client string
 	// Session names the session this connection is about, when it has one.
 	Session string
+	// Capabilities names what this side understands. Nil means Supported(),
+	// which is what every real caller wants; a test sets it to act as an older
+	// build that named none.
+	Capabilities []Capability
 	// Handler serves inbound calls; nil rejects them with ErrNoHandler, which
 	// is what a data-only peer wants.
 	Handler Handler
@@ -74,8 +78,10 @@ type Conn struct {
 	role       string
 	peer       string
 	peerClient string
+	peerCaps   []Capability
 	client     string
 	session    string
+	caps       []Capability
 	handler    Handler
 	onData     DataSink
 
@@ -107,11 +113,21 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 	}
 	if err := c.authorize(hello); err != nil {
 		// Say why before closing: a silent drop is undiagnosable across a pipe.
-		_ = c.sendHandshake(Handshake{Version: ProtocolVersion, Role: c.role, Error: err.Error()})
+		_ = c.sendHandshake(Handshake{
+			Version:      ProtocolVersion,
+			Capabilities: c.caps,
+			Role:         c.role,
+			Error:        err.Error(),
+		})
 		c.closeAfterFlush(flushTimeout)
 		return nil, err
 	}
-	if err := c.sendHandshake(Handshake{Version: ProtocolVersion, Role: c.role, Session: c.session}); err != nil {
+	if err := c.sendHandshake(Handshake{
+		Version:      ProtocolVersion,
+		Capabilities: c.caps,
+		Role:         c.role,
+		Session:      c.session,
+	}); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -122,6 +138,7 @@ func Serve(nc net.Conn, cfg Config) (*Conn, error) {
 
 	c.peer = hello.Role
 	c.peerClient = hello.Client
+	c.peerCaps = hello.Capabilities
 	c.session = hello.Session
 	go c.readNotifications()
 	go c.readLoop()
@@ -142,11 +159,12 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 		return nil, fmt.Errorf("set the handshake deadline: %w", err)
 	}
 	if err := c.sendHandshake(Handshake{
-		Version: ProtocolVersion,
-		Token:   cfg.Token,
-		Role:    cfg.Role,
-		Client:  cfg.Client,
-		Session: cfg.Session,
+		Version:      ProtocolVersion,
+		Capabilities: c.caps,
+		Token:        cfg.Token,
+		Role:         cfg.Role,
+		Client:       cfg.Client,
+		Session:      cfg.Session,
 	}); err != nil {
 		_ = nc.Close()
 		return nil, err
@@ -161,9 +179,9 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 		_ = nc.Close()
 		return nil, fmt.Errorf("%s rejected the connection: %s: %w", addr, hello.Error, ErrUnauthorized)
 	}
-	if hello.Version != ProtocolVersion {
+	if err := versionCheck(hello.Version); err != nil {
 		_ = nc.Close()
-		return nil, fmt.Errorf("peer speaks protocol %d, this build speaks %d: %w", hello.Version, ProtocolVersion, ErrProtocol)
+		return nil, err
 	}
 	if err := nc.SetReadDeadline(time.Time{}); err != nil {
 		_ = nc.Close()
@@ -172,12 +190,18 @@ func Dial(ctx context.Context, addr Address, dir string, cfg Config) (*Conn, err
 
 	c.peer = hello.Role
 	c.peerClient = hello.Client
+	c.peerCaps = hello.Capabilities
 	go c.readNotifications()
 	go c.readLoop()
 	return c, nil
 }
 
 func newConn(nc net.Conn, cfg Config) *Conn {
+	caps := cfg.Capabilities
+	if caps == nil {
+		caps = Supported()
+	}
+
 	return &Conn{
 		rwc:     nc,
 		r:       NewReader(nc),
@@ -186,6 +210,7 @@ func newConn(nc net.Conn, cfg Config) *Conn {
 		role:    cfg.Role,
 		client:  cfg.Client,
 		session: cfg.Session,
+		caps:    caps,
 		handler: cfg.Handler,
 		onData:  cfg.OnData,
 		pending: make(map[int64]chan rpcMessage),
@@ -199,6 +224,11 @@ func (c *Conn) Role() string { return c.role }
 
 // Peer reports the role the peer announced, or "" before its handshake.
 func (c *Conn) Peer() string { return c.peer }
+
+// PeerCapabilities reports what the peer said it understands. A peer that named
+// none reads as empty, which is what an older build looks like: it is served
+// the fields that were always there and nothing more.
+func (c *Conn) PeerCapabilities() []Capability { return c.peerCaps }
 
 // Client reports the client this connection speaks for: the peer's name when
 // this side dialled, or this side's own when the peer connected to it. It is
@@ -553,17 +583,31 @@ func (c *Conn) sendHandshake(h Handshake) error {
 	return c.w.WriteControl(payload)
 }
 
-// authorize rejects a handshake whose version or token does not match. The
-// token check is constant-time and runs before any method is served.
+// authorize rejects a handshake whose dialect is older than this build serves, or
+// whose token does not match. The token check is constant-time and runs before
+// any method is served. A newer dialect is not a rejection: its extra fields
+// are simply not read here, and the capability set decides what is sent back.
 func (c *Conn) authorize(hello Handshake) error {
-	if hello.Version != ProtocolVersion {
-		return fmt.Errorf("peer speaks protocol %d, this build speaks %d: %w", hello.Version, ProtocolVersion, ErrProtocol)
+	if err := versionCheck(hello.Version); err != nil {
+		return err
 	}
 	if c.token == "" {
 		return fmt.Errorf("no token configured: %w", ErrUnauthorized)
 	}
 	if !EqualToken(hello.Token, c.token) {
 		return fmt.Errorf("token mismatch: %w", ErrUnauthorized)
+	}
+	return nil
+}
+
+// versionCheck refuses a peer that speaks an older dialect than this build can
+// serve. The number is a floor rather than an equality: a peer above it speaks
+// a newer dialect, and refusing it would make every later field addition break
+// every earlier window — which is what the capability set exists to avoid.
+func versionCheck(version int) error {
+	if version < MinProtocolVersion {
+		return fmt.Errorf("peer speaks protocol %d, this build serves %d and later: %w",
+			version, MinProtocolVersion, ErrProtocol)
 	}
 	return nil
 }

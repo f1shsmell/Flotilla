@@ -47,6 +47,12 @@ protocol).
 - The terminal data plane is separate from the control plane: control messages
   are JSON-RPC; PTY bytes ride length-prefixed binary frames with coalescing
   and backpressure.
+- The handshake negotiates capabilities, never an exact version: `version` is a
+  floor the peer must meet, and `capabilities` decides what crosses the wire.
+  A newer peer connects and is sent less; only a peer below the floor is
+  refused. Every capability names its removal condition beside it, so the set
+  stays a list of live differences rather than a graveyard. This is what lets
+  a stable window talk to a preview daemon.
 - Daemon lifecycle: the GUI detached-spawns it on demand (optional login
   autostart), single-instance lock; the GUI detects daemon death and respawns
   it; hosts outlive the daemon.

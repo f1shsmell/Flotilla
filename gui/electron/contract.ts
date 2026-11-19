@@ -52,6 +52,7 @@ export const constants = {
     EnvHome: "FLT_HOME",
   },
   ipc: {
+    CapabilityDiagnostics: "diagnostics_v1",
     CodeAlreadyRunning: "-32016",
     CodeBadComment: "-32015",
     CodeBadRequest: "-32006",
@@ -73,6 +74,7 @@ export const constants = {
     KindControl: "1",
     KindData: "2",
     MaxFrameSize: "1048576",
+    MinProtocolVersion: "1",
     ProtocolVersion: "1",
     QueueDepth: "64",
     TokenSize: "32",
@@ -188,6 +190,7 @@ export const wireTypes = {
     "Token": { go: "Token", type: "string" },
   },
   "ipc.Handshake": {
+    "capabilities": { go: "Capabilities", type: "[]Capability", optional: true },
     "client": { go: "Client", type: "string", optional: true },
     "error": { go: "Error", type: "string", optional: true },
     "role": { go: "Role", type: "string" },
