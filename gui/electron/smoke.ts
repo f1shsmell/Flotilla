@@ -183,6 +183,9 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const expect = process.env.FLT_GUI_SMOKE_EXPECT ?? "";
   const expectTerminal = process.env.FLT_GUI_SMOKE_TERMINAL ?? "";
   const open = process.env.FLT_GUI_SMOKE_OPEN ?? "";
+  // FLT_GUI_SMOKE_HEAL kills the daemon under the open session and waits for
+  // the supervisor to respawn it and reattach: the whole self-heal chain.
+  const heal = process.env.FLT_GUI_SMOKE_HEAL ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   const form = process.env.FLT_GUI_SMOKE_FORM ?? "";
@@ -292,14 +295,79 @@ export async function run(target: BrowserWindow): Promise<boolean> {
       console.log(`smoke: started ${started.id}`);
       await waitFor(target, started.id, deadline);
       if (open === "") {
-        return finish(target, started.id, expectTerminal, deadline);
+        return await finish(target, started.id, expectTerminal, deadline);
       }
     }
 
     if (open !== "") {
       await waitFor(target, open, deadline);
       await clickSession(target, open);
-      await waitFor(target, "Cancel turn", deadline);
+      // "Cancel turn" alone can already be on screen from a restored session:
+      // the header naming this id is what proves the click's own open landed.
+      await waitForCondition(
+        target,
+        `document.querySelector(".session-header h2")?.textContent === ${JSON.stringify(open)}`,
+        `the view to open ${open}`,
+        deadline,
+      );
+    }
+
+    if (heal !== "") {
+      if (open === "") {
+        throw new Error("the heal walk needs FLT_GUI_SMOKE_OPEN to name the session it watches");
+      }
+      const before = (await target.webContents.executeJavaScript(
+        `window.flotilla.fleet()`,
+      )) as { pid?: number };
+      if (!before?.pid) {
+        throw new Error("the fleet reported no daemon pid to kill");
+      }
+      if (expectTerminal !== "") {
+        // The screen the user was reading must exist before the kill: the
+        // heal is only proven if that same screen survives it.
+        await waitForTerminal(target, expectTerminal, deadline);
+      }
+      // The host keeps running through this: a daemon death is exactly the
+      // restart the supervisor exists for.
+      process.kill(before.pid);
+
+      // The closed event must reach the view first: a heal that skipped the
+      // lost state would make the recovery check below vacuous.
+      await waitForCondition(
+        target,
+        `document.body.innerText.includes("· lost")`,
+        "the view to report the lost link",
+        deadline,
+      );
+
+      let healed = false;
+      while (Date.now() < deadline) {
+        const status = (await target.webContents
+          .executeJavaScript(`window.flotilla.fleet()`)
+          .catch(() => null)) as {
+          pid?: number;
+          sessions?: { id: string; reachable: boolean }[];
+        } | null;
+        if (
+          status?.pid &&
+          status.pid !== before.pid &&
+          status.sessions?.some((entry) => entry.id === open && entry.reachable)
+        ) {
+          healed = true;
+          break;
+        }
+        await step();
+      }
+      if (!healed) {
+        throw new Error(`a new daemon never came back serving ${open}`);
+      }
+      await waitForCondition(
+        target,
+        `!document.body.innerText.includes("· lost")`,
+        "the view to leave the lost state",
+        deadline,
+      );
+      console.log("smoke: healed after the daemon died");
     }
 
     if (prompt !== "") {
@@ -389,7 +457,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
       }
     }
 
-    return finish(target, expect, expectTerminal, deadline);
+    return await finish(target, expect, expectTerminal, deadline);
   } catch (error) {
     console.error(`smoke: ${error instanceof Error ? error.message : String(error)}`);
     return false;
