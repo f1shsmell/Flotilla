@@ -10,17 +10,24 @@ import (
 	"github.com/f1shsmell/flotilla/internal/session"
 )
 
+// noResumeEnv selects the fake agent variant that never advertised
+// session/resume: the kind of agent whose death ends its session.
+func noResumeEnv() []string {
+	return append(os.Environ(), "FLT_FAKE_NO_RESUME=1")
+}
+
 // TestAnAcpAgentThatDiesTakesItsSessionWithIt pins the fourth shape the
 // keep-alive boundary must not allow: host up, agent gone. A prompt sent after
 // the agent's death would fail inside the transport, so nobody would learn about
 // it from the lifecycle — the session would read as whatever it last said while
-// every turn failed.
+// every turn failed. An agent that advertised resume is relaunched instead
+// (agentresume_test.go); this is the agent that cannot be.
 //
 // The agent is killed here instead of exiting on its own, which is the same
 // observable event from the host's side: the process is gone and nobody asked
 // the host to close.
 func TestAnAcpAgentThatDiesTakesItsSessionWithIt(t *testing.T) {
-	h, dir := startACPHost(t, acp.Auto)
+	h, dir := startACPHostEnv(t, acp.Auto, 0, noResumeEnv())
 
 	pid := h.acp.sess.PID()
 	if pid == 0 {
@@ -67,7 +74,7 @@ func TestAnAcpAgentThatDiesTakesItsSessionWithIt(t *testing.T) {
 // not become: done claims a turn finished, and this build watched the process
 // disappear rather than the agent declare an end.
 func TestAnAgentThatDiesIsNotReportedAsDone(t *testing.T) {
-	h, _ := startACPHost(t, acp.Auto)
+	h, _ := startACPHostEnv(t, acp.Auto, 0, noResumeEnv())
 
 	if got := h.CurrentState(); got == session.StateDone {
 		t.Fatalf("a fresh session reports %q", got)
@@ -134,6 +141,7 @@ func TestAnAgentThatExitsBeforeTheHostServesIsReported(t *testing.T) {
 		StateDir: dir,
 		Command:  binary,
 		Dir:      dir,
+		Env:      noResumeEnv(),
 		Policy:   acp.Auto,
 	}, session.NewRegistry(dir), discardLogger())
 	if err != nil {

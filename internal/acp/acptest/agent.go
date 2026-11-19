@@ -43,19 +43,36 @@ func NewAgent() *Agent {
 	return &Agent{sessions: make(map[sdk.SessionId]*SessionState)}
 }
 
-// SetAgentConnection receives the connection the SDK builds.
-func (a *Agent) SetAgentConnection(conn *sdk.AgentSideConnection) { a.conn = conn }
+// SetAgentConnection receives the connection the SDK builds. Its receive loop
+// is already running, so the write takes the lock the turn's reads take.
+func (a *Agent) SetAgentConnection(conn *sdk.AgentSideConnection) {
+	a.mu.Lock()
+	a.conn = conn
+	a.mu.Unlock()
+}
 
-// Initialize advertises the capabilities this fake supports.
+// connection reads the connection under the lock SetAgentConnection takes.
+func (a *Agent) connection() *sdk.AgentSideConnection {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.conn
+}
+
+// Initialize advertises the capabilities this fake supports. FLT_FAKE_NO_RESUME
+// selects the variant that never advertised resume, whose death ends a session.
 func (a *Agent) Initialize(context.Context, sdk.InitializeRequest) (sdk.InitializeResponse, error) {
-	return sdk.InitializeResponse{
-		ProtocolVersion: sdk.ProtocolVersionNumber,
-		AgentCapabilities: sdk.AgentCapabilities{
-			LoadSession: true,
-			SessionCapabilities: sdk.SessionCapabilities{
-				Resume: &sdk.SessionResumeCapabilities{},
-			},
+	caps := sdk.AgentCapabilities{
+		LoadSession: true,
+		SessionCapabilities: sdk.SessionCapabilities{
+			Resume: &sdk.SessionResumeCapabilities{},
 		},
+	}
+	if os.Getenv("FLT_FAKE_NO_RESUME") != "" {
+		caps.SessionCapabilities.Resume = nil
+	}
+	return sdk.InitializeResponse{
+		ProtocolVersion:   sdk.ProtocolVersionNumber,
+		AgentCapabilities: caps,
 	}, nil
 }
 
@@ -69,14 +86,9 @@ func (a *Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, 
 	return sdk.LogoutResponse{}, nil
 }
 
-// NewSession records a session and returns its id, along with the two things a
-// client projects into controls. The fake announces them so the zero-token
-// handshake probe has something to read: an agent that announced nothing
-// would make "the probe read nothing" indistinguishable from "the probe is
-// broken".
-func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
-	id := sdk.SessionId("fake-" + lastSegment(params.Cwd))
-
+// fakeSurface is the modes and options the fake announces, fresh on every
+// call so a session's state is never shared with another's.
+func fakeSurface() (*sdk.SessionModeState, []sdk.SessionConfigOption) {
 	models := sdk.SessionConfigSelectOptionsUngrouped{
 		{Value: "fake-small", Name: "Small"},
 		{Value: "fake-large", Name: "Large"},
@@ -114,6 +126,17 @@ func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk
 			CurrentValue: true,
 		}},
 	}
+	return modes, options
+}
+
+// NewSession records a session and returns its id, along with the two things a
+// client projects into controls. The fake announces them so the zero-token
+// handshake probe has something to read: an agent that announced nothing
+// would make "the probe read nothing" indistinguishable from "the probe is
+// broken".
+func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+	id := sdk.SessionId("fake-" + lastSegment(params.Cwd))
+	modes, options := fakeSurface()
 
 	a.mu.Lock()
 	a.sessions[id] = &SessionState{id: id, askPermission: true, modes: modes, options: options}
@@ -131,13 +154,27 @@ func (a *Agent) LoadSession(_ context.Context, _ sdk.LoadSessionRequest) (sdk.Lo
 	return sdk.LoadSessionResponse{}, nil
 }
 
-// ResumeSession records that the id is live again.
+// ResumeSession records that the id is live again and answers with the same
+// surface a new session gets, plus a "resumed" marker: a client can tell a
+// reopened conversation from a created one by reading it. FLT_FAKE_RESUME_FAIL
+// selects the variant that refuses, which is how a test drives the failure path.
 func (a *Agent) ResumeSession(_ context.Context, params sdk.ResumeSessionRequest) (sdk.ResumeSessionResponse, error) {
+	if os.Getenv("FLT_FAKE_RESUME_FAIL") != "" {
+		return sdk.ResumeSessionResponse{}, fmt.Errorf("resume refused by the fake")
+	}
+	modes, options := fakeSurface()
+	options = append(options, sdk.SessionConfigOption{Boolean: &sdk.SessionConfigOptionBoolean{
+		Id:           "resumed",
+		Name:         "Resumed",
+		Type:         "boolean",
+		CurrentValue: true,
+	}})
+
 	a.mu.Lock()
-	a.sessions[params.SessionId] = &SessionState{id: params.SessionId}
+	a.sessions[params.SessionId] = &SessionState{id: params.SessionId, askPermission: true, modes: modes, options: options}
 	a.mu.Unlock()
 
-	return sdk.ResumeSessionResponse{}, nil
+	return sdk.ResumeSessionResponse{Modes: modes, ConfigOptions: options}, nil
 }
 
 // Cancel stops the current turn.
@@ -161,6 +198,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	if !ok {
 		return sdk.PromptResponse{}, fmt.Errorf("unknown session %q", params.SessionId)
 	}
+	conn := a.connection()
 
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
@@ -174,21 +212,21 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	}()
 
 	prompted := promptText(params.Prompt)
-	if err := a.conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 		SessionId: s.id,
 		Update:    sdk.UpdateAgentMessageText("working on: " + prompted),
 	}); err != nil {
 		return sdk.PromptResponse{}, fmt.Errorf("send an update: %w", err)
 	}
 
-	if err := a.conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 		SessionId: s.id,
 		Update:    sdk.UpdateAgentThoughtText("thinking about: " + prompted),
 	}); err != nil {
 		return sdk.PromptResponse{}, fmt.Errorf("send an update: %w", err)
 	}
 
-	if err := a.conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 		SessionId: s.id,
 		Update: sdk.StartToolCall(
 			sdk.ToolCallId("call-1"),
@@ -205,7 +243,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	a.mu.Unlock()
 
 	if ask {
-		resp, err := a.conn.RequestPermission(turnCtx, sdk.RequestPermissionRequest{
+		resp, err := conn.RequestPermission(turnCtx, sdk.RequestPermissionRequest{
 			SessionId: s.id,
 			ToolCall: sdk.ToolCallUpdate{
 				ToolCallId: sdk.ToolCallId("call-1"),
@@ -223,7 +261,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		}
 
 		if resp.Outcome.Cancelled != nil {
-			if err := a.conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+			if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 				SessionId: s.id,
 				Update:    sdk.UpdateAgentMessageText("stopped: no permission"),
 			}); err != nil {
@@ -233,7 +271,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		}
 	}
 
-	if err := a.conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 		SessionId: s.id,
 		Update: sdk.UpdateToolCall(
 			sdk.ToolCallId("call-1"),
@@ -266,7 +304,7 @@ func (a *Agent) SetSessionMode(ctx context.Context, params sdk.SetSessionModeReq
 		return sdk.SetSessionModeResponse{}, fmt.Errorf("unknown session %q", params.SessionId)
 	}
 
-	if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+	if err := a.connection().SessionUpdate(ctx, sdk.SessionNotification{
 		SessionId: params.SessionId,
 		Update: sdk.SessionUpdate{
 			CurrentModeUpdate: &sdk.SessionCurrentModeUpdate{CurrentModeId: params.ModeId},
@@ -323,7 +361,7 @@ func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessio
 		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("unknown session %q", sessionID)
 	}
 
-	if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+	if err := a.connection().SessionUpdate(ctx, sdk.SessionNotification{
 		SessionId: sessionID,
 		Update: sdk.SessionUpdate{
 			ConfigOptionUpdate: &sdk.SessionConfigOptionUpdate{ConfigOptions: options},

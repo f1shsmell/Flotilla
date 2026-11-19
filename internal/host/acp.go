@@ -23,6 +23,14 @@ import (
 // after this process is gone.
 const bufferedUpdates = 256
 
+// maxResumes and resumeWindow bound the crash loop: an agent that keeps dying
+// is relaunched only this many times inside the window, and past that the host
+// closes instead of spawning forever.
+const (
+	maxResumes   = 3
+	resumeWindow = 10 * time.Minute
+)
+
 // errWrongMode reports a call that does not fit this session's mode.
 var errWrongMode = ipc.Class(errors.New("host: wrong session mode"), ipc.CodeWrongMode)
 
@@ -42,24 +50,46 @@ type acpSession struct {
 	// to a daemon that reconnects, and this is the number that lets that daemon
 	// tell a replay of work it already stored from new work.
 	nextSeq uint64
+	// resumes are the relaunch times the crash cap counts, oldest first.
+	resumes []time.Time
 }
 
-// startACP opens an ACP conversation for this host. Policy zero is Supervised,
-// so a caller that names none gets the cautious one.
-func (h *Host) startACP(ctx context.Context) error {
-	sess, err := acp.Open(ctx, acp.Launch{
-		Command: h.cfg.Command,
-		Args:    h.cfg.Args,
-		Dir:     h.cfg.Dir,
-		Env:     h.cfg.Env,
-	}, acp.Config{
+// acpAgent reads the current agent session under the lock a relaunch takes:
+// a resume swaps the pointer while prompts and surface reads are using it.
+func (h *Host) acpAgent() *acp.Session {
+	h.acp.mu.Lock()
+	defer h.acp.mu.Unlock()
+	return h.acp.sess
+}
+
+// acpLaunch describes this host's agent process, resuming a saved conversation
+// when an id is given.
+func (h *Host) acpLaunch(resumeID string) acp.Launch {
+	return acp.Launch{
+		Command:  h.cfg.Command,
+		Args:     h.cfg.Args,
+		Dir:      h.cfg.Dir,
+		Env:      h.cfg.Env,
+		ResumeID: resumeID,
+	}
+}
+
+// acpConfig is the client behaviour every launch of this host's agent gets.
+func (h *Host) acpConfig() acp.Config {
+	return acp.Config{
 		Workspace:    h.cfg.Dir,
 		Policy:       h.cfg.Policy,
 		Asker:        h.askClient,
 		MaxReadBytes: ipc.MaxFrameSize,
 		OnUpdate:     h.forwardUpdate,
 		OnSurface:    h.surfaceChanged,
-	})
+	}
+}
+
+// startACP opens an ACP conversation for this host. Policy zero is Supervised,
+// so a caller that names none gets the cautious one.
+func (h *Host) startACP(ctx context.Context) error {
+	sess, err := acp.Open(ctx, h.acpLaunch(""), h.acpConfig())
 	if err != nil {
 		return fmt.Errorf("open the acp connection: %w", err)
 	}
@@ -72,6 +102,57 @@ func (h *Host) startACP(ctx context.Context) error {
 		// run's first update look like a replay of the old run's.
 		nextSeq: h.cfg.SeqBase,
 	}
+	return nil
+}
+
+// resumeAllowed counts one relaunch against the crash cap. Times outside the
+// window fall away, so a long-lived session is not punished for old crashes.
+func (h *Host) resumeAllowed() bool {
+	h.acp.mu.Lock()
+	defer h.acp.mu.Unlock()
+
+	cutoff := time.Now().Add(-resumeWindow)
+	kept := make([]time.Time, 0, len(h.acp.resumes))
+	for _, at := range h.acp.resumes {
+		if at.After(cutoff) {
+			kept = append(kept, at)
+		}
+	}
+	h.acp.resumes = kept
+	if len(kept) >= maxResumes {
+		return false
+	}
+	kept = append(kept, time.Now())
+	h.acp.resumes = kept
+	return true
+}
+
+// resumeACP relaunches the agent inside this host and reopens the saved
+// conversation. The buffer and the numbering stay: a daemon's transcript must
+// still recognise what the dead agent already produced. An in-flight prompt is
+// never resent — its call already failed when the pipe died.
+func (h *Host) resumeACP(ctx context.Context, id sdk.SessionId) error {
+	sess, err := acp.Open(ctx, h.acpLaunch(string(id)), h.acpConfig())
+	if err != nil {
+		return fmt.Errorf("relaunch the agent: %w", err)
+	}
+
+	h.acp.mu.Lock()
+	// A stop that arrived during the relaunch owns the host. Close stores
+	// closing before it reads the session under this lock, so the new agent is
+	// either swapped in for Close to find or closed here — never orphaned.
+	if h.closing.Load() {
+		h.acp.mu.Unlock()
+		_ = sess.Close()
+		return fmt.Errorf("host %q is closing", h.cfg.ID)
+	}
+	h.acp.sess = sess
+	// The old questions belonged to the dead connection; their waiters already
+	// unwound with it, and a stale answer must not reach the new agent.
+	h.acp.pending = make(map[string]chan acp.PermissionAnswer)
+	h.acp.mu.Unlock()
+
+	h.surfaceChanged(acp.SurfaceChange{})
 	return nil
 }
 
@@ -226,6 +307,11 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 
 	select {
 	case a := <-answer:
+		// The connection may have died with the answer in flight: a cancelled
+		// context means the turn is gone, and working would claim it resumed.
+		if ctx.Err() != nil {
+			return acp.PermissionAnswer{}, nil
+		}
 		// Answered: the turn resumes, so the session is working again.
 		h.setState(session.StateWorking)
 		return a, nil
@@ -233,6 +319,9 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 		return acp.PermissionAnswer{}, nil
 	case <-timeout:
 		h.log.Warn("permission unanswered", "session", h.cfg.ID, "title", req.Title)
+		if ctx.Err() != nil {
+			return acp.PermissionAnswer{}, nil
+		}
 		// The refusal reaches the agent and the turn moves on, so the session
 		// is no longer waiting on anyone.
 		h.setState(session.StateWorking)
@@ -307,7 +396,7 @@ func (h *Host) promptACP(ctx context.Context, req session.PromptRequest) (sessio
 	// synchronous and returns when the agent stops.
 	h.setState(session.StateWorking)
 
-	resp, err := h.acp.sess.Prompt(ctx, sdk.TextBlock(req.Text))
+	resp, err := h.acpAgent().Prompt(ctx, sdk.TextBlock(req.Text))
 	if err != nil {
 		// A failed turn is not "done": the work did not happen, and a caller
 		// that reads done would think there is something to look at. Unknown
@@ -327,7 +416,7 @@ func (h *Host) cancelACP(ctx context.Context) error {
 	if h.acp == nil {
 		return fmt.Errorf("session %q is not an ACP session: %w", h.cfg.ID, errWrongMode)
 	}
-	if err := h.acp.sess.Cancel(ctx); err != nil {
+	if err := h.acpAgent().Cancel(ctx); err != nil {
 		return fmt.Errorf("cancel the turn: %w", err)
 	}
 	return nil
@@ -337,7 +426,7 @@ func (h *Host) closeACP() []error {
 	if h.acp == nil {
 		return nil
 	}
-	if err := h.acp.sess.Close(); err != nil {
+	if err := h.acpAgent().Close(); err != nil {
 		return []error{fmt.Errorf("close the acp session: %w", err)}
 	}
 	return nil

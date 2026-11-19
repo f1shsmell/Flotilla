@@ -62,6 +62,14 @@ func startACPHost(t *testing.T, policy acp.Policy) (*Host, string) {
 func startACPHostFrom(t *testing.T, policy acp.Policy, seqBase uint64) (*Host, string) {
 	t.Helper()
 
+	return startACPHostEnv(t, policy, seqBase, nil)
+}
+
+// startACPHostEnv is startACPHostFrom with the agent's environment, which is
+// how a test picks a fake agent variant.
+func startACPHostEnv(t *testing.T, policy acp.Policy, seqBase uint64, env []string) (*Host, string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	binary := buildFakeAgent(t)
 
@@ -72,6 +80,7 @@ func startACPHostFrom(t *testing.T, policy acp.Policy, seqBase uint64) (*Host, s
 		StateDir: dir,
 		Command:  binary,
 		Dir:      dir,
+		Env:      env,
 		Policy:   policy,
 		SeqBase:  seqBase,
 	}, session.NewRegistry(dir), discardLogger())
