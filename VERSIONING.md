@@ -13,7 +13,10 @@ A MAJOR bump (post-1.0) is triggered by a breaking change to **any** of:
 2. **Adapter JSON schema** — the definition format community adapters are
    written against.
 3. **Daemon IPC protocol** — the named-pipe JSON-RPC contract between GUI,
-   daemon and session hosts, including the token handshake.
+   daemon and session hosts, including the token handshake. Its `version` is a
+   floor, not an equality: a peer may speak a later dialect and still connect,
+   and `capabilities` decides which fields cross the wire. Adding a capability
+   is therefore not a breaking change; raising `MinProtocolVersion` is.
 4. **On-disk state** — the SQLite layout and session files a newer build must
    open from an older build of the same MAJOR line (forward compatibility is
    not guaranteed).

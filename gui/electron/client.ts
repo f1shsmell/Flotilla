@@ -1,7 +1,9 @@
 import net from "node:net";
 
 import {
+  CAPABILITIES,
   FrameDecoder,
+  MIN_PROTOCOL_VERSION,
   ProtocolError,
   PROTOCOL_VERSION,
   RpcError,
@@ -102,11 +104,14 @@ export class DaemonClient {
             reject(new Error(`${options.path} rejected the connection: ${hello.error}`));
             return;
           }
-          if (hello.version !== PROTOCOL_VERSION) {
+          if (hello.version < MIN_PROTOCOL_VERSION) {
+            // Only a dialect older than this build serves is refused. A newer
+            // daemon is a newer window elsewhere: its extra fields are simply
+            // not read here, and the capability set decides what travels.
             socket.destroy();
             reject(
               new Error(
-                `peer speaks protocol ${hello.version}, this build speaks ${PROTOCOL_VERSION}`,
+                `peer speaks protocol ${hello.version}, this build serves ${MIN_PROTOCOL_VERSION} and later`,
               ),
             );
             return;
@@ -119,6 +124,7 @@ export class DaemonClient {
         socket.write(
           encodeControl({
             version: PROTOCOL_VERSION,
+            capabilities: CAPABILITIES,
             token: options.token,
             role: options.role,
             client: options.client,

@@ -127,16 +127,26 @@ func dialDaemon(t *testing.T, dir, token string, handler ipc.Handler, onData ipc
 // its session connection.
 func dialDaemonAs(t *testing.T, dir, token, client string, handler ipc.Handler, onData ipc.DataSink) *ipc.Conn {
 	t.Helper()
+	return dialDaemonWith(t, dir, token, client, nil, handler, onData)
+}
+
+// dialDaemonWith connects as a client that names a specific capability set.
+// Nil means this build's own set, which is what a current window sends; an
+// explicitly empty slice is an older build that named nothing, and is how a
+// trim is tested.
+func dialDaemonWith(t *testing.T, dir, token, client string, caps []ipc.Capability, handler ipc.Handler, onData ipc.DataSink) *ipc.Conn {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	t.Cleanup(cancel)
 
 	conn, err := ipc.Dial(ctx, ipc.Address{Channel: "test", Name: "daemon"}, dir, ipc.Config{
-		Token:   token,
-		Role:    "gui",
-		Client:  client,
-		Handler: handler,
-		OnData:  onData,
+		Token:        token,
+		Role:         "gui",
+		Client:       client,
+		Capabilities: caps,
+		Handler:      handler,
+		OnData:       onData,
 	})
 	if err != nil {
 		t.Fatalf("dial the daemon: %v", err)

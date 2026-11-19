@@ -3,10 +3,19 @@
 `docs/positioning.md` 说营销话术以支持矩阵为限。这份文件就是那个矩阵:每一条
 都必须有一次真实回合的证据,没跑过的不写。
 
-取证工具是 `flt probe`(见 `internal/acp/probe`),它做的是一次完整回合:
-initialize → newSession → prompt → 流式 update → stop reason,并读出 agent 是否
-advertise `session/resume`。**它不覆盖**权限请求(probe 用自动批准策略,不会触发)、
-cancel、fs 能力探测——这些要另外取证,不能拿这张表冒充。
+取证工具是 `flt probe`(见 `internal/acp/probe`),它有两条路径:
+
+- **`flt probe`** 做的是一次完整回合:initialize → newSession → prompt → 流式 update →
+  stop reason,并读出 agent 是否 advertise `session/resume`。它花真 token,而且**不覆盖**
+  权限请求(probe 用自动批准策略,不会触发)、cancel、fs 能力探测——这些要另外取证,
+  不能拿这张表冒充。
+- **`flt probe --handshake`** 在 session 建立后立刻关闭,不发 prompt:**零 token、零
+  provider 调用**。它读回 agent 自报的 `modes` 与 `configOptions`(含 id、名称、当前值与
+  可选项),所以一台**没有可用登录**的机器也能取证。表里「握手通过」那一档,今后一律
+  用这条命令复现;原先写在仓库外临时探针里的结果,以此为可持久化的入口。
+
+两条路径分属两档证据,不可互相顶替:握手通过只证明协议、鉴权方式与会话建立;回合内容
+仍要 `flt probe` 打真回合才算取证。
 
 ## 已取证
 
@@ -63,9 +72,16 @@ Reasonix Studio 是维护者自己的产品。它跑通证明的是「我们的 
 ## 复现
 
 ```bash
+# 零 token:只读 agent 自报的 modes 与 configOptions,不需要可用登录
+go run ./cmd/flt probe --handshake --command "<你的 agent> --acp"
+go run ./cmd/flt probe --handshake --json --command "<你的 agent> --acp"
+
+# 真回合:花你自己的 token
 go run ./cmd/flt probe reasonix
 go run ./cmd/flt probe --command "opencode acp"
 go run ./cmd/flt probe --command "<你的 agent> --acp"
 ```
 
 `flt probe` 花的是你自己的 token;缺二进制或缺登录时它在开回合之前就失败。
+`--handshake` 不花 token,缺登录也能读到档位——它报告里的 `updates=0` 就是
+「没有发出任何回合」的证据。

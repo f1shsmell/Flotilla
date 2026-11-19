@@ -39,6 +39,11 @@ type Session struct {
 	stdout  io.ReadCloser
 	agentID sdk.SessionId
 	init    sdk.InitializeResponse
+	// created is what the agent answered when the session was opened. It is kept
+	// because it carries the two things a client projects into controls — the
+	// modes and the configuration options — and a caller that dropped it could
+	// only learn them by sending a turn, which costs tokens.
+	created sdk.NewSessionResponse
 	exitc   chan error
 	// exited closes when the agent process is gone, whichever side ended it.
 	// Close reads the status from exitc; a host that wants to notice an agent
@@ -156,6 +161,7 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("open a session with the agent: %w", err)
 	}
 	s.agentID = created.SessionId
+	s.created = created
 
 	return s, nil
 }
@@ -194,6 +200,17 @@ func (s *Session) Capabilities() sdk.AgentCapabilities { return s.init.AgentCapa
 func (s *Session) SupportsResume() bool {
 	return s.init.AgentCapabilities.SessionCapabilities.Resume != nil
 }
+
+// Modes reports the mode state the agent announced when the session opened, or
+// nil when it announced none. The answer arrived with the session, so reading it
+// costs nothing: a client that dropped it could only learn the same thing by
+// sending a turn.
+func (s *Session) Modes() *sdk.SessionModeState { return s.created.Modes }
+
+// ConfigOptions reports the configuration options the agent announced when the
+// session opened. Empty means the agent offers none, which is a fact a client
+// shows rather than a failure to hide.
+func (s *Session) ConfigOptions() []sdk.SessionConfigOption { return s.created.ConfigOptions }
 
 // Prompt runs one turn and returns why it stopped.
 func (s *Session) Prompt(ctx context.Context, blocks ...sdk.ContentBlock) (sdk.PromptResponse, error) {

@@ -65,7 +65,11 @@ func (a *Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, 
 	return sdk.LogoutResponse{}, nil
 }
 
-// NewSession records a session and returns its id.
+// NewSession records a session and returns its id, along with the two things a
+// client projects into controls. The fake announces them so the zero-token
+// handshake probe has something to read: an agent that announced nothing
+// would make "the probe read nothing" indistinguishable from "the probe is
+// broken".
 func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
 	id := sdk.SessionId("fake-" + lastSegment(params.Cwd))
 
@@ -73,7 +77,41 @@ func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk
 	a.sessions[id] = &SessionState{id: id, askPermission: true}
 	a.mu.Unlock()
 
-	return sdk.NewSessionResponse{SessionId: id}, nil
+	models := sdk.SessionConfigSelectOptionsUngrouped{
+		{Value: "fake-small", Name: "Small"},
+		{Value: "fake-large", Name: "Large"},
+	}
+	thoughts := sdk.SessionConfigSelectOptionsUngrouped{
+		{Value: "low", Name: "Low"},
+		{Value: "high", Name: "High"},
+	}
+
+	return sdk.NewSessionResponse{
+		SessionId: id,
+		Modes: &sdk.SessionModeState{
+			AvailableModes: []sdk.SessionMode{
+				{Id: "plan", Name: "Plan"},
+				{Id: "code", Name: "Code"},
+			},
+			CurrentModeId: "code",
+		},
+		ConfigOptions: []sdk.SessionConfigOption{
+			{Select: &sdk.SessionConfigOptionSelect{
+				Id:           "model",
+				Name:         "Model",
+				Type:         "select",
+				CurrentValue: "fake-small",
+				Options:      sdk.SessionConfigSelectOptions{Ungrouped: &models},
+			}},
+			{Select: &sdk.SessionConfigOptionSelect{
+				Id:           "thought_level",
+				Name:         "Thinking",
+				Type:         "select",
+				CurrentValue: "low",
+				Options:      sdk.SessionConfigSelectOptions{Ungrouped: &thoughts},
+			}},
+		},
+	}, nil
 }
 
 // LoadSession replays nothing: the fake has no history to load.

@@ -139,13 +139,92 @@ func TestServeRejectsAWrongToken(t *testing.T) {
 	}
 }
 
-func TestServeRejectsAProtocolMismatch(t *testing.T) {
+// TestServeRefusesADialectOlderThanThisBuild pins the floor: a peer that never
+// filled the version in, or that speaks a dialect this build no longer serves,
+// is a stranger rather than a newer window. Refusing it is what keeps a build
+// from reading a handshake it does not understand.
+func TestServeRefusesADialectOlderThanThisBuild(t *testing.T) {
 	err := serveRejectedPeer(t,
-		Handshake{Version: ProtocolVersion + 1, Token: "shared", Role: "gui"},
+		Handshake{Version: MinProtocolVersion - 1, Token: "shared", Role: "gui"},
 		Config{Token: "shared", Role: "daemon"},
 	)
 	if !errors.Is(err, ErrProtocol) {
-		t.Fatalf("Serve with a mismatched version = %v, want ErrProtocol", err)
+		t.Fatalf("Serve with a dialect below the floor = %v, want ErrProtocol", err)
+	}
+}
+
+// TestServeAcceptsANewerDialect is the whole point of the capability gate: a
+// peer that speaks a newer dialect must connect, because refusing it would make
+// every later field addition break every earlier window. What crosses the wire
+// is decided by the capability set, not by the number.
+//
+// The peer is written by hand rather than dialled with Dial: Dial would stamp
+// this build's own version, and the case under test is a peer that is ahead.
+func TestServeAcceptsANewerDialect(t *testing.T) {
+	accepted, connected := netPipe(t)
+
+	go writeHandshake(t, accepted, Handshake{
+		Version:      ProtocolVersion + 3,
+		Capabilities: []Capability{CapabilityDiagnostics},
+		Token:        "shared",
+		Role:         "gui",
+		Session:      "sess-newer",
+	})
+
+	conn, err := Serve(connected, Config{Token: "shared", Role: "daemon"})
+	if err != nil {
+		t.Fatalf("Serve refused a newer dialect: %v", err)
+	}
+	t.Cleanup(conn.Close)
+
+	if conn.Peer() != "gui" {
+		t.Fatalf("peer role = %q, want gui", conn.Peer())
+	}
+	if conn.Session() != "sess-newer" {
+		t.Fatalf("peer session = %q, want sess-newer", conn.Session())
+	}
+	if !Has(conn.PeerCapabilities(), CapabilityDiagnostics) {
+		t.Fatalf("peer capabilities = %v, want %q", conn.PeerCapabilities(), CapabilityDiagnostics)
+	}
+}
+
+// TestAnOlderPeerNamesNoCapabilities pins how an old build looks on the wire: it
+// omits the field, and that reads as "understands only what was always there"
+// rather than as an error.
+func TestAnOlderPeerNamesNoCapabilities(t *testing.T) {
+	accepted, connected := netPipe(t)
+
+	go writeHandshake(t, accepted, Handshake{
+		Version: ProtocolVersion,
+		Token:   "shared",
+		Role:    "gui",
+	})
+
+	conn, err := Serve(connected, Config{Token: "shared", Role: "daemon"})
+	if err != nil {
+		t.Fatalf("Serve refused a peer that named no capabilities: %v", err)
+	}
+	t.Cleanup(conn.Close)
+
+	if Has(conn.PeerCapabilities(), CapabilityDiagnostics) {
+		t.Fatalf("a peer that named nothing reads as %v", conn.PeerCapabilities())
+	}
+}
+
+// TestThisBuildNamesItsCapabilities pins the other direction: what this build
+// announces is what it actually supports, so a trim can never be decided from a
+// list that drifted.
+func TestThisBuildNamesItsCapabilities(t *testing.T) {
+	served, client := servePair(t,
+		Config{Token: "shared", Role: "daemon"},
+		Config{Token: "shared", Role: "gui"},
+	)
+
+	if !Has(served.PeerCapabilities(), CapabilityDiagnostics) {
+		t.Fatalf("the served side sees %v, want this build's own set", served.PeerCapabilities())
+	}
+	if !Has(client.PeerCapabilities(), CapabilityDiagnostics) {
+		t.Fatalf("the dialling side sees %v, want this build's own set", client.PeerCapabilities())
 	}
 }
 
@@ -231,6 +310,92 @@ func TestServeDropsAPeerThatNeverSendsAHandshake(t *testing.T) {
 		}
 	case <-time.After(testTimeout):
 		t.Fatal("Serve waited on a silent peer instead of giving up")
+	}
+}
+
+// answerHandshake plays the bare server side a Dial test needs: it accepts one
+// peer, reads that peer's handshake, and answers with reply. There is no Serve
+// here on purpose, so the dialect the reply names is the only thing the test
+// measures.
+func answerHandshake(t *testing.T, acceptc <-chan acceptResult, reply Handshake) {
+	t.Helper()
+
+	go func() {
+		res := <-acceptc
+		if res.err != nil {
+			return
+		}
+		nc := res.conn
+		defer func() { _ = nc.Close() }()
+
+		// A dialling peer writes first; reading it keeps the pipe from stalling
+		// on a full buffer before the answer goes out.
+		if _, err := NewReader(nc).ReadFrame(); err != nil {
+			return
+		}
+
+		payload, err := encodeHandshake(reply)
+		if err != nil {
+			return
+		}
+		w := NewWriter(nc)
+		if err := w.WriteControl(payload); err != nil {
+			return
+		}
+		w.Close()
+		w.Wait()
+	}()
+}
+
+// TestDialRefusesADialectOlderThanThisBuild pins the dialling side of the floor.
+// It matters more than the serving side: every real client — the window, the
+// CLI, a host reaching another host — dials, so a floor that lived only in Serve
+// would police half the traffic.
+func TestDialRefusesADialectOlderThanThisBuild(t *testing.T) {
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	answerHandshake(t, acceptc, Handshake{
+		Version: MinProtocolVersion - 1,
+		Role:    "daemon",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	_, err := Dial(ctx, addr, dir, Config{Token: "shared", Role: "gui"})
+	if !errors.Is(err, ErrProtocol) {
+		t.Fatalf("Dial against a dialect below the floor = %v, want ErrProtocol", err)
+	}
+}
+
+// TestDialAcceptsANewerDialect pins the other direction: a daemon that is ahead
+// must connect, and what it names as understood is what this side records. That
+// record is the only thing a caller can act on, so it has to survive the dial.
+func TestDialAcceptsANewerDialect(t *testing.T) {
+	l, addr, dir := listenTest(t)
+	acceptc := asyncAccept(l)
+
+	answerHandshake(t, acceptc, Handshake{
+		Version:      ProtocolVersion + 2,
+		Capabilities: []Capability{CapabilityDiagnostics},
+		Role:         "daemon",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	conn, err := Dial(ctx, addr, dir, Config{Token: "shared", Role: "gui"})
+	if err != nil {
+		t.Fatalf("Dial against a newer dialect = %v, want success", err)
+	}
+	t.Cleanup(conn.Close)
+
+	if conn.Peer() != "daemon" {
+		t.Fatalf("peer role = %q, want daemon", conn.Peer())
+	}
+	if !Has(conn.PeerCapabilities(), CapabilityDiagnostics) {
+		t.Fatalf("peer capabilities = %v, want %q", conn.PeerCapabilities(), CapabilityDiagnostics)
 	}
 }
 

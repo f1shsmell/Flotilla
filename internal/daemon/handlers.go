@@ -39,7 +39,7 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 
 	switch method {
 	case MethodStatus:
-		return d.status(peer.Client()), nil
+		return d.status(peer), nil
 	case MethodAgents:
 		return d.agents.List(), nil
 	case MethodAgentSet:
@@ -76,9 +76,22 @@ func (d *Daemon) setAgent(params json.RawMessage) (any, error) {
 // status reports the fleet to one client. A finished turn that client has
 // already looked at is idle for it and stays done for every other: `seen` is per
 // client, so the daemon — the only layer that knows which client asked — is what
-// projects it. A caller with no client name (a test, a raw CLI) sees what the
-// host said.
-func (d *Daemon) status(client string) Status {
+// projects it. A caller with no connection (a test, a raw CLI) sees what the
+// host said and is served every field.
+//
+// A peer that did not name the diagnostics capability is not refused: the extra
+// diagnostic fields are dropped instead. Nothing branches on them, so an older
+// window reads a quieter report rather than no report at all. This is the first
+// place the capability set actually withholds something, which is what keeps the
+// gate from being decoration.
+func (d *Daemon) status(peer *ipc.Conn) Status {
+	client := ""
+	diagnostics := true
+	if peer != nil {
+		client = peer.Client()
+		diagnostics = ipc.Has(peer.PeerCapabilities(), ipc.CapabilityDiagnostics)
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -113,8 +126,10 @@ func (d *Daemon) status(client string) Status {
 		})
 	}
 
-	for _, f := range d.fleet.Failures {
-		st.Failures = append(st.Failures, f.Error())
+	if diagnostics {
+		for _, f := range d.fleet.Failures {
+			st.Failures = append(st.Failures, f.Error())
+		}
 	}
 	return st
 }
