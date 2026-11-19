@@ -48,6 +48,10 @@ type Config struct {
 	Rows int
 	// Policy decides what an ACP agent may do without asking.
 	Policy acp.Policy
+	// PermissionWait bounds how long an ACP question waits for the client's
+	// answer. Zero waits forever: a timeout proves nothing about the user's
+	// intent, so refusing on one is an explicit opt-in, never a default.
+	PermissionWait time.Duration
 	// Adapter is the operational knowledge this agent declared: the patterns
 	// that mean it is waiting for the user, how it reads a paste, and how it is
 	// resumed. Zero value means the agent declared none, which is the cautious

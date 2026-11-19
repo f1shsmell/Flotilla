@@ -36,6 +36,9 @@ type Config struct {
 	ConfigDir string
 	// HostBinary is the flt-session-host executable spawned for new sessions.
 	HostBinary string
+	// PermissionWait bounds how long a spawned host waits for a permission
+	// answer. Zero waits forever.
+	PermissionWait time.Duration
 	// AttachTimeout bounds the wait for one host during a fleet scan. Zero uses
 	// the default: a host that accepts the pipe and then stops answering must
 	// not hold the scan, which runs before the daemon listens.
