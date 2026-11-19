@@ -107,6 +107,12 @@ func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk
 			CurrentValue: "low",
 			Options:      sdk.SessionConfigSelectOptions{Ungrouped: &thoughts},
 		}},
+		{Boolean: &sdk.SessionConfigOptionBoolean{
+			Id:           "auto_approve",
+			Name:         "Auto-approve",
+			Type:         "boolean",
+			CurrentValue: true,
+		}},
 	}
 
 	a.mu.Lock()
@@ -287,20 +293,30 @@ func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessio
 
 	a.mu.Lock()
 	s := a.sessions[sessionID]
-	if s != nil {
-		for i := range s.options {
-			option := s.options[i]
-			if params.ValueId != nil && option.Select != nil && option.Select.Id == params.ValueId.ConfigId {
-				option.Select.CurrentValue = params.ValueId.Value
-			}
-			if params.Boolean != nil && option.Boolean != nil && option.Boolean.Id == params.Boolean.ConfigId {
-				option.Boolean.CurrentValue = params.Boolean.Value
-			}
-		}
-	}
 	var options []sdk.SessionConfigOption
 	if s != nil {
-		options = s.options
+		// The announced list is copied, never edited in place: the notification
+		// marshals it after the unlock, and a concurrent set must not race it.
+		options = make([]sdk.SessionConfigOption, len(s.options))
+		for i, option := range s.options {
+			switch {
+			case option.Select != nil:
+				next := *option.Select
+				if params.ValueId != nil && next.Id == params.ValueId.ConfigId {
+					next.CurrentValue = params.ValueId.Value
+				}
+				options[i] = sdk.SessionConfigOption{Select: &next}
+			case option.Boolean != nil:
+				next := *option.Boolean
+				if params.Boolean != nil && next.Id == params.Boolean.ConfigId {
+					next.CurrentValue = params.Boolean.Value
+				}
+				options[i] = sdk.SessionConfigOption{Boolean: &next}
+			default:
+				options[i] = option
+			}
+		}
+		s.options = options
 	}
 	a.mu.Unlock()
 	if s == nil {

@@ -17,12 +17,35 @@ var errUnknownControl = ipc.Class(errors.New("host: unknown control"), ipc.CodeB
 
 var errBadControlValue = ipc.Class(errors.New("host: bad control value"), ipc.CodeBadRequest)
 
+// legacyModeOffered reports whether the older mode state should become a
+// control. An announced option speaks first: a mode-category option is the
+// newer API for the same setting, and any option already named "mode" owns
+// that ID — a second control with it would break rendering and writes.
+func legacyModeOffered(modes *sdk.SessionModeState, options []sdk.SessionConfigOption) bool {
+	if modes == nil {
+		return false
+	}
+	for _, option := range options {
+		if option.Select != nil {
+			if option.Select.Category != nil && *option.Select.Category == sdk.SessionConfigOptionCategoryMode {
+				return false
+			}
+			if option.Select.Id == "mode" {
+				return false
+			}
+		}
+		if option.Boolean != nil && option.Boolean.Id == "mode" {
+			return false
+		}
+	}
+	return true
+}
+
 // projectControls turns what the agent announced into the flat control list a
 // client renders. A mode-category option speaks for the mode — it is the newer
 // API — so the older mode state only becomes a control when no option does.
 func projectControls(modes *sdk.SessionModeState, options []sdk.SessionConfigOption) []session.Control {
 	controls := make([]session.Control, 0, len(options)+1)
-	modeSeen := false
 
 	for _, option := range options {
 		switch {
@@ -30,7 +53,6 @@ func projectControls(modes *sdk.SessionModeState, options []sdk.SessionConfigOpt
 			kind := session.ControlSelect
 			if option.Select.Category != nil && *option.Select.Category == sdk.SessionConfigOptionCategoryMode {
 				kind = session.ControlMode
-				modeSeen = true
 			}
 			controls = append(controls, session.Control{
 				ID:      string(option.Select.Id),
@@ -51,7 +73,7 @@ func projectControls(modes *sdk.SessionModeState, options []sdk.SessionConfigOpt
 		}
 	}
 
-	if modes != nil && !modeSeen {
+	if legacyModeOffered(modes, options) {
 		choices := make([]session.Choice, 0, len(modes.AvailableModes))
 		for _, mode := range modes.AvailableModes {
 			choices = append(choices, session.Choice{Value: string(mode.Id), Name: mode.Name})
@@ -136,7 +158,7 @@ func (h *Host) handleSurfaceSet(ctx context.Context, req session.SurfaceSetReque
 		}
 	}
 
-	if req.ID == "mode" && h.acp.sess.Modes() != nil {
+	if req.ID == "mode" && legacyModeOffered(h.acp.sess.Modes(), h.acp.sess.ConfigOptions()) {
 		if err := h.acp.sess.SetMode(ctx, req.Value); err != nil {
 			return fmt.Errorf("set mode: %w", err)
 		}

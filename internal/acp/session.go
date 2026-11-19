@@ -227,6 +227,13 @@ func (s *Session) Modes() *sdk.SessionModeState {
 	s.surfMu.Lock()
 	defer s.surfMu.Unlock()
 	if s.modes != nil {
+		// A change that arrived before the opening response folded no available
+		// modes; the response's list is still the truth about what is offered.
+		if len(s.modes.AvailableModes) == 0 && s.created.Modes != nil {
+			next := *s.modes
+			next.AvailableModes = s.created.Modes.AvailableModes
+			return &next
+		}
 		return s.modes
 	}
 	return s.created.Modes

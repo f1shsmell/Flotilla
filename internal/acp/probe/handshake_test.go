@@ -97,8 +97,8 @@ func TestHandshakeReadsWhatTheAgentAnnounced(t *testing.T) {
 		t.Fatalf("current mode = %q, want code", current)
 	}
 
-	if len(res.Options) != 2 {
-		t.Fatalf("read %d options, want the 2 the fake announces: %+v", len(res.Options), res.Options)
+	if len(res.Options) != 3 {
+		t.Fatalf("read %d options, want the 3 the fake announces: %+v", len(res.Options), res.Options)
 	}
 	models := findOption(res, "model")
 	if models == nil {
@@ -117,6 +117,14 @@ func TestHandshakeReadsWhatTheAgentAnnounced(t *testing.T) {
 	}
 	if thoughts.Current != "low" {
 		t.Fatalf("thought_level current value = %q, want low", thoughts.Current)
+	}
+
+	toggle := findOption(res, "auto_approve")
+	if toggle == nil {
+		t.Fatalf("no auto_approve option among %+v", res.Options)
+	}
+	if toggle.Type != "boolean" || toggle.Current != "true" || len(toggle.Choices) != 0 {
+		t.Fatalf("auto_approve = %+v, want a boolean on true with no choices", toggle)
 	}
 }
 
