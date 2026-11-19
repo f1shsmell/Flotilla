@@ -432,6 +432,32 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+// attentionRank orders the fleet by what needs the user: a blocked session
+// first, a finished turn next, an unclassified one before quiet work, and idle
+// last. The list renders this order and never invents its own.
+function attentionRank(lifecycle: Lifecycle): number {
+  switch (lifecycle) {
+    case "blocked":
+      return 0;
+    case "done":
+      return 1;
+    case "unknown":
+      return 2;
+    case "working":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+// orderSessions is a stable sort, so sessions the daemon reported in one state
+// keep the order it gave them.
+function orderSessions(sessions: StatusEntry[]): StatusEntry[] {
+  return [...sessions].sort(
+    (a, b) => attentionRank(a.lifecycle) - attentionRank(b.lifecycle),
+  );
+}
+
 // parseStatus reads the daemon's answer without trusting it: a field the daemon
 // did not send becomes a visible default rather than `undefined` in the UI.
 export function parseStatus(raw: unknown): Status {
@@ -445,7 +471,7 @@ export function parseStatus(raw: unknown): Status {
     failures: Array.isArray(value.failures)
       ? value.failures.filter((f): f is string => typeof f === "string")
       : [],
-    sessions: sessions.map((entry) => {
+    sessions: orderSessions(sessions.map((entry) => {
       const session = (entry ?? {}) as Record<string, unknown>;
       return {
         id: asString(session.id),
@@ -456,7 +482,7 @@ export function parseStatus(raw: unknown): Status {
         lifecycle: asLifecycle(session.state),
         reachable: asBoolean(session.reachable),
       };
-    }),
+    })),
   };
 }
 
@@ -489,7 +515,7 @@ export function withLifecycle(
   });
   // Returning the same object keeps React from re-rendering the fleet for a
   // state that did not change, which is most of them.
-  return changed ? { ...status, sessions } : status;
+  return changed ? { ...status, sessions: orderSessions(sessions) } : status;
 }
 
 // needsAttention is true for the states a user has to act on or should look at.

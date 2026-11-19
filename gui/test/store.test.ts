@@ -443,9 +443,10 @@ describe("fleet lifecycle", () => {
   it("updates one session without touching the others", () => {
     const next = withLifecycle(fleet(), "b", "blocked");
 
-    expect(next?.sessions.map((s) => s.lifecycle)).toEqual(["idle", "blocked"]);
-    // Everything else about the row survives: a state change is not a rebuild.
-    expect(next?.sessions[1]).toMatchObject({ id: "b", host_pid: 11, reachable: true });
+    // The fleet is ordered by attention: a newly blocked session rises to the
+    // top, and the row itself survives the move intact.
+    expect(next?.sessions.map((s) => s.lifecycle)).toEqual(["blocked", "idle"]);
+    expect(next?.sessions[0]).toMatchObject({ id: "b", host_pid: 11, reachable: true });
   });
 
   it("returns the same fleet when nothing changed", () => {
@@ -697,5 +698,50 @@ describe("surface controls", () => {
     state = withControls(state, [{ id: "mode", name: "Mode", kind: "mode", current: "plan" }]);
     expect(state.controls).toHaveLength(1);
     expect(state.controls[0].current).toBe("plan");
+  });
+});
+
+describe("fleet order", () => {
+  it("sorts by attention: blocked, done, unknown, working, idle", () => {
+    const status = parseStatus({
+      sessions: [
+        { id: "i", state: "idle" },
+        { id: "w", state: "working" },
+        { id: "u" },
+        { id: "d", state: "done" },
+        { id: "b", state: "blocked" },
+      ],
+    });
+
+    expect(status.sessions.map((s) => s.id)).toEqual(["b", "d", "u", "w", "i"]);
+  });
+
+  it("keeps the daemon's order within one state", () => {
+    const status = parseStatus({
+      sessions: [
+        { id: "b2", state: "blocked" },
+        { id: "i1", state: "idle" },
+        { id: "b1", state: "blocked" },
+        { id: "i2", state: "idle" },
+      ],
+    });
+
+    expect(status.sessions.map((s) => s.id)).toEqual(["b2", "b1", "i1", "i2"]);
+  });
+
+  it("re-sorts when a lifecycle change moves a session's rank", () => {
+    const current = parseStatus({
+      sessions: [
+        { id: "a", state: "done" },
+        { id: "b", state: "working" },
+      ],
+    });
+
+    const next = withLifecycle(current, "b", "blocked");
+    expect(next?.sessions.map((s) => s.id)).toEqual(["b", "a"]);
+
+    // Sinking is the same rule: an idle session drops below a finished turn.
+    const after = withLifecycle(next, "b", "idle");
+    expect(after?.sessions.map((s) => s.id)).toEqual(["a", "b"]);
   });
 });
