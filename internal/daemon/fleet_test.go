@@ -56,6 +56,24 @@ func waitForNoSessions(t *testing.T, ctx context.Context, client interface {
 	t.Fatalf("session %q is still listed after its host stopped: %+v", id, last)
 }
 
+// waitForNoRecord waits until the registry stops answering for a session.
+// Unpublish runs on the host's own shutdown goroutine, after the pipe close
+// that drops the fleet row, so the record's absence is an event to wait for
+// rather than a fact to assert once. On Windows a delete still pending while
+// the host exits reads as access-denied, which is the same "not gone yet".
+func waitForNoRecord(t *testing.T, reg session.Registry, id session.ID) {
+	t.Helper()
+
+	deadline := time.Now().Add(waitFor)
+	for time.Now().Before(deadline) {
+		if _, err := reg.Read(id); errors.Is(err, session.ErrNoRecord) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the stopped session %q still has a record, so a daemon restart would relist it", id)
+}
+
 // TestStopEndsTheSessionAndItsRow pins both halves of session.stop: the host is
 // gone, and the fleet stops listing it. A status that keeps a stopped session on
 // screen is what makes the list untrustworthy.
@@ -86,9 +104,7 @@ func TestStopEndsTheSessionAndItsRow(t *testing.T) {
 
 	// The record is what a later daemon scan would attach to; leaving it behind
 	// would breathe the session back to life on the next restart.
-	if _, err := session.NewRegistry(dir).Read("sess-stop"); !errors.Is(err, session.ErrNoRecord) {
-		t.Fatalf("the stopped session still has a record: %v", err)
-	}
+	waitForNoRecord(t, session.NewRegistry(dir), "sess-stop")
 }
 
 // TestAHostThatStopsLeavesTheRow pins the other way a session goes: the host
@@ -126,14 +142,7 @@ func TestAHostThatStopsLeavesTheRow(t *testing.T) {
 
 	// The record is what a later scan would attach to; a stopped host must not
 	// leave one behind, or the next daemon start would resurrect the row.
-	deadline := time.Now().Add(waitFor)
-	for time.Now().Before(deadline) {
-		if _, err := session.NewRegistry(dir).Read("sess-crash"); errors.Is(err, session.ErrNoRecord) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("the stopped host's record survived, so a daemon restart would relist it")
+	waitForNoRecord(t, session.NewRegistry(dir), "sess-crash")
 }
 
 // TestStoppingASessionThatIsGoneIsNotAnError pins the idempotence a window needs:
