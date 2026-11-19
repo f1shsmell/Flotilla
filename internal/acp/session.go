@@ -27,6 +27,8 @@ type Launch struct {
 	Dir string
 	// Env is the agent's environment. Nil inherits this process's.
 	Env []string
+	// ResumeID reopens a saved conversation; empty creates a new one.
+	ResumeID string
 }
 
 // Session is one ACP conversation: the agent process, the client side of the
@@ -168,6 +170,10 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 	}
 	s.init = initResp
 
+	if launch.ResumeID != "" {
+		return s.resume(ctx, launch.ResumeID, cfg.Workspace)
+	}
+
 	created, err := s.conn.NewSession(ctx, sdk.NewSessionRequest{
 		Cwd:        cfg.Workspace,
 		McpServers: []sdk.McpServer{},
@@ -183,6 +189,34 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 	s.created = created
 	s.surfMu.Unlock()
 
+	return s, nil
+}
+
+// resume reopens a saved conversation on a freshly launched agent. The resume
+// answer carries the same surface a new session would, so it is folded into
+// created exactly like one: every reader of the opening answer keeps working.
+func (s *Session) resume(ctx context.Context, id, workspace string) (*Session, error) {
+	if !s.SupportsResume() {
+		_ = s.Close()
+		return nil, fmt.Errorf("resume session %q: %w", id, ErrUnsupported)
+	}
+	resumed, err := s.conn.ResumeSession(ctx, sdk.ResumeSessionRequest{
+		SessionId:  sdk.SessionId(id),
+		Cwd:        workspace,
+		McpServers: []sdk.McpServer{},
+	})
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("resume session %q: %w", id, err)
+	}
+	s.agentID = sdk.SessionId(id)
+	s.surfMu.Lock()
+	s.created = sdk.NewSessionResponse{
+		SessionId:     s.agentID,
+		Modes:         resumed.Modes,
+		ConfigOptions: resumed.ConfigOptions,
+	}
+	s.surfMu.Unlock()
 	return s, nil
 }
 
@@ -216,7 +250,7 @@ func (s *Session) ExitErr() error {
 func (s *Session) Capabilities() sdk.AgentCapabilities { return s.init.AgentCapabilities }
 
 // SupportsResume reports whether the agent advertised session/resume, which is
-// what decides whether this session can survive its host.
+// what decides whether a session can survive its agent's death.
 func (s *Session) SupportsResume() bool {
 	return s.init.AgentCapabilities.SessionCapabilities.Resume != nil
 }
@@ -326,22 +360,6 @@ func (s *Session) Prompt(ctx context.Context, blocks ...sdk.ContentBlock) (sdk.P
 func (s *Session) Cancel(ctx context.Context) error {
 	if err := s.conn.Cancel(ctx, sdk.CancelNotification{SessionId: s.agentID}); err != nil {
 		return fmt.Errorf("cancel the turn: %w", err)
-	}
-	return nil
-}
-
-// Resume asks the agent to resume this session id after a reconnect. It is only
-// attempted when the agent advertised the capability.
-func (s *Session) Resume(ctx context.Context) error {
-	if !s.SupportsResume() {
-		return fmt.Errorf("agent does not advertise resume: %w", ErrUnsupported)
-	}
-	if _, err := s.conn.ResumeSession(ctx, sdk.ResumeSessionRequest{
-		SessionId:  s.agentID,
-		Cwd:        s.client.cfg.Workspace,
-		McpServers: []sdk.McpServer{},
-	}); err != nil {
-		return fmt.Errorf("resume session %q: %w", s.agentID, err)
 	}
 	return nil
 }

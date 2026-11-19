@@ -118,7 +118,8 @@ func (h *Host) controls() []session.Control {
 	if h.acp == nil {
 		return nil
 	}
-	return projectControls(h.acp.sess.Modes(), h.acp.sess.ConfigOptions())
+	sess := h.acpAgent()
+	return projectControls(sess.Modes(), sess.ConfigOptions())
 }
 
 // handleSurface answers what the agent currently exposes. A terminal agent
@@ -140,26 +141,27 @@ func (h *Host) handleSurfaceSet(ctx context.Context, req session.SurfaceSetReque
 		return ipc.ErrNoHandler
 	}
 
-	for _, option := range h.acp.sess.ConfigOptions() {
+	sess := h.acpAgent()
+	for _, option := range sess.ConfigOptions() {
 		if option.Boolean != nil && string(option.Boolean.Id) == req.ID {
 			if req.Value != "true" && req.Value != "false" {
 				return fmt.Errorf("control %q takes true or false, got %q: %w", req.ID, req.Value, errBadControlValue)
 			}
-			if err := h.acp.sess.SetConfigBool(ctx, req.ID, req.Value == "true"); err != nil {
+			if err := sess.SetConfigBool(ctx, req.ID, req.Value == "true"); err != nil {
 				return fmt.Errorf("set control %q: %w", req.ID, err)
 			}
 			return nil
 		}
 		if option.Select != nil && string(option.Select.Id) == req.ID {
-			if err := h.acp.sess.SetConfigValue(ctx, req.ID, req.Value); err != nil {
+			if err := sess.SetConfigValue(ctx, req.ID, req.Value); err != nil {
 				return fmt.Errorf("set control %q: %w", req.ID, err)
 			}
 			return nil
 		}
 	}
 
-	if req.ID == "mode" && legacyModeOffered(h.acp.sess.Modes(), h.acp.sess.ConfigOptions()) {
-		if err := h.acp.sess.SetMode(ctx, req.Value); err != nil {
+	if req.ID == "mode" && legacyModeOffered(sess.Modes(), sess.ConfigOptions()) {
+		if err := sess.SetMode(ctx, req.Value); err != nil {
 			return fmt.Errorf("set mode: %w", err)
 		}
 		return nil
