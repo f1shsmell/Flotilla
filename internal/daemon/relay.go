@@ -53,6 +53,14 @@ type relay struct {
 	// returns, so without a bound a long-lived daemon would keep one entry per
 	// launch forever.
 	present map[string]struct{}
+	// seenPath names the file the seen table is kept in; empty means memory
+	// only. The writer goroutine owns the file, waking on seenWake and taking
+	// its final snapshot when seenStop closes.
+	seenPath string
+	seenWake chan struct{}
+	seenStop chan struct{}
+	seenDone chan struct{}
+	seenOnce sync.Once
 	// onWriteError receives a frame that could not be delivered while it was
 	// queued. It is a field rather than a logger so a test can build a relay
 	// with nothing behind it.

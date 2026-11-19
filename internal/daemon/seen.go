@@ -21,6 +21,7 @@ func (r *relay) track(client string) {
 
 	r.present[client] = struct{}{}
 	r.evictLocked(client)
+	r.scheduleSeenWrite()
 }
 
 // evictLocked drops windows once the table outgrows its bound, and every seen
@@ -81,6 +82,7 @@ func (r *relay) markSeen(id session.ID, client string) {
 	}
 	r.seen[id][client] = struct{}{}
 	r.evictLocked(client)
+	r.scheduleSeenWrite()
 }
 
 // hasSeen reports whether client has looked at id's finished turn.
@@ -103,6 +105,16 @@ func (r *relay) forgetSeen(id session.ID) {
 	defer r.mu.Unlock()
 
 	delete(r.seen, id)
+	r.scheduleSeenWrite()
+}
+
+// hasPresent reports whether the daemon remembers a window by name.
+func (r *relay) hasPresent(client string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	_, ok := r.present[client]
+	return ok
 }
 
 // projectSeen projects the seen flag onto the lifecycle one client should see:

@@ -244,7 +244,9 @@ func TestAStoppedSessionKeepsItsLog(t *testing.T) {
 	stateDir := t.TempDir()
 
 	d := New(Config{Channel: "test", Token: "shared", StateDir: stateDir, Log: discardLogger()}, nil)
-	t.Cleanup(func() { _ = d.transcripts.Close() })
+	// Detach, not just transcripts.Close: the seen writer schedules a write on
+	// d.end below, and its temp file must be gone before TempDir is removed.
+	t.Cleanup(d.Detach)
 
 	if _, err := d.transcripts.Append("sess-gone", 1, json.RawMessage(`{"kind":"message","text":"done"}`)); err != nil {
 		t.Fatalf("store an update: %v", err)
@@ -372,7 +374,7 @@ func TestTheUserMessageIsNumberedOnce(t *testing.T) {
 func TestTheHistoryIsBoundedForOneFrame(t *testing.T) {
 	stateDir := t.TempDir()
 	d := New(Config{Channel: "test", Token: "shared", StateDir: stateDir, Log: discardLogger()}, nil)
-	t.Cleanup(func() { _ = d.transcripts.Close() })
+	t.Cleanup(d.Detach)
 
 	body, err := json.Marshal(session.UpdateMessage{Kind: "message", Text: strings.Repeat("x", 4096)})
 	if err != nil {
