@@ -190,6 +190,7 @@ func TestAnUnreachableSessionIsUnknownNotDone(t *testing.T) {
 // row with no host behind it is exactly the ghost the fleet view must not show.
 func TestRememberStateIgnoresASessionItDoesNotServe(t *testing.T) {
 	d := New(Config{Channel: "test", Token: "shared", StateDir: t.TempDir(), Log: discardLogger()}, nil)
+	t.Cleanup(d.Detach)
 
 	d.rememberState("sess-ghost", session.StateDone)
 

@@ -90,6 +90,8 @@ func TestTenDaemonRestartsKeepTheSession(t *testing.T) {
 			StateDir: dir,
 			Log:      discardLogger(),
 		}, nil)
+		// A failure before the loop's Detach must still stop the seen writer.
+		t.Cleanup(d.Detach)
 
 		ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 		err := d.Reattach(ctx)
@@ -323,6 +325,7 @@ func TestReattachDoesNotStallOnAHostThatStopsAnswering(t *testing.T) {
 		Log:           discardLogger(),
 		AttachTimeout: 200 * time.Millisecond,
 	}, nil)
+	t.Cleanup(d.Detach)
 
 	// A hang guard, not a condition: the assertion is the elapsed time.
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)

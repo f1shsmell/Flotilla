@@ -574,6 +574,7 @@ func TestStartWithoutAWorktreeKeepsTheCallersDirectory(t *testing.T) {
 // commit is taken when the session starts, before the agent touches anything.
 func TestTheDaemonRemembersWhereASessionStarted(t *testing.T) {
 	d := New(Config{Channel: "test", Token: "shared", StateDir: t.TempDir(), Log: discardLogger()}, nil)
+	t.Cleanup(d.Detach)
 
 	if d.baseline("sess-a") != "" {
 		t.Fatal("a session the daemon never started has a baseline")
