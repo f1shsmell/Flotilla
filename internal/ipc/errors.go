@@ -45,7 +45,7 @@ const (
 	// CodeBadRequest reports a request this side cannot decode or use.
 	CodeBadRequest Code = -32006
 	// CodeWrongMode reports a call that does not fit the session's mode: a
-	// prompt to a terminal, or a resize to a structured session.
+	// resize to a structured session, or a cancel to a terminal.
 	CodeWrongMode Code = -32007
 	// CodeHostUnreachable reports a session whose host stopped answering.
 	CodeHostUnreachable Code = -32008
@@ -65,6 +65,9 @@ const (
 	CodeBadComment Code = -32015
 	// CodeAlreadyRunning reports a second daemon asked to serve one channel.
 	CodeAlreadyRunning Code = -32016
+	// CodeAgentBlocked reports a prompt aimed at a session waiting for the
+	// user: injecting text would answer a question nobody saw.
+	CodeAgentBlocked Code = -32017
 )
 
 // CodedError carries a failure's wire identity. The layer that first knows what

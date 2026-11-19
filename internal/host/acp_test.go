@@ -280,8 +280,9 @@ func TestACPHostForwardsPermissionQuestions(t *testing.T) {
 	}
 }
 
-// TestPTYHostRejectsACPPCalls pins the mode boundary: a terminal session has no
-// structure, so a prompt to it is an error rather than a silent no-op.
+// TestPTYHostRejectsACPCalls pins the mode boundary: a terminal session has no
+// turn to cancel, so a cancel is an error rather than a silent no-op. A prompt
+// is not: it is typed into the terminal, which inject_test.go pins.
 func TestPTYHostRejectsACPCalls(t *testing.T) {
 	dir := t.TempDir()
 	command, args := helperCommand(t)
@@ -318,8 +319,8 @@ func TestPTYHostRejectsACPCalls(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if _, err := conn.Call(dialCtx, session.MethodPrompt, session.PromptRequest{Text: "hi"}); err == nil {
-		t.Fatal("a PTY session accepted a prompt call")
+	if _, err := conn.Call(dialCtx, session.MethodCancel, struct{}{}); err == nil {
+		t.Fatal("a PTY session accepted a cancel call")
 	}
 }
 

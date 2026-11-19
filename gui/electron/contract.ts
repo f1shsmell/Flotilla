@@ -53,6 +53,7 @@ export const constants = {
   },
   ipc: {
     CapabilityDiagnostics: "diagnostics_v1",
+    CodeAgentBlocked: "-32017",
     CodeAlreadyRunning: "-32016",
     CodeBadComment: "-32015",
     CodeBadRequest: "-32006",
