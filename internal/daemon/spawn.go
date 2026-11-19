@@ -35,6 +35,9 @@ type SpawnRequest struct {
 	Dir string
 	// Policy is the ACP permission policy, ignored for a PTY session.
 	Policy string
+	// PermissionWait bounds how long the host waits for a permission answer.
+	// Zero waits forever and leaves the flag out entirely.
+	PermissionWait time.Duration
 	// SeqBase is the host number the first update continues from; zero starts at 1.
 	SeqBase uint64
 	// Cols and Rows size the initial PTY.
@@ -62,42 +65,9 @@ func ExecSpawner(log *slog.Logger) Spawner {
 			return ipc.Address{}, errors.New("spawn: no session-host binary configured")
 		}
 
-		mode := req.Mode
-		if mode == "" {
-			mode = session.ModePTY
-		}
-
-		args := []string{
-			"--session", string(req.Session),
-			"--mode", string(mode),
-			"--command", req.Command,
-			"--channel", req.Channel,
-			"--cols", fmt.Sprint(req.Cols),
-			"--rows", fmt.Sprint(req.Rows),
-		}
-		if req.Dir != "" {
-			args = append(args, "--dir", req.Dir)
-		}
-		if req.Policy != "" {
-			args = append(args, "--policy", req.Policy)
-		}
-		if req.SeqBase > 0 {
-			args = append(args, "--seq-base", fmt.Sprint(req.SeqBase))
-		}
-		if !req.Adapter.Empty() {
-			// The definition travels as JSON on the command line rather than in a
-			// file: the host is one process for one session, and a file would
-			// outlive the session it describes. Empty means the agent declared
-			// nothing, and the flag is left out entirely.
-			encoded, err := json.Marshal(req.Adapter)
-			if err != nil {
-				return ipc.Address{}, fmt.Errorf("encode the adapter for session %q: %w", req.Session, err)
-			}
-			args = append(args, "--adapter", string(encoded))
-		}
-		if len(req.Args) > 0 {
-			args = append(args, "--")
-			args = append(args, req.Args...)
+		args, err := spawnArgs(req)
+		if err != nil {
+			return ipc.Address{}, err
 		}
 
 		// The host outlives the daemon, so it is not tied to the daemon's
@@ -125,6 +95,53 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		}
 		return ipc.Address{Channel: string(req.Session), Name: "host"}, nil
 	}
+}
+
+// spawnArgs renders one request as the host's command line. Flags a caller
+// left at their default are omitted, so an older host reads the same defaults
+// it was built with.
+func spawnArgs(req SpawnRequest) ([]string, error) {
+	mode := req.Mode
+	if mode == "" {
+		mode = session.ModePTY
+	}
+
+	args := []string{
+		"--session", string(req.Session),
+		"--mode", string(mode),
+		"--command", req.Command,
+		"--channel", req.Channel,
+		"--cols", fmt.Sprint(req.Cols),
+		"--rows", fmt.Sprint(req.Rows),
+	}
+	if req.Dir != "" {
+		args = append(args, "--dir", req.Dir)
+	}
+	if req.Policy != "" {
+		args = append(args, "--policy", req.Policy)
+	}
+	if req.PermissionWait > 0 {
+		args = append(args, "--permission-wait", req.PermissionWait.String())
+	}
+	if req.SeqBase > 0 {
+		args = append(args, "--seq-base", fmt.Sprint(req.SeqBase))
+	}
+	if !req.Adapter.Empty() {
+		// The definition travels as JSON on the command line rather than in a
+		// file: the host is one process for one session, and a file would
+		// outlive the session it describes. Empty means the agent declared
+		// nothing, and the flag is left out entirely.
+		encoded, err := json.Marshal(req.Adapter)
+		if err != nil {
+			return nil, fmt.Errorf("encode the adapter for session %q: %w", req.Session, err)
+		}
+		args = append(args, "--adapter", string(encoded))
+	}
+	if len(req.Args) > 0 {
+		args = append(args, "--")
+		args = append(args, req.Args...)
+	}
+	return args, nil
 }
 
 // waitForRecord blocks until the host has published its record, so the daemon

@@ -199,19 +199,20 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	command := d.agents.Resolve(req.Command)
 
 	endpoint, err := d.spawn(ctx, SpawnRequest{
-		Binary:   d.cfg.HostBinary,
-		Session:  req.ID,
-		Mode:     req.Mode,
-		Command:  command,
-		Args:     req.Args,
-		Dir:      req.Dir,
-		Policy:   req.Policy,
-		SeqBase:  seqBase,
-		Cols:     req.Cols,
-		Rows:     req.Rows,
-		Adapter:  adapter,
-		Channel:  d.cfg.Channel,
-		StateDir: d.cfg.StateDir,
+		Binary:         d.cfg.HostBinary,
+		Session:        req.ID,
+		Mode:           req.Mode,
+		Command:        command,
+		Args:           req.Args,
+		Dir:            req.Dir,
+		Policy:         req.Policy,
+		PermissionWait: d.cfg.PermissionWait,
+		SeqBase:        seqBase,
+		Cols:           req.Cols,
+		Rows:           req.Rows,
+		Adapter:        adapter,
+		Channel:        d.cfg.Channel,
+		StateDir:       d.cfg.StateDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("spawn session %q: %w%s", req.ID, err, kept)

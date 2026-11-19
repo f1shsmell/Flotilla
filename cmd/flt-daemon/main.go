@@ -29,10 +29,11 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("flt-daemon", flag.ContinueOnError)
 
 	var (
-		channel = fs.String("channel", version.Channel, "release channel this daemon serves: stable or preview")
-		hostBin = fs.String("host-binary", "", "flt-session-host executable to spawn for new sessions")
-		showVer = fs.Bool("version", false, "print the build version and exit")
-		logOut  = fs.Output()
+		channel  = fs.String("channel", version.Channel, "release channel this daemon serves: stable or preview")
+		hostBin  = fs.String("host-binary", "", "flt-session-host executable to spawn for new sessions")
+		permWait = fs.Duration("permission-wait", 0, "how long a session waits for a permission answer before refusing it; zero waits forever")
+		showVer  = fs.Bool("version", false, "print the build version and exit")
+		logOut   = fs.Output()
 	)
 
 	fs.Usage = func() {
@@ -73,12 +74,13 @@ func run(args []string) error {
 	}
 
 	d := daemon.New(daemon.Config{
-		Channel:    *channel,
-		Token:      token,
-		StateDir:   paths.Sessions,
-		ConfigDir:  paths.Config,
-		HostBinary: hostBinary,
-		Log:        logger,
+		Channel:        *channel,
+		Token:          token,
+		StateDir:       paths.Sessions,
+		ConfigDir:      paths.Config,
+		HostBinary:     hostBinary,
+		PermissionWait: *permWait,
+		Log:            logger,
 	}, daemon.ExecSpawner(logger))
 
 	logger.Info("daemon starting", "version", version.String(), "channel", *channel, "root", paths.Root)

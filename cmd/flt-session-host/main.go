@@ -37,6 +37,7 @@ func run(args []string) error {
 		command    = fs.String("command", "", "agent command to run")
 		dir        = fs.String("dir", "", "working directory for the agent")
 		policy     = fs.String("policy", acp.Supervised.String(), "ACP permission policy: supervised, accept-edits, auto or full-access")
+		permWait   = fs.Duration("permission-wait", 0, "how long to wait for a permission answer before refusing it; zero waits forever")
 		seqBase    = fs.Uint64("seq-base", 0, "host number the first update continues from; zero starts at 1")
 		cols       = fs.Int("cols", 80, "initial PTY columns")
 		rows       = fs.Int("rows", 24, "initial PTY rows")
@@ -98,18 +99,19 @@ func run(args []string) error {
 	defer stop()
 
 	h, err := host.Start(ctx, host.Config{
-		ID:       session.ID(*sessionID),
-		Mode:     session.Mode(*mode),
-		Token:    token,
-		StateDir: paths.Sessions,
-		Command:  *command,
-		Args:     fs.Args(),
-		Dir:      *dir,
-		Policy:   parsedPolicy,
-		Adapter:  parsedAdapter,
-		SeqBase:  *seqBase,
-		Cols:     *cols,
-		Rows:     *rows,
+		ID:             session.ID(*sessionID),
+		Mode:           session.Mode(*mode),
+		Token:          token,
+		StateDir:       paths.Sessions,
+		Command:        *command,
+		Args:           fs.Args(),
+		Dir:            *dir,
+		Policy:         parsedPolicy,
+		PermissionWait: *permWait,
+		Adapter:        parsedAdapter,
+		SeqBase:        *seqBase,
+		Cols:           *cols,
+		Rows:           *rows,
 	}, session.NewRegistry(paths.Sessions), logger)
 	if err != nil {
 		return fmt.Errorf("start the session host: %w", err)

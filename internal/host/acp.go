@@ -23,11 +23,6 @@ import (
 // after this process is gone.
 const bufferedUpdates = 256
 
-// permissionWait is how long an ACP turn waits for the client's answer before
-// the question counts as refused. A turn must not hang on a client that went
-// away, and a refusal is the answer that cannot be wrong.
-const permissionWait = 5 * time.Minute
-
 // errWrongMode reports a call that does not fit this session's mode.
 var errWrongMode = ipc.Class(errors.New("host: wrong session mode"), ipc.CodeWrongMode)
 
@@ -175,8 +170,9 @@ func chunkUpdate(msg session.UpdateMessage, budget int) []session.UpdateMessage 
 	return append(parts, part)
 }
 
-// askClient sends a permission question and waits for the answer. A client that
-// disconnects, or a question nobody answers, becomes a refusal.
+// askClient sends a permission question and waits for the answer. A client
+// that disconnects becomes a refusal; an unanswered question waits forever
+// unless the host was given an explicit PermissionWait.
 func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.PermissionAnswer, error) {
 	h.acp.mu.Lock()
 	h.acp.nextID++
@@ -218,8 +214,14 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 		return acp.PermissionAnswer{}, nil
 	}
 
-	timer := time.NewTimer(permissionWait)
-	defer timer.Stop()
+	timer := h.cfg.permissionTimer()
+	if timer != nil {
+		defer timer.Stop()
+	}
+	var timeout <-chan time.Time
+	if timer != nil {
+		timeout = timer.C
+	}
 
 	select {
 	case a := <-answer:
@@ -228,12 +230,25 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 		return a, nil
 	case <-ctx.Done():
 		return acp.PermissionAnswer{}, nil
-	case <-timer.C:
+	case <-timeout:
 		h.log.Warn("permission unanswered", "session", h.cfg.ID, "title", req.Title)
+		// The refusal reaches the agent and the turn moves on, so the session
+		// is no longer waiting on anyone.
+		h.setState(session.StateWorking)
 		return acp.PermissionAnswer{}, nil
 	case <-h.donec:
 		return acp.PermissionAnswer{}, nil
 	}
+}
+
+// permissionTimer arms the configured wait, or returns nil for forever. A nil
+// timer's channel is nil, which a select never chooses: that is what makes the
+// default wait unbounded without a special case in the select itself.
+func (c Config) permissionTimer() *time.Timer {
+	if c.PermissionWait <= 0 {
+		return nil
+	}
+	return time.NewTimer(c.PermissionWait)
 }
 
 // answerPermission resolves a pending question. An unknown id is a stale answer
