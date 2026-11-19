@@ -28,3 +28,7 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+# Local smoke builds kept beside the daemon for offscreen runs
+/flt-daemon.exe
+/flt-session-host.exe
+/flt-fake-acp-agent.exe
