@@ -76,7 +76,7 @@ func run(args []string, out io.Writer) error {
 		}
 		return listAgents(*channel, *asJSON, out)
 	case "probe":
-		return probeAgent(fs.Args()[1:], out)
+		return probeAgent(fs.Args()[1:], *asJSON, out)
 	case "replay":
 		return replayCommand(fs.Args()[1:], *channel, out)
 	default:
@@ -241,19 +241,29 @@ const probeTimeout = 5 * time.Minute
 
 // probeAgent runs one real turn against an agent and reports what came back.
 // It spends the user's own tokens, so it runs only when named explicitly.
-func probeAgent(args []string, out io.Writer) error {
+//
+// With --handshake it stops at the session being open: no prompt is sent, so
+// nothing reaches the provider and no token is spent. That is the mode a
+// support-matrix row is recorded with, because it works on a machine whose agent
+// has no usable login.
+func probeAgent(args []string, asJSON bool, out io.Writer) error {
 	fs := flag.NewFlagSet("flt probe", flag.ContinueOnError)
 	fs.SetOutput(out)
 	command := fs.String("command", "", "agent command to probe, as a binary and its arguments")
 	dir := fs.String("dir", "", "working directory for the turn")
 	prompt := fs.String("prompt", probe.DefaultPrompt, "prompt to send")
 	timeout := fs.Duration("timeout", probeTimeout, "give up after this long")
+	handshakeOnly := fs.Bool("handshake", false,
+		"stop once the session is open: read what the agent announced, send no prompt, spend no tokens")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprint(out, "usage: flt probe [flags] [agent]\n\n"+
 			"Runs one real turn and prints what came back. It spends your own tokens.\n"+
 			"Tool calls are auto-approved; file access stays inside --dir; terminals\n"+
-			"are refused. A missing binary or login fails before the turn starts.\n\n")
+			"are refused. A missing binary or login fails before the turn starts.\n\n"+
+			"With --handshake it opens the session, prints the modes and configuration\n"+
+			"options the agent announced, and closes it without sending a prompt: that\n"+
+			"costs nothing and works without a usable login.\n\n")
 		fs.PrintDefaults()
 	}
 
@@ -262,6 +272,20 @@ func probeAgent(args []string, out io.Writer) error {
 			return nil
 		}
 		return fmt.Errorf("parse arguments: %w", err)
+	}
+
+	// A prompt that --handshake will never send is refused rather than dropped:
+	// silently ignoring it would let a maintainer believe a turn ran.
+	if *handshakeOnly {
+		prompted := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "prompt" {
+				prompted = true
+			}
+		})
+		if prompted {
+			return fmt.Errorf("--prompt says nothing to --handshake, which sends no prompt: drop one of them")
+		}
 	}
 
 	agent, err := probeTarget(*command, fs.Args())
@@ -288,11 +312,47 @@ func probeAgent(args []string, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 
+	if *handshakeOnly {
+		res, err := probe.Handshake(ctx, agent, workspace)
+		if err != nil {
+			return fmt.Errorf("probe %s: %w", agent.Command, err)
+		}
+		return printHandshake(out, res, asJSON)
+	}
+
 	res, err := probe.Run(ctx, agent, workspace, *prompt)
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", agent.Command, err)
 	}
+	if asJSON {
+		return printJSON(out, res, "encode the probe result")
+	}
 	return print(out, res.Report())
+}
+
+// printHandshake renders a zero-token probe. The text form is the report plus one
+// line per announced mode and option, because the whole point of the mode is to
+// let a maintainer read what an agent says about itself without a JSON viewer.
+func printHandshake(out io.Writer, res probe.HandshakeResult, asJSON bool) error {
+	if asJSON {
+		return printJSON(out, res, "encode the handshake result")
+	}
+	for _, line := range res.Lines() {
+		if err := print(out, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printJSON writes one value as indented JSON, which is what --json means for
+// every command that serves it.
+func printJSON(out io.Writer, value any, what string) error {
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return print(out, string(payload))
 }
 
 // probeTarget resolves what to probe. With --command the remaining arguments
@@ -400,7 +460,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent and report what came back\n  replay   export a session's log as a replay scenario\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {
