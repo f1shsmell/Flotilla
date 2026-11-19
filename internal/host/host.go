@@ -433,6 +433,14 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		}
 		h.answerPermission(reply)
 		return struct{}{}, nil
+	case session.MethodSurface:
+		return h.handleSurface()
+	case session.MethodSurfaceSet:
+		req, err := decodeParams[session.SurfaceSetRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		return struct{}{}, h.handleSurfaceSet(ctx, req)
 	case session.MethodReplay:
 		h.sendScrollback()
 		return struct{}{}, nil

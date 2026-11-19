@@ -86,6 +86,12 @@ async function openLink(sessionId: string, target: WebContents): Promise<unknown
         if (method === methods.session.MethodState) {
           send(target, { type: "state", session: sessionId, state: params });
         }
+        // A surface change carries the agent's whole control list, so the
+        // renderer replaces its selectors rather than patching one value.
+        if (method === methods.session.MethodSurfaceUpdate) {
+          const response = (params ?? {}) as { controls?: unknown };
+          send(target, { type: "surface", session: sessionId, controls: response.controls });
+        }
       },
       onData: (stream, payload) => {
         bytes.push(sessionId, stream, payload);
@@ -226,6 +232,12 @@ function register(): void {
   ipcMain.handle("flotilla:cancel", async (_event, sessionId: string) => {
     await link(sessionId).call(methods.session.MethodCancel, {});
   });
+
+  ipcMain.handle(
+    "flotilla:surface:set",
+    async (_event, sessionId: string, id: string, value: string) =>
+      link(sessionId).call(methods.session.MethodSurfaceSet, { id, value }),
+  );
 
   ipcMain.handle(
     "flotilla:answer",

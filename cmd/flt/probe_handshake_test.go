@@ -63,7 +63,7 @@ func TestProbeHandshakeReportsWhatTheAgentAnnounced(t *testing.T) {
 	}
 
 	report := out.String()
-	for _, want := range []string{"modes=2", "options=2", "mode code = Code (current)", "option model = Model"} {
+	for _, want := range []string{"modes=2", "options=3", "mode code = Code (current)", "option model = Model"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("handshake report does not mention %q:\n%s", want, report)
 		}
@@ -95,7 +95,7 @@ func TestProbeHandshakeJSONCarriesTheWholeAnswer(t *testing.T) {
 	if res.Updates != 0 {
 		t.Fatalf("the agent streamed %d updates, so a turn ran", res.Updates)
 	}
-	if len(res.Modes) != 2 || len(res.Options) != 2 {
-		t.Fatalf("JSON reports %d modes and %d options, want 2 and 2", len(res.Modes), len(res.Options))
+	if len(res.Modes) != 2 || len(res.Options) != 3 {
+		t.Fatalf("JSON reports %d modes and %d options, want 2 and 3", len(res.Modes), len(res.Options))
 	}
 }

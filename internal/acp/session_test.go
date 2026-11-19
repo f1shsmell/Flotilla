@@ -318,3 +318,23 @@ func TestCloseStopsTheAgentProcess(t *testing.T) {
 		t.Fatal("a closed session still answered a prompt")
 	}
 }
+
+// TestModesBackfillAfterAnEarlyChange pins the rare ordering where a mode
+// notification arrives before the session-open response: the change is kept,
+// and the available modes the response later carries still reach the reader.
+func TestModesBackfillAfterAnEarlyChange(t *testing.T) {
+	s := &Session{}
+	s.applySurface(SurfaceChange{ModeID: "plan"})
+	s.created = sdk.NewSessionResponse{Modes: &sdk.SessionModeState{
+		AvailableModes: []sdk.SessionMode{{Id: "plan", Name: "Plan"}, {Id: "code", Name: "Code"}},
+		CurrentModeId:  "code",
+	}}
+
+	modes := s.Modes()
+	if modes == nil || modes.CurrentModeId != "plan" {
+		t.Fatalf("modes = %+v, want the early change to plan kept", modes)
+	}
+	if len(modes.AvailableModes) != 2 {
+		t.Fatalf("available modes = %+v, want the opening answer's two backfilled", modes.AvailableModes)
+	}
+}

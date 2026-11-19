@@ -117,6 +117,18 @@ type Config struct {
 	// OnUpdate receives every session update. It is called from the reader
 	// goroutine, so it must not block.
 	OnUpdate func(Update)
+	// OnSurface receives mode and config-option changes. They never reach
+	// OnUpdate: a control change is a fact about the session, not a transcript
+	// line. Called from the reader goroutine, so it must not block.
+	OnSurface func(SurfaceChange)
+}
+
+// SurfaceChange is one control change the agent reported. ModeID set means the
+// current mode moved; Options set means the whole option list was replaced,
+// which is the only form the protocol sends.
+type SurfaceChange struct {
+	ModeID  string
+	Options []sdk.SessionConfigOption
 }
 
 func (c Config) maxReadBytes() int {
@@ -220,8 +232,22 @@ func (c *Client) RequestPermission(ctx context.Context, params sdk.RequestPermis
 	return selected(answer.OptionID), nil
 }
 
-// SessionUpdate forwards one agent event to the configured sink.
+// SessionUpdate forwards one agent event to the configured sink. Control
+// changes go to OnSurface instead: they are not conversation, and a transcript
+// that carried them would render a mode switch as a line of agent output.
 func (c *Client) SessionUpdate(_ context.Context, params sdk.SessionNotification) error {
+	if u := params.Update.CurrentModeUpdate; u != nil {
+		if c.cfg.OnSurface != nil {
+			c.cfg.OnSurface(SurfaceChange{ModeID: string(u.CurrentModeId)})
+		}
+		return nil
+	}
+	if u := params.Update.ConfigOptionUpdate; u != nil {
+		if c.cfg.OnSurface != nil {
+			c.cfg.OnSurface(SurfaceChange{Options: u.ConfigOptions})
+		}
+		return nil
+	}
 	if c.cfg.OnUpdate == nil {
 		return nil
 	}

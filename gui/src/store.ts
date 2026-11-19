@@ -219,6 +219,56 @@ export function usableAgents(
   );
 }
 
+// Choice is one value a control can take. group is the section label the agent
+// gave it, absent for a flat list.
+export interface Choice {
+  value: string;
+  name: string;
+  group?: string;
+}
+
+// Control is one setting the agent exposes: a mode, a select or a boolean. The
+// daemon projects the agent's own shapes into this flat list, and the renderer
+// shows it as given.
+export interface Control {
+  id: string;
+  name: string;
+  kind: string;
+  current: string;
+  choices?: Choice[];
+}
+
+// parseControls reads the projected list without trusting it: a field the
+// daemon did not send becomes a visible default rather than undefined.
+export function parseControls(raw: unknown): Control[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return list.map((entry) => {
+    const control = (entry ?? {}) as Record<string, unknown>;
+    const choices = Array.isArray(control.choices) ? control.choices : [];
+    return {
+      id: asString(control.id),
+      name: asString(control.name),
+      kind: asString(control.kind),
+      current: asString(control.current),
+      choices: choices.map((item) => {
+        const choice = (item ?? {}) as Record<string, unknown>;
+        return {
+          value: asString(choice.value),
+          name: asString(choice.name),
+          group: asString(choice.group),
+        };
+      }),
+    };
+  });
+}
+
+// withControls folds one surface event into the session. The event carries the
+// whole list, so it replaces rather than merges: a control the agent stopped
+// offering must disappear, not linger with a stale value.
+export function withControls(state: SessionState, raw: unknown): SessionState {
+  return { ...state, controls: parseControls(raw) };
+}
+
 export interface DiffFile {
   path: string;
   old_path?: string;
@@ -358,6 +408,9 @@ export interface SessionState {
   mode: string;
   entries: Entry[];
   permissions: Permission[];
+  // controls are the settings the agent exposes right now. Empty means the
+  // agent offers none (or is a terminal), and the header shows no selectors.
+  controls: Control[];
   turn: Turn;
   stopReason?: string;
   error?: string;
@@ -451,6 +504,7 @@ export function newSession(id: string, mode: string): SessionState {
     mode,
     entries: [],
     permissions: [],
+    controls: [],
     turn: "idle",
     lastSeq: 0,
     moreHistory: false,
@@ -594,6 +648,12 @@ export function endTurn(state: SessionState, stopReason: string): SessionState {
 
 export function failTurn(state: SessionState, error: string): SessionState {
   return { ...state, turn: "idle", error };
+}
+
+// controlError reports a refused control write without touching the turn: the
+// agent may still be working, and a rejected setting is not a failed turn.
+export function controlError(state: SessionState, error: string): SessionState {
+  return { ...state, error };
 }
 
 export function loseSession(state: SessionState, error?: string): SessionState {

@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { DiffPanel } from "./DiffPanel";
 
-import type { Entry, SessionState } from "../store";
+import type { Choice, Control, Entry, SessionState } from "../store";
 import { PermissionCard } from "./PermissionCard";
 import { Terminal } from "./Terminal";
 
@@ -12,10 +12,69 @@ interface Props {
   onView: (view: "stream" | "diff") => void;
   onPrompt: (text: string) => void;
   onCancel: () => void;
+  onSetControl: (id: string, value: string) => void;
   onAnswer: (questionId: string, optionId: string) => void;
   onTerminalReady: (write: (bytes: Uint8Array) => void) => void;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
+}
+
+// ControlSelect renders one agent setting. A boolean has no choices on the
+// wire — on and off are the renderer's words — and grouped choices rebuild
+// their sections from the labels the daemon kept.
+function ControlSelect({
+  control,
+  onSet,
+}: {
+  control: Control;
+  onSet: (id: string, value: string) => void;
+}): React.ReactElement {
+  const choices: Choice[] =
+    control.kind === "boolean"
+      ? [
+          { value: "true", name: "On" },
+          { value: "false", name: "Off" },
+        ]
+      : (control.choices ?? []);
+
+  const loose = choices.filter((choice) => !choice.group);
+  const groups: { name: string; choices: Choice[] }[] = [];
+  for (const choice of choices) {
+    if (!choice.group) {
+      continue;
+    }
+    const existing = groups.find((group) => group.name === choice.group);
+    if (existing) {
+      existing.choices.push(choice);
+    } else {
+      groups.push({ name: choice.group, choices: [choice] });
+    }
+  }
+
+  return (
+    <label className="surface-control">
+      <span className="muted">{control.name}</span>
+      <select
+        value={control.current}
+        onChange={(event) => onSet(control.id, event.target.value)}
+      >
+        {loose.map((choice) => (
+          <option key={choice.value} value={choice.value}>
+            {choice.name || choice.value}
+          </option>
+        ))}
+        {groups.map((group) => (
+          <optgroup key={group.name} label={group.name}>
+            {group.choices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.name || choice.value}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
@@ -50,6 +109,7 @@ export function SessionView({
   onView,
   onPrompt,
   onCancel,
+  onSetControl,
   onAnswer,
   onTerminalReady,
   onInput,
@@ -97,6 +157,14 @@ export function SessionView({
           </button>
         </div>
       </header>
+
+      {state.controls.length > 0 ? (
+        <div className="surface-controls">
+          {state.controls.map((control) => (
+            <ControlSelect key={control.id} control={control} onSet={onSetControl} />
+          ))}
+        </div>
+      ) : null}
 
       {state.error ? <p className="error">{state.error}</p> : null}
 
