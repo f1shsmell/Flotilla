@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,15 +13,22 @@ import (
 )
 
 // collect returns a data sink that appends terminal output, plus a reader for
-// what it has seen so far. The reader is only used from the test goroutine
-// after the sink's last write, which the waits below establish.
+// what it has seen so far. Writes arrive on the connection's goroutine while
+// the test polls the reader, so both sides take the same lock.
 func collect() (func(*ipc.Conn, uint32, []byte), func() string) {
+	var mu sync.Mutex
 	var seen strings.Builder
 	return func(_ *ipc.Conn, stream uint32, payload []byte) {
-		if stream == session.StreamOutput {
-			seen.Write(payload)
+			if stream == session.StreamOutput {
+				mu.Lock()
+				seen.Write(payload)
+				mu.Unlock()
+			}
+		}, func() string {
+			mu.Lock()
+			defer mu.Unlock()
+			return seen.String()
 		}
-	}, seen.String
 }
 
 // waitForText waits until read reports needle, or fails the test with what it

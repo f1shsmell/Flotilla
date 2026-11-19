@@ -35,8 +35,13 @@ func NewAgent(s Scenario) *Agent {
 	return &Agent{scenario: s, tools: make(map[sdk.ToolCallId]bool)}
 }
 
-// SetAgentConnection receives the connection the SDK builds.
-func (a *Agent) SetAgentConnection(conn *sdk.AgentSideConnection) { a.conn = conn }
+// SetAgentConnection receives the connection the SDK builds. Its receive loop
+// is already running, so the write takes the lock Prompt's read takes.
+func (a *Agent) SetAgentConnection(conn *sdk.AgentSideConnection) {
+	a.mu.Lock()
+	a.conn = conn
+	a.mu.Unlock()
+}
 
 // Initialize advertises what the recorded agent advertised. A client that
 // probes for resume has to see the same answer it would have got live, or a
@@ -110,6 +115,9 @@ func (a *Agent) ListSessions(context.Context, sdk.ListSessionsRequest) (sdk.List
 // types twice.
 func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.PromptResponse, error) {
 	turn := a.nextTurn()
+	a.mu.Lock()
+	conn := a.conn
+	a.mu.Unlock()
 
 	for _, update := range turn.Updates {
 		// A cancelled context ends the turn cleanly: the client asked to stop,
@@ -119,7 +127,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 			return sdk.PromptResponse{StopReason: sdk.StopReasonCancelled}, nil
 		default:
 		}
-		if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+		if err := conn.SessionUpdate(ctx, sdk.SessionNotification{
 			SessionId: params.SessionId,
 			Update:    a.toSDK(update),
 		}); err != nil {
