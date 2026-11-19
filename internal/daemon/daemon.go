@@ -171,7 +171,7 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		configDir = filepath.Join(cfg.StateDir, "config")
 	}
 
-	return &Daemon{
+	d := &Daemon{
 		cfg:   cfg,
 		reg:   session.NewRegistry(cfg.StateDir),
 		addr:  ipc.Address{Channel: cfg.Channel, Name: "daemon"},
@@ -187,6 +187,13 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		transcripts: transcript.NewStore(filepath.Join(cfg.StateDir, "transcripts")),
 		agents:      agent.New(configDir),
 	}
+	// A read turn stays read across a daemon restart: the seen table lives on
+	// disk beside the records it annotates. A table that cannot be read is a
+	// warning, not a refusal to serve.
+	if err := d.relay.persistSeenTo(filepath.Join(cfg.StateDir, "seen.json")); err != nil {
+		cfg.Log.Warn("cannot load the seen table", "err", err.Error())
+	}
+	return d
 }
 
 // Addr reports the endpoint this daemon serves.
@@ -294,4 +301,6 @@ func (d *Daemon) Detach() {
 	if err := d.transcripts.Close(); err != nil {
 		d.cfg.Log.Debug("cannot close the transcripts", "err", err.Error())
 	}
+
+	d.relay.closeSeen()
 }
