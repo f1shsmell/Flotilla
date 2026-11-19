@@ -12,6 +12,7 @@ interface FlotillaBridge {
   prompt(sessionId: string, text: string): Promise<unknown>;
   seen(sessionId: string): Promise<unknown>;
   cancel(sessionId: string): Promise<unknown>;
+  surfaceSet(sessionId: string, id: string, value: string): Promise<unknown>;
   answer(sessionId: string, questionId: string, optionId: string): Promise<unknown>;
   input(sessionId: string, text: string): Promise<unknown>;
   resize(sessionId: string, cols: number, rows: number): Promise<unknown>;

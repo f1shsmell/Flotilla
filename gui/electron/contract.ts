@@ -31,6 +31,9 @@ export const methods = {
     MethodSeen: "session.seen",
     MethodState: "session.state",
     MethodStop: "session.stop",
+    MethodSurface: "session.surface",
+    MethodSurfaceSet: "session.surface.set",
+    MethodSurfaceUpdate: "session.surface.update",
     MethodUpdate: "session.update",
   },
 } as const;
@@ -81,6 +84,9 @@ export const constants = {
     TokenSize: "32",
   },
   session: {
+    ControlBoolean: "boolean",
+    ControlMode: "mode",
+    ControlSelect: "select",
     KindUser: "user",
     ModeACP: "acp",
     ModePTY: "pty",
@@ -207,6 +213,12 @@ export const wireTypes = {
     "history_more": { go: "HistoryMore", type: "bool", optional: true },
     "id": { go: "ID", type: "ID" },
     "info": { go: "Info", type: "Info" },
+    "surface": { go: "Surface", type: "[]Control", optional: true },
+  },
+  "session.Choice": {
+    "group": { go: "Group", type: "string", optional: true },
+    "name": { go: "Name", type: "string" },
+    "value": { go: "Value", type: "string" },
   },
   "session.CommentAddRequest": {
     "line": { go: "Line", type: "int" },
@@ -222,6 +234,13 @@ export const wireTypes = {
   },
   "session.CommitRequest": {
     "message": { go: "Message", type: "string" },
+  },
+  "session.Control": {
+    "choices": { go: "Choices", type: "[]Choice", optional: true },
+    "current": { go: "Current", type: "string" },
+    "id": { go: "ID", type: "string" },
+    "kind": { go: "Kind", type: "string" },
+    "name": { go: "Name", type: "string" },
   },
   "session.DiffRequest": {
     "base": { go: "Base", type: "string", optional: true },
@@ -287,6 +306,13 @@ export const wireTypes = {
   },
   "session.StopRequest": {
     "id": { go: "ID", type: "ID" },
+  },
+  "session.SurfaceResponse": {
+    "controls": { go: "Controls", type: "[]Control" },
+  },
+  "session.SurfaceSetRequest": {
+    "id": { go: "ID", type: "string" },
+    "value": { go: "Value", type: "string" },
   },
   "session.UpdateMessage": {
     "cont": { go: "Continued", type: "bool", optional: true },

@@ -58,6 +58,7 @@ func (h *Host) startACP(ctx context.Context) error {
 		Asker:        h.askClient,
 		MaxReadBytes: ipc.MaxFrameSize,
 		OnUpdate:     h.forwardUpdate,
+		OnSurface:    h.surfaceChanged,
 	})
 	if err != nil {
 		return fmt.Errorf("open the acp connection: %w", err)

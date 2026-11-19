@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("flotilla", {
     ipcRenderer.invoke("flotilla:prompt", sessionId, text),
   seen: (sessionId: string) => ipcRenderer.invoke("flotilla:seen", sessionId),
   cancel: (sessionId: string) => ipcRenderer.invoke("flotilla:cancel", sessionId),
+  surfaceSet: (sessionId: string, id: string, value: string) =>
+    ipcRenderer.invoke("flotilla:surface:set", sessionId, id, value),
   answer: (sessionId: string, questionId: string, optionId: string) =>
     ipcRenderer.invoke("flotilla:answer", sessionId, questionId, optionId),
   input: (sessionId: string, text: string) =>

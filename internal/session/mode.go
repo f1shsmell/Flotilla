@@ -221,6 +221,10 @@ type AttachResponse struct {
 	// HistoryMore is true when older updates exist and were left out, so the
 	// window does not present its first line as the session's first line.
 	HistoryMore bool `json:"history_more,omitempty"`
+	// Surface is the controls the agent exposes, empty for a terminal session
+	// or an agent that announced none. It rides the attach reply so the first
+	// screen has its selectors before any notification arrives.
+	Surface []Control `json:"surface,omitempty"`
 }
 
 // PromptRequest is one turn's input.

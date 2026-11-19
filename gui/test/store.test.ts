@@ -11,6 +11,7 @@ import {
   commentPrompt,
   commentsOn,
   parseAgents,
+  parseControls,
   parsePatch,
   parseStatus,
   splitArgs,
@@ -21,6 +22,7 @@ import {
   usableAgents,
   filterAgents,
   withLifecycle,
+  withControls,
   type Status,
 } from "../src/store";
 
@@ -633,5 +635,67 @@ describe("usableAgents", () => {
       agent.id === "my-shell" ? { ...agent, chat: true } : agent,
     );
     expect(usableAgents(ptyOnly, "acp").map((agent) => agent.id)).not.toContain("my-shell");
+  });
+});
+
+describe("surface controls", () => {
+  it("reads the controls the daemon projected", () => {
+    const controls = parseControls([
+      {
+        id: "mode",
+        name: "Mode",
+        kind: "mode",
+        current: "code",
+        choices: [
+          { value: "plan", name: "Plan" },
+          { value: "code", name: "Code" },
+        ],
+      },
+      { id: "toggle", name: "Toggle", kind: "boolean", current: "true" },
+    ]);
+
+    expect(controls).toHaveLength(2);
+    expect(controls[0].choices?.map((choice) => choice.value)).toEqual(["plan", "code"]);
+    expect(controls[1]).toEqual({
+      id: "toggle",
+      name: "Toggle",
+      kind: "boolean",
+      current: "true",
+      choices: [],
+    });
+  });
+
+  it("keeps a grouped choice's group label", () => {
+    const controls = parseControls([
+      {
+        id: "model",
+        name: "Model",
+        kind: "select",
+        current: "a",
+        choices: [{ value: "a", name: "A", group: "Fast" }],
+      },
+    ]);
+    expect(controls[0].choices?.[0].group).toBe("Fast");
+  });
+
+  it("does not trust a malformed list", () => {
+    expect(parseControls(null)).toEqual([]);
+    expect(parseControls("nope")).toEqual([]);
+    expect(parseControls([null, {}])).toEqual([
+      { id: "", name: "", kind: "", current: "", choices: [] },
+      { id: "", name: "", kind: "", current: "", choices: [] },
+    ]);
+  });
+
+  it("replaces the surface wholesale on an event", () => {
+    // A surface event carries the whole list, so a control the agent stopped
+    // offering disappears rather than lingering with a stale value.
+    let state = newSession("s", "acp");
+    expect(state.controls).toEqual([]);
+
+    state = withControls(state, [{ id: "mode", name: "Mode", kind: "mode", current: "code" }]);
+    state = withControls(state, [{ id: "mode", name: "Mode", kind: "mode", current: "plan" }]);
+    expect(state.controls).toHaveLength(1);
+    expect(state.controls[0].current).toBe("plan");
   });
 });

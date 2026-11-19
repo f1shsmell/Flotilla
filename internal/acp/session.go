@@ -53,6 +53,13 @@ type Session struct {
 
 	mu     sync.Mutex
 	closed bool
+
+	// surfMu guards the live surface: modes and options start as what the agent
+	// announced and are replaced when it reports a change. created itself is
+	// never mutated, so a reader that only wants the opening answer can have it.
+	surfMu  sync.Mutex
+	modes   *sdk.SessionModeState
+	options []sdk.SessionConfigOption
 }
 
 // workspaceOf returns the first candidate a session can run in, falling back to
@@ -130,7 +137,16 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		s.exitc <- err
 	}()
 
-	client := NewClient(cfg)
+	// The surface is tracked here before the caller sees the change, so a read
+	// that follows a set's notification always reports the new value.
+	wrapped := cfg
+	wrapped.OnSurface = func(change SurfaceChange) {
+		s.applySurface(change)
+		if cfg.OnSurface != nil {
+			cfg.OnSurface(change)
+		}
+	}
+	client := NewClient(wrapped)
 	s.client = client
 	s.conn = sdk.NewClientSideConnection(client, stdin, stdout)
 
@@ -161,7 +177,11 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("open a session with the agent: %w", err)
 	}
 	s.agentID = created.SessionId
+	// The reader goroutine can already be folding a surface change, which falls
+	// back to created; the write takes the same lock those reads take.
+	s.surfMu.Lock()
 	s.created = created
+	s.surfMu.Unlock()
 
 	return s, nil
 }
@@ -201,16 +221,90 @@ func (s *Session) SupportsResume() bool {
 	return s.init.AgentCapabilities.SessionCapabilities.Resume != nil
 }
 
-// Modes reports the mode state the agent announced when the session opened, or
-// nil when it announced none. The answer arrived with the session, so reading it
-// costs nothing: a client that dropped it could only learn the same thing by
-// sending a turn.
-func (s *Session) Modes() *sdk.SessionModeState { return s.created.Modes }
+// Modes reports the agent's current mode state, or nil when it offers none. It
+// starts as what the session opened with and follows the agent's own updates.
+func (s *Session) Modes() *sdk.SessionModeState {
+	s.surfMu.Lock()
+	defer s.surfMu.Unlock()
+	if s.modes != nil {
+		return s.modes
+	}
+	return s.created.Modes
+}
 
-// ConfigOptions reports the configuration options the agent announced when the
-// session opened. Empty means the agent offers none, which is a fact a client
-// shows rather than a failure to hide.
-func (s *Session) ConfigOptions() []sdk.SessionConfigOption { return s.created.ConfigOptions }
+// ConfigOptions reports the agent's current configuration options. Empty means
+// the agent offers none, which is a fact a client shows rather than a failure
+// to hide.
+func (s *Session) ConfigOptions() []sdk.SessionConfigOption {
+	s.surfMu.Lock()
+	defer s.surfMu.Unlock()
+	if s.options != nil {
+		return s.options
+	}
+	return s.created.ConfigOptions
+}
+
+// applySurface folds one reported change into the live state. A change carries
+// either the whole option list or a new current mode; the opening answer stays
+// untouched, so the fallback readers above keep working after a change.
+func (s *Session) applySurface(change SurfaceChange) {
+	s.surfMu.Lock()
+	defer s.surfMu.Unlock()
+
+	if change.Options != nil {
+		s.options = change.Options
+	}
+	if change.ModeID != "" {
+		available := s.created.Modes
+		if s.modes != nil {
+			available = s.modes
+		}
+		next := &sdk.SessionModeState{CurrentModeId: sdk.SessionModeId(change.ModeID)}
+		if available != nil {
+			next.AvailableModes = available.AvailableModes
+		}
+		s.modes = next
+	}
+}
+
+// SetMode asks the agent to switch to one of its modes.
+func (s *Session) SetMode(ctx context.Context, modeID string) error {
+	if _, err := s.conn.SetSessionMode(ctx, sdk.SetSessionModeRequest{
+		SessionId: s.agentID,
+		ModeId:    sdk.SessionModeId(modeID),
+	}); err != nil {
+		return fmt.Errorf("set mode %q: %w", modeID, err)
+	}
+	return nil
+}
+
+// SetConfigValue asks the agent to pick one value of a select option.
+func (s *Session) SetConfigValue(ctx context.Context, configID, value string) error {
+	if _, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
+		ValueId: &sdk.SetSessionConfigOptionValueId{
+			SessionId: s.agentID,
+			ConfigId:  sdk.SessionConfigId(configID),
+			Value:     sdk.SessionConfigValueId(value),
+		},
+	}); err != nil {
+		return fmt.Errorf("set config %q to %q: %w", configID, value, err)
+	}
+	return nil
+}
+
+// SetConfigBool asks the agent to flip a boolean option.
+func (s *Session) SetConfigBool(ctx context.Context, configID string, value bool) error {
+	if _, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
+		Boolean: &sdk.SetSessionConfigOptionBoolean{
+			SessionId: s.agentID,
+			ConfigId:  sdk.SessionConfigId(configID),
+			Value:     value,
+		},
+	}); err != nil {
+		return fmt.Errorf("set config %q to %t: %w", configID, value, err)
+	}
+	return nil
+}
 
 // Prompt runs one turn and returns why it stopped.
 func (s *Session) Prompt(ctx context.Context, blocks ...sdk.ContentBlock) (sdk.PromptResponse, error) {

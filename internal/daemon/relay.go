@@ -441,7 +441,30 @@ func (d *Daemon) attachClient(ctx context.Context, peer *ipc.Conn, params json.R
 		Info:        att.Info,
 		History:     history,
 		HistoryMore: more,
+		Surface:     d.readSurface(req.ID, att.Conn),
 	}, nil
+}
+
+// readSurface asks the host what the agent currently exposes, so a window that
+// opens a session renders its controls without a second round trip. A terminal
+// session answers unknown method, which means no controls, not a failed attach.
+func (d *Daemon) readSurface(id session.ID, conn *ipc.Conn) []session.Control {
+	ctx, cancel := context.WithTimeout(context.Background(), replayTimeout)
+	defer cancel()
+
+	raw, err := conn.Call(ctx, session.MethodSurface, struct{}{})
+	if err != nil {
+		if ipc.CodeOf(err) != ipc.CodeUnknownMethod {
+			d.cfg.Log.Warn("cannot read a session surface", "session", id, "err", err.Error())
+		}
+		return nil
+	}
+	var resp session.SurfaceResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		d.cfg.Log.Warn("cannot decode a session surface", "session", id, "err", err.Error())
+		return nil
+	}
+	return resp.Controls
 }
 
 // projectSeen projects the seen flag onto the lifecycle one client should see:
@@ -504,7 +527,8 @@ func (d *Daemon) relayCall(ctx context.Context, peer *ipc.Conn, id session.ID, m
 
 	switch method {
 	case session.MethodInfo, session.MethodPrompt, session.MethodCancel,
-		session.MethodPermissionReply, session.MethodResize, session.MethodStop:
+		session.MethodPermissionReply, session.MethodResize, session.MethodStop,
+		session.MethodSurface, session.MethodSurfaceSet:
 	default:
 		return nil, ipc.ErrNoHandler
 	}

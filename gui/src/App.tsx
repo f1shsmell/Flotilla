@@ -9,6 +9,7 @@ import {
   answerPermission,
   applyHistory,
   applyUpdate,
+  controlError,
   endTurn,
   failTurn,
   loseSession,
@@ -18,6 +19,7 @@ import {
   parseStatus,
   startTurn,
   summarise,
+  withControls,
   withLifecycle,
   type AgentChange,
   type AgentListing,
@@ -27,11 +29,12 @@ import {
 } from "./store";
 
 interface WireEvent {
-  type: "update" | "permission" | "state" | "data" | "closed";
+  type: "update" | "permission" | "state" | "surface" | "data" | "closed";
   session: string;
   update?: unknown;
   question?: unknown;
   state?: unknown;
+  controls?: unknown;
   // bytes is one coalesced run of terminal output. It crosses the preload
   // boundary as a Uint8Array: structured clone copies the bytes, and nothing
   // has to decode them.
@@ -111,6 +114,9 @@ export function App(): React.ReactElement {
             break;
           case "permission":
             next = addPermission(next, event.question);
+            break;
+          case "surface":
+            next = withControls(next, event.controls);
             break;
           case "closed":
             next = loseSession(next, event.error);
@@ -311,16 +317,21 @@ export function App(): React.ReactElement {
         info?: { mode?: string; state?: unknown };
         history?: unknown;
         history_more?: boolean;
+        surface?: unknown;
       };
 
       // The log the daemon kept for this session goes in with the state, before
       // any live update: a window that opens a turn an hour old should show how
-      // the agent got there, not start at its own arrival.
+      // the agent got there, not start at its own arrival. The surface rides
+      // along for the same reason: the selectors are filled on the first frame.
       setSession(
-        applyHistory(newSession(id, attached.info?.mode ?? "pty"), {
-          updates: attached.history,
-          more: attached.history_more === true,
-        }),
+        withControls(
+          applyHistory(newSession(id, attached.info?.mode ?? "pty"), {
+            updates: attached.history,
+            more: attached.history_more === true,
+          }),
+          attached.surface,
+        ),
       );
 
       // Opening a session is looking at it, which is what separates done from
@@ -410,6 +421,24 @@ export function App(): React.ReactElement {
       setSession((current) => (current ? failTurn(current, message) : current));
     }
   }, [session]);
+
+  // A control write is not a turn: the agent's own notification moves the
+  // selectors, and a refusal only reports itself. The select keeps showing the
+  // last value the agent confirmed, never the one the click asked for.
+  const setControl = useCallback(
+    async (controlId: string, value: string) => {
+      if (!session) {
+        return;
+      }
+      try {
+        await window.flotilla.surfaceSet(session.id, controlId, value);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setSession((current) => (current ? controlError(current, message) : current));
+      }
+    },
+    [session],
+  );
 
   const answer = useCallback(
     async (questionId: string, optionId: string) => {
@@ -524,6 +553,7 @@ export function App(): React.ReactElement {
             onView={setView}
             onPrompt={(text) => void prompt(text)}
             onCancel={() => void cancel()}
+            onSetControl={(controlId, value) => void setControl(controlId, value)}
             onAnswer={(questionId, optionId) => void answer(questionId, optionId)}
             onTerminalReady={(write) => {
               terminalWrite.current = write;

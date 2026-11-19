@@ -26,6 +26,10 @@ type SessionState struct {
 	cancel context.CancelFunc
 	// askPermission makes the next turn request permission.
 	askPermission bool
+	// modes and options are the live surface a set call changes. They are
+	// guarded by the agent's mutex, like every other field here.
+	modes   *sdk.SessionModeState
+	options []sdk.SessionConfigOption
 }
 
 var (
@@ -73,10 +77,6 @@ func (a *Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, 
 func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
 	id := sdk.SessionId("fake-" + lastSegment(params.Cwd))
 
-	a.mu.Lock()
-	a.sessions[id] = &SessionState{id: id, askPermission: true}
-	a.mu.Unlock()
-
 	models := sdk.SessionConfigSelectOptionsUngrouped{
 		{Value: "fake-small", Name: "Small"},
 		{Value: "fake-large", Name: "Large"},
@@ -85,32 +85,38 @@ func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk
 		{Value: "low", Name: "Low"},
 		{Value: "high", Name: "High"},
 	}
+	modes := &sdk.SessionModeState{
+		AvailableModes: []sdk.SessionMode{
+			{Id: "plan", Name: "Plan"},
+			{Id: "code", Name: "Code"},
+		},
+		CurrentModeId: "code",
+	}
+	options := []sdk.SessionConfigOption{
+		{Select: &sdk.SessionConfigOptionSelect{
+			Id:           "model",
+			Name:         "Model",
+			Type:         "select",
+			CurrentValue: "fake-small",
+			Options:      sdk.SessionConfigSelectOptions{Ungrouped: &models},
+		}},
+		{Select: &sdk.SessionConfigOptionSelect{
+			Id:           "thought_level",
+			Name:         "Thinking",
+			Type:         "select",
+			CurrentValue: "low",
+			Options:      sdk.SessionConfigSelectOptions{Ungrouped: &thoughts},
+		}},
+	}
+
+	a.mu.Lock()
+	a.sessions[id] = &SessionState{id: id, askPermission: true, modes: modes, options: options}
+	a.mu.Unlock()
 
 	return sdk.NewSessionResponse{
-		SessionId: id,
-		Modes: &sdk.SessionModeState{
-			AvailableModes: []sdk.SessionMode{
-				{Id: "plan", Name: "Plan"},
-				{Id: "code", Name: "Code"},
-			},
-			CurrentModeId: "code",
-		},
-		ConfigOptions: []sdk.SessionConfigOption{
-			{Select: &sdk.SessionConfigOptionSelect{
-				Id:           "model",
-				Name:         "Model",
-				Type:         "select",
-				CurrentValue: "fake-small",
-				Options:      sdk.SessionConfigSelectOptions{Ungrouped: &models},
-			}},
-			{Select: &sdk.SessionConfigOptionSelect{
-				Id:           "thought_level",
-				Name:         "Thinking",
-				Type:         "select",
-				CurrentValue: "low",
-				Options:      sdk.SessionConfigSelectOptions{Ungrouped: &thoughts},
-			}},
-		},
+		SessionId:     id,
+		Modes:         modes,
+		ConfigOptions: options,
 	}, nil
 }
 
@@ -238,14 +244,78 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	return sdk.PromptResponse{StopReason: sdk.StopReasonEndTurn}, nil
 }
 
-// SetSessionMode accepts any mode.
-func (a *Agent) SetSessionMode(_ context.Context, _ sdk.SetSessionModeRequest) (sdk.SetSessionModeResponse, error) {
+// SetSessionMode records the new mode and announces it. The notification goes
+// out before the response, so a client that reads the surface after its set
+// call returns always sees the value it asked for.
+func (a *Agent) SetSessionMode(ctx context.Context, params sdk.SetSessionModeRequest) (sdk.SetSessionModeResponse, error) {
+	a.mu.Lock()
+	s := a.sessions[params.SessionId]
+	if s != nil && s.modes != nil {
+		next := *s.modes
+		next.CurrentModeId = params.ModeId
+		s.modes = &next
+	}
+	a.mu.Unlock()
+	if s == nil {
+		return sdk.SetSessionModeResponse{}, fmt.Errorf("unknown session %q", params.SessionId)
+	}
+
+	if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+		SessionId: params.SessionId,
+		Update: sdk.SessionUpdate{
+			CurrentModeUpdate: &sdk.SessionCurrentModeUpdate{CurrentModeId: params.ModeId},
+		},
+	}); err != nil {
+		return sdk.SetSessionModeResponse{}, fmt.Errorf("announce the mode change: %w", err)
+	}
 	return sdk.SetSessionModeResponse{}, nil
 }
 
-// SetSessionConfigOption accepts any option.
-func (a *Agent) SetSessionConfigOption(_ context.Context, _ sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
-	return sdk.SetSessionConfigOptionResponse{}, nil
+// SetSessionConfigOption records the new value and announces the whole option
+// list, which is what the protocol's update carries. Like the mode set, the
+// notification precedes the response.
+func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
+	var sessionID sdk.SessionId
+	switch {
+	case params.ValueId != nil:
+		sessionID = params.ValueId.SessionId
+	case params.Boolean != nil:
+		sessionID = params.Boolean.SessionId
+	default:
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("set config option: no value")
+	}
+
+	a.mu.Lock()
+	s := a.sessions[sessionID]
+	if s != nil {
+		for i := range s.options {
+			option := s.options[i]
+			if params.ValueId != nil && option.Select != nil && option.Select.Id == params.ValueId.ConfigId {
+				option.Select.CurrentValue = params.ValueId.Value
+			}
+			if params.Boolean != nil && option.Boolean != nil && option.Boolean.Id == params.Boolean.ConfigId {
+				option.Boolean.CurrentValue = params.Boolean.Value
+			}
+		}
+	}
+	var options []sdk.SessionConfigOption
+	if s != nil {
+		options = s.options
+	}
+	a.mu.Unlock()
+	if s == nil {
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("unknown session %q", sessionID)
+	}
+
+	if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+		SessionId: sessionID,
+		Update: sdk.SessionUpdate{
+			ConfigOptionUpdate: &sdk.SessionConfigOptionUpdate{ConfigOptions: options},
+		},
+	}); err != nil {
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("announce the option change: %w", err)
+	}
+	return sdk.SetSessionConfigOptionResponse{ConfigOptions: options}, nil
 }
 
 // CloseSession forgets the session.

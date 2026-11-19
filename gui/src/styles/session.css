@@ -57,6 +57,29 @@
   align-items: center;
 }
 
+/* The agent's own settings, projected by the daemon. They sit under the header
+   so a mode switch reads as part of the session, not of the window's chrome. */
+.surface-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.surface-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.surface-control select {
+  font: inherit;
+  color: var(--text);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-3);
+}
+
 .log {
   flex: 1;
   overflow-y: auto;
