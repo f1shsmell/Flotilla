@@ -177,10 +177,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* safe: a centered flex column that overflows must still scroll back to its
+     first child, or the lockup and the card's Close sit above the scroll origin. */
+  justify-content: safe center;
   gap: var(--sp-3);
   text-align: center;
   padding: var(--sp-7);
+  overflow-y: auto;
   animation: harbor-in 400ms ease-out backwards;
 }
 
@@ -206,7 +209,55 @@
   font-weight: 600;
 }
 
-.harbor-empty p {
+.harbor-empty > p {
   margin: 0;
   max-width: 52ch;
+}
+
+/* With a composer card below, the lockup steps back to a signature: the card
+   is the first view's action point, not the lettering. */
+.harbor-empty:has(.composer-card) .brand-lockup {
+  width: min(240px, 60%);
+}
+
+.composer-card {
+  display: grid;
+  gap: var(--sp-3);
+  width: min(560px, 100%);
+  margin-top: var(--sp-5);
+  padding: var(--sp-6);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  text-align: left;
+}
+
+.composer-card .new-session {
+  margin: 0;
+  padding: 0;
+  border-bottom: none;
+}
+
+.composer-card .agent-list {
+  max-height: 220px;
+}
+
+/* In flow, right-aligned: an absolute Close would land on the form's first
+   row once the compose greeting hides the form's own overline. */
+.composer-close {
+  justify-self: end;
+}
+
+/* Composing over a live session uses the settings overlay's trick: cover, do
+   not unmount, so the terminal underneath keeps its scrollback and size. */
+.composer-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    radial-gradient(1100px 480px at 88% -12%, var(--accent-bg), transparent 62%),
+    var(--bg);
+  display: flex;
+  min-height: 0;
 }

@@ -26,6 +26,10 @@ body {
 button {
   font: inherit;
   font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -48,6 +52,10 @@ button:active:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.icon {
+  flex: none;
 }
 
 button.primary {

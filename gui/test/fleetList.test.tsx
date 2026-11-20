@@ -65,4 +65,10 @@ describe("the empty fleet", () => {
     const html = list([]);
     expect(html).toContain("Sessions you start will appear here.");
   });
+
+  it("points at the composer card, not at a form that left the sidebar", () => {
+    const html = list([]);
+    expect(html).toContain("composer card");
+    expect(html).not.toContain("above");
+  });
 });

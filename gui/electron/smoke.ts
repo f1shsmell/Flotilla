@@ -204,6 +204,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   // the supervisor to respawn it and reattach: the whole self-heal chain.
   const heal = process.env.FLT_GUI_SMOKE_HEAL ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
+  const compose = process.env.FLT_GUI_SMOKE_COMPOSE ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   // FLT_GUI_SMOKE_STARTS is a JSON array of start requests: a fleet of several
   // sessions for the walks (and screenshots) that need more than one card.
@@ -244,6 +245,17 @@ export async function run(target: BrowserWindow): Promise<boolean> {
     }
 
     if (form !== "") {
+      // The composer card is the first view's action point: with sessions on
+      // screen it opens from the fleet header, so the form path asks for it
+      // before waiting on any of its fields.
+      await target.webContents.executeJavaScript(`(() => {
+        if (document.querySelector(".new-session")) { return; }
+        const open = [...document.querySelectorAll(".fleet header button")]
+          .find((button) => button.textContent.trim() === "New session");
+        if (!open) { throw new Error("no New session button in the fleet header"); }
+        open.click();
+      })()`);
+      await step();
       await waitFor(target, "Start", deadline);
 
       // The picker replaced the two free-text command fields with a list, so a
@@ -457,6 +469,100 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (compose !== "") {
+      if (open === "") {
+        throw new Error("the compose walk needs FLT_GUI_SMOKE_OPEN to name the session it covers");
+      }
+      if (expectTerminal === "") {
+        throw new Error(
+          "the compose walk needs FLT_GUI_SMOKE_TERMINAL: without a needle the survival read passes whether or not the covered terminal kept its screen",
+        );
+      }
+      const clickNew = `(() => {
+        const button = [...document.querySelectorAll(".fleet header button")]
+          .find((entry) => entry.textContent.trim() === "New session");
+        if (!button) { throw new Error("no New session button in the fleet header"); }
+        button.click();
+      })()`;
+      const covered = `!!document.querySelector(".composer-overlay .new-session")`;
+      await target.webContents.executeJavaScript(clickNew);
+      await waitForCondition(target, covered, "the composer card to cover the session", deadline);
+      // The settings page paints above the card: entering it while the card is
+      // open must drop the card, and opening the card from under it must leave
+      // the settings page.
+      await target.webContents.executeJavaScript(`(() => {
+        const button = [...document.querySelectorAll(".fleet header button")]
+          .find((entry) => entry.textContent.trim() === "Agents");
+        if (!button) { throw new Error("no Agents button in the fleet header"); }
+        button.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".agent-settings") && !document.querySelector(".composer-overlay")`,
+        "the settings page to replace the composer card",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(clickNew);
+      await waitForCondition(
+        target,
+        `${covered} && !document.querySelector(".agent-settings")`,
+        "the composer card to replace the settings page",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const close = document.querySelector(".composer-close");
+        if (!close) { throw new Error("no Close button on the composer card"); }
+        close.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!document.querySelector(".composer-overlay")`,
+        "the composer card to close after the settings round trip",
+        deadline,
+      );
+      // Reopen for the shot, and read the terminal underneath again: the card
+      // covers the session, so its screen must survive both toggles intact.
+      await target.webContents.executeJavaScript(clickNew);
+      await waitForCondition(target, covered, "the composer card to reopen", deadline);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".session-view")`,
+        "the session view to stay mounted under the card",
+        deadline,
+      );
+      await waitForTerminal(target, expectTerminal, deadline);
+      // A centered column that overflows must still reach both of its ends:
+      // shrink the window and scroll the card column to each extreme.
+      const bounds = target.getBounds();
+      target.setBounds({ ...bounds, height: 560 });
+      await step(300);
+      await waitForCondition(
+        target,
+        `(() => {
+          const harbor = document.querySelector(".composer-overlay .harbor-empty");
+          harbor.scrollTop = 0;
+          const first = harbor.firstElementChild;
+          return first.getBoundingClientRect().top >= harbor.getBoundingClientRect().top;
+        })()`,
+        "the composer column's first child to stay reachable at the top of a short window",
+        deadline,
+      );
+      await waitForCondition(
+        target,
+        `(() => {
+          const harbor = document.querySelector(".composer-overlay .harbor-empty");
+          harbor.scrollTop = harbor.scrollHeight;
+          const start = document.querySelector(".composer-overlay button[type=submit]");
+          return start.getBoundingClientRect().bottom <= harbor.getBoundingClientRect().bottom;
+        })()`,
+        "the composer's Start to stay reachable at the bottom of a short window",
+        deadline,
+      );
+      target.setBounds(bounds);
+      await step(300);
+      console.log("smoke: ok (composer toggle)");
     }
 
     if (agentsAgent !== "") {
