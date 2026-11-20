@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { attachGpuRenderer } from "./renderer";
 
 export interface TerminalCallbacks {
   onInput: (data: string) => void;
@@ -46,6 +47,11 @@ export function Terminal(callbacks: TerminalCallbacks): React.ReactElement {
     if (window.flotilla.smoke) {
       (window as unknown as { __fltTerminal?: XTerm }).__fltTerminal = term;
     }
+    attachGpuRenderer(term, (name) => {
+      if (window.flotilla.smoke) {
+        (window as unknown as { __fltRenderer?: string }).__fltRenderer = name;
+      }
+    });
 
     latest.current.onReady((bytes) => term.write(bytes));
     const input = term.onData((data) => latest.current.onInput(data));

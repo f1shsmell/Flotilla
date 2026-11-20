@@ -212,6 +212,12 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   // FLT_GUI_SMOKE_AGENTS names an agent whose Enabled switch the run flips on
   // the settings page, then flips back. It is the settings page's walk.
   const agentsAgent = process.env.FLT_GUI_SMOKE_AGENTS ?? "";
+  // FLT_GUI_SMOKE_IME commits this text through composition events on xterm's
+  // textarea: the IME path a Chinese user's keystrokes take, ending in the same
+  // onData the PTY hears. FLT_GUI_SMOKE_RENDERER names the renderer that must
+  // be live ("webgl" or "dom").
+  const ime = process.env.FLT_GUI_SMOKE_IME ?? "";
+  const renderer = process.env.FLT_GUI_SMOKE_RENDERER ?? "";
   // A real agent's turn can outlast the default budget (codex takes ~2 minutes
   // on a cold transport), so a run may name its own deadline.
   const budget = Number(process.env.FLT_GUI_SMOKE_DEADLINE_MS);
@@ -228,6 +234,11 @@ export async function run(target: BrowserWindow): Promise<boolean> {
     rejectEchoNeedle(prompt, expect);
     // A terminal echoes typed input too, so the same guard covers its needle.
     rejectEchoNeedle(prompt, expectTerminal);
+    if (ime !== "" && expectTerminal === "") {
+      throw new Error(
+        "the IME walk needs FLT_GUI_SMOKE_TERMINAL: without a needle the empty wait passes whether or not the committed text reached the screen",
+      );
+    }
 
     if (form !== "") {
       await waitFor(target, "Start", deadline);
@@ -334,6 +345,34 @@ export async function run(target: BrowserWindow): Promise<boolean> {
         `the view to open ${open}`,
         deadline,
       );
+    }
+
+    if (renderer !== "") {
+      await waitForCondition(
+        target,
+        `window.__fltRenderer === ${JSON.stringify(renderer)}`,
+        `the ${renderer} renderer to activate`,
+        deadline,
+      );
+      console.log(`smoke: ok (renderer: ${renderer})`);
+    }
+
+    if (ime !== "") {
+      // xterm commits what the textarea holds between compositionstart and
+      // compositionend, not the events' data, so the walk fills the value the
+      // way a real IME does; the text then travels the ordinary onData path.
+      await target.webContents.executeJavaScript(`(() => {
+        const area = window.__fltTerminal?.textarea;
+        if (!area) { throw new Error("no terminal textarea"); }
+        if (area.value !== "") { throw new Error("the terminal textarea is not empty before the IME walk"); }
+        area.focus();
+        area.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype, "value").set;
+        setter.call(area, ${JSON.stringify(ime)});
+        area.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: ${JSON.stringify(ime)} }));
+        area.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: ${JSON.stringify(ime)} }));
+      })()`);
     }
 
     if (heal !== "") {

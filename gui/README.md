@@ -69,6 +69,8 @@ true before a signed one ships.
 | `FLT_GUI_SMOKE_PROMPT` | prompt to type and send |
 | `FLT_GUI_SMOKE_EXPECT` | text that must appear before the smoke passes |
 | `FLT_GUI_SMOKE_TERMINAL` | text that must reach the terminal's buffer |
+| `FLT_GUI_SMOKE_IME` | text committed through composition events on the terminal's textarea (the IME path); pair with `FLT_GUI_SMOKE_TERMINAL` to prove the echo |
+| `FLT_GUI_SMOKE_RENDERER` | renderer that must be live in the open terminal: `webgl` or `dom` |
 | `FLT_GUI_SMOKE_START` | JSON start request to send through the bridge |
 | `FLT_GUI_SMOKE_FORM` | JSON form fields: `agent` (a picker name) or `command`/`args`, plus `mode`, `dir`, `repo`, `branch` |
 | `FLT_GUI_SMOKE_AGENTS` | agent display name whose Enabled switch is flipped on the settings page, then flipped back |
