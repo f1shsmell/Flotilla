@@ -335,7 +335,12 @@ describe("session log", () => {
 
   it("keeps one card per permission question", () => {
     let state = newSession("s", "acp");
-    const question = { id: "perm-1", title: "edit config.json", kind: "edit", options: ["allow"] };
+    const question = {
+      id: "perm-1",
+      title: "edit config.json",
+      kind: "edit",
+      options: [{ id: "allow", kind: "allow_once" }],
+    };
 
     state = addPermission(state, question);
     state = addPermission(state, question);
@@ -343,6 +348,39 @@ describe("session log", () => {
 
     state = answerPermission(state, "perm-1");
     expect(state.permissions).toHaveLength(0);
+  });
+
+  it("keeps each permission option's kind beside its id", () => {
+    let state = newSession("s", "acp");
+    state = addPermission(state, {
+      id: "perm-1",
+      title: "edit config.json",
+      kind: "edit",
+      options: [
+        { id: "approve", kind: "allow_once" },
+        { id: "allow-me", kind: "reject_once" },
+      ],
+    });
+
+    expect(state.permissions[0].options).toEqual([
+      { id: "approve", kind: "allow_once" },
+      { id: "allow-me", kind: "reject_once" },
+    ]);
+  });
+
+  it("still answers a question from an older daemon that sends bare ids", () => {
+    let state = newSession("s", "acp");
+    state = addPermission(state, {
+      id: "perm-1",
+      title: "edit config.json",
+      kind: "edit",
+      options: ["allow", "reject"],
+    });
+
+    expect(state.permissions[0].options).toEqual([
+      { id: "allow", kind: "" },
+      { id: "reject", kind: "" },
+    ]);
   });
 
   it("tracks the turn and the loss of a session", () => {

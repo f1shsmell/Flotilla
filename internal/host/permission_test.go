@@ -27,6 +27,54 @@ func TestNoPermissionWaitArmsNoDeadline(t *testing.T) {
 	timer.Stop()
 }
 
+// TestPermissionQuestionCarriesOptionKinds pins the semantic wire: the client
+// colours a choice by what it does, not by its name, so every option must carry
+// the ACP kind beside its id. An id like "allow-me" could name a refusal.
+func TestPermissionQuestionCarriesOptionKinds(t *testing.T) {
+	_, dir := startACPHost(t, acp.Supervised)
+
+	questions := make(chan session.PermissionQuestion, 4)
+	conn := dialHost(t, dir, func(session.UpdateMessage) {}, func(q session.PermissionQuestion) { questions <- q })
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	promptc := make(chan error, 1)
+	go func() {
+		_, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "edit it"})
+		promptc <- err
+	}()
+
+	var q session.PermissionQuestion
+	select {
+	case q = <-questions:
+	case <-time.After(waitFor):
+		t.Fatal("the host never forwarded a permission question")
+	}
+
+	if len(q.Options) != 2 {
+		t.Fatalf("the fake offers allow and reject, got %+v", q.Options)
+	}
+	for _, opt := range q.Options {
+		if opt.ID == "" || opt.Kind == "" {
+			t.Fatalf("option %+v lost its id or its kind on the wire", opt)
+		}
+	}
+	if q.Options[0].Kind != "allow_once" || q.Options[1].Kind != "reject_once" {
+		t.Fatalf("kinds = %q, %q, want the ACP kinds the fake announced", q.Options[0].Kind, q.Options[1].Kind)
+	}
+
+	if _, err := conn.Call(ctx, session.MethodPermissionReply, session.PermissionReply{
+		ID:       q.ID,
+		OptionID: q.Options[0].ID,
+	}); err != nil {
+		t.Fatalf("session.permission.reply: %v", err)
+	}
+	if err := <-promptc; err != nil {
+		t.Fatalf("the turn after the allowed question: %v", err)
+	}
+}
+
 // TestAnUnansweredQuestionIsRefusedAfterTheConfiguredWait pins the explicit
 // opt-in: a caller that names a wait gets a refusal when it passes, and the
 // session leaves blocked — a refused question is an answered one, and a turn

@@ -398,7 +398,12 @@ export interface Permission {
   id: string;
   title: string;
   kind: string;
-  options: string[];
+  options: PermissionOption[];
+}
+
+export interface PermissionOption {
+  id: string;
+  kind: string;
 }
 
 export type Turn = "idle" | "working" | "ended" | "lost";
@@ -639,8 +644,19 @@ export function addPermission(state: SessionState, raw: unknown): SessionState {
     return state;
   }
 
+  // An older daemon sends bare option ids; they degrade to an unknown kind,
+  // which is never styled as a grant, rather than vanishing into a card with
+  // no buttons.
   const options = Array.isArray(value.options)
-    ? value.options.filter((option): option is string => typeof option === "string")
+    ? value.options
+        .map((option) =>
+          typeof option === "string"
+            ? { id: option, kind: "" }
+            : typeof option === "object" && option !== null
+              ? { id: asString((option as Record<string, unknown>).id), kind: asString((option as Record<string, unknown>).kind) }
+              : { id: "", kind: "" },
+        )
+        .filter((option) => option.id !== "")
     : [];
 
   return {

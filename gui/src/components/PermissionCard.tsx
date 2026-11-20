@@ -16,11 +16,11 @@ export function PermissionCard({ permission, onAnswer }: Props): React.ReactElem
         {permission.options.map((option) => (
           <button
             type="button"
-            key={option}
-            className={option.startsWith("allow") ? "primary" : ""}
-            onClick={() => onAnswer(permission.id, option)}
+            key={option.id}
+            className={option.kind.startsWith("allow") ? "primary" : ""}
+            onClick={() => onAnswer(permission.id, option.id)}
           >
-            {option}
+            {option.id}
           </button>
         ))}
       </div>

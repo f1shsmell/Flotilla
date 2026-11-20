@@ -32,3 +32,5 @@ Thumbs.db
 /flt-daemon.exe
 /flt-session-host.exe
 /flt-fake-acp-agent.exe
+/flt-replay-agent.exe
+*.exe~

@@ -169,7 +169,7 @@ func TestAPermissionQuestionBlocksTheSession(t *testing.T) {
 	case q := <-questions:
 		if _, err := conn.Call(ctx, session.MethodPermissionReply, session.PermissionReply{
 			ID:       q.ID,
-			OptionID: q.Options[0],
+			OptionID: q.Options[0].ID,
 		}); err != nil {
 			t.Fatalf("session.permission.reply: %v", err)
 		}
