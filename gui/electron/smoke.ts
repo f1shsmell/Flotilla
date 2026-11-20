@@ -205,6 +205,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const heal = process.env.FLT_GUI_SMOKE_HEAL ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const compose = process.env.FLT_GUI_SMOKE_COMPOSE ?? "";
+  const expand = process.env.FLT_GUI_SMOKE_EXPAND ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   // FLT_GUI_SMOKE_STARTS is a JSON array of start requests: a fleet of several
   // sessions for the walks (and screenshots) that need more than one card.
@@ -469,6 +470,65 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (expand !== "") {
+      if (prompt === "") {
+        throw new Error("the expand walk needs FLT_GUI_SMOKE_PROMPT to produce the fold");
+      }
+      // Open the first folded run so the shot proves the fold carries its calls:
+      // the summary names them, the body reveals each one. The turn may still be
+      // in flight when the prompt leg returns, so wait for the fold itself.
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run summary")`,
+        "a folded tool run to appear in the log",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const summary = document.querySelector(".entry-run summary");
+        if (!summary) { throw new Error("no folded tool run in the log"); }
+        summary.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run[open]")`,
+        "the folded tool run to open",
+        deadline,
+      );
+      await waitForCondition(
+        target,
+        `document.querySelectorAll(".entry-run[open] .run-body .entry").length >= 2`,
+        "the opened fold to reveal its calls",
+        deadline,
+      );
+      // A view switch unmounts the log; the fold the reader opened must survive
+      // the trip to the diff and back.
+      await target.webContents.executeJavaScript(`(() => {
+        const diff = [...document.querySelectorAll(".session-actions button")]
+          .find((button) => button.textContent === "Diff");
+        if (!diff) { throw new Error("no Diff button"); }
+        diff.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".diff")`,
+        "the diff view to render before returning to the log",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const log = [...document.querySelectorAll(".session-actions button")]
+          .find((button) => button.textContent === "Log");
+        if (!log) { throw new Error("no Log button"); }
+        log.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run[open]")`,
+        "the fold to stay open across the view switch",
+        deadline,
+      );
+      console.log("smoke: ok (expanded tool run)");
     }
 
     if (compose !== "") {

@@ -1,0 +1,31 @@
+{
+  "name": "fold-demo",
+  "capabilities": { "resume": true },
+  "turns": [
+    {
+      "updates": [
+        { "kind": "thought", "text": "Planning three calls before answering." },
+        { "kind": "tool", "tool_call_id": "f1", "tool_title": "Read file" },
+        { "kind": "tool", "tool_call_id": "f1", "tool_status": "completed" },
+        { "kind": "tool", "tool_call_id": "f2", "tool_title": "Edit file" },
+        { "kind": "tool", "tool_call_id": "f2", "tool_status": "completed" },
+        { "kind": "tool", "tool_call_id": "f3", "tool_title": "Run tests" },
+        { "kind": "tool", "tool_call_id": "f3", "tool_status": "completed" },
+        {
+          "kind": "message",
+          "text": "Folded run proved: three tool calls collapsed into one row."
+        }
+      ],
+      "stop_reason": "end_turn"
+    },
+    {
+      "updates": [
+        {
+          "kind": "message",
+          "text": "Second turn: the fold above keeps its three calls; this answer stands alone."
+        }
+      ],
+      "stop_reason": "end_turn"
+    }
+  ]
+}

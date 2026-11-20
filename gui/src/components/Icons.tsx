@@ -63,3 +63,60 @@ export function IconStop(): React.ReactElement {
     </Svg>
   );
 }
+
+export function IconSend(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M8 13V3M4 7l4-4 4 4" />
+    </Svg>
+  );
+}
+
+export function IconShield(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M8 2l5 2v4c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4z" />
+    </Svg>
+  );
+}
+
+export function IconTool(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M9.5 6.5a3 3 0 0 1-4 4L3 13l-.5-.5L5 10a3 3 0 0 1 4-4L7.5 7.5l1 1z" />
+    </Svg>
+  );
+}
+
+export function IconMessage(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+    </Svg>
+  );
+}
+
+export function IconThought(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M5 13h6M6 11a4 4 0 1 1 4 0c-.6.5-.8 1-.8 2H6.8c0-1-.2-1.5-.8-2z" />
+    </Svg>
+  );
+}
+
+export function IconUser(): React.ReactElement {
+  return (
+    <Svg>
+      <circle cx={8} cy={5.5} r={2.5} />
+      <path d="M3.5 13c.6-2.4 2.3-3.5 4.5-3.5S11.9 10.6 12.5 13" />
+    </Svg>
+  );
+}
+
+export function IconPlan(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M3 4h10M3 8h10M3 12h6" />
+    </Svg>
+  );
+}
