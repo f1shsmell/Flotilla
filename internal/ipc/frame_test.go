@@ -137,6 +137,81 @@ func TestWriterCoalescesConsecutiveDataFrames(t *testing.T) {
 	}
 }
 
+// gateWriter stalls its first write until released, so a test can fill the
+// queues behind a write that is already in flight.
+type gateWriter struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	out     syncBuffer
+}
+
+func (g *gateWriter) Write(p []byte) (int, error) {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+	return g.out.Write(p)
+}
+
+// TestControlOvertakesTheDataBacklog pins the priority rule under a flood: a
+// control frame queued while a data write is stalled and the data queue is
+// full must go out before the backlog, not after it.
+func TestControlOvertakesTheDataBacklog(t *testing.T) {
+	g := &gateWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	w := NewWriter(g)
+
+	if err := w.WriteData(1, []byte("first")); err != nil {
+		t.Fatalf("WriteData first: %v", err)
+	}
+	<-g.entered
+	for i := 0; i < QueueDepth; i++ {
+		if err := w.WriteData(1, bytes.Repeat([]byte("x"), 1024)); err != nil {
+			t.Fatalf("WriteData %d: %v", i, err)
+		}
+	}
+	if err := w.WriteControl([]byte("urgent")); err != nil {
+		t.Fatalf("WriteControl: %v", err)
+	}
+	close(g.release)
+	w.Close()
+	w.Wait()
+
+	r := NewReader(bytes.NewReader(g.out.Bytes()))
+	first, err := r.ReadFrame()
+	if err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if first.Kind != KindData || string(first.Payload) != "first" {
+		t.Fatalf("first frame = kind %d %q, want the in-flight data frame", first.Kind, first.Payload)
+	}
+	second, err := r.ReadFrame()
+	if err != nil {
+		t.Fatalf("read second frame: %v", err)
+	}
+	if second.Kind != KindControl || string(second.Payload) != "urgent" {
+		t.Fatalf("second frame = kind %d %q, want the control frame ahead of the backlog", second.Kind, second.Payload)
+	}
+
+	total := len(first.Payload)
+	for {
+		f, err := r.ReadFrame()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read backlog frame: %v", err)
+		}
+		if f.Kind != KindData {
+			t.Fatalf("unexpected extra frame of kind %d", f.Kind)
+		}
+		total += len(f.Payload)
+	}
+	if want := len("first") + QueueDepth*1024; total != want {
+		t.Fatalf("received %d data bytes, want %d: priority dropped data", total, want)
+	}
+}
+
 func TestWriterRefusesWorkAfterClose(t *testing.T) {
 	w := NewWriter(io.Discard)
 	w.Close()
