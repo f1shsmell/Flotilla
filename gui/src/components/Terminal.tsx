@@ -30,14 +30,18 @@ export function Terminal(callbacks: TerminalCallbacks): React.ReactElement {
       return;
     }
 
+    // xterm wants its palette as JS values, so the island reads the same tokens
+    // the CSS uses rather than keeping a second copy of them here.
+    const ink = getComputedStyle(document.documentElement);
     const term = new XTerm({
       fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
       fontSize: 13,
       cursorBlink: true,
       theme: {
-        background: "#101216",
-        foreground: "#e6e9ef",
-        cursor: "#6aa9ff",
+        background: ink.getPropertyValue("--term-bg").trim(),
+        foreground: ink.getPropertyValue("--term-text").trim(),
+        cursor: ink.getPropertyValue("--term-cursor").trim(),
+        selectionBackground: ink.getPropertyValue("--term-selection").trim(),
       },
     });
     const fit = new FitAddon();

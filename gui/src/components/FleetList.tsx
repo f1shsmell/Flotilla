@@ -1,3 +1,4 @@
+import { dirLabel } from "../fleetView";
 import type { Lifecycle, StatusEntry } from "../store";
 
 interface Props {
@@ -31,32 +32,59 @@ export function FleetList({
   onStop,
 }: Props): React.ReactElement {
   if (sessions.length === 0) {
-    return <p className="empty">No sessions on this channel.</p>;
+    return (
+      <div className="fleet-empty">
+        <p className="fleet-empty-title">Sessions you start will appear here.</p>
+        <p className="muted">Choose an agent above and press Start.</p>
+      </div>
+    );
   }
 
   return (
     <ul className="sessions">
-      {sessions.map((session) => (
+      {sessions.map((session, index) => (
         // A row holds two actions, so the row itself is not a button: nested
         // buttons are invalid, and the stop control must not also select.
-        <li key={session.id} className="session-row-wrap">
+        <li
+          key={session.id}
+          className="session-card-wrap"
+          style={{ "--i": index } as React.CSSProperties}
+        >
           <button
             type="button"
             className={session.id === selected ? "session-row selected" : "session-row"}
             onClick={() => onSelect(session.id)}
           >
-            <span className="session-id">{session.id}</span>
-            <span className={lifecycleClass(session.lifecycle)}>{session.lifecycle}</span>
-            <span className="muted">{session.mode}</span>
-            <span className="muted mono">{session.command}</span>
-            {session.reachable ? null : (
-              <span className="badge down">unreachable</span>
-            )}
+            <span className={`card-rail rail-${session.lifecycle}`} aria-hidden="true" />
+            <span className="card-main">
+              <span className="card-top">
+                <span className="session-id">{session.id}</span>
+                <span className={lifecycleClass(session.lifecycle)}>
+                  <span className="badge-dot" aria-hidden="true" />
+                  {session.lifecycle}
+                </span>
+              </span>
+              <span className="card-meta">
+                <span className="chip">{session.mode}</span>
+                {dirLabel(session.dir) ? (
+                  <span className="chip chip-dir" title={session.dir}>
+                    {dirLabel(session.dir)}
+                  </span>
+                ) : null}
+                <span className="muted mono card-command" title={session.command}>
+                  {session.command}
+                </span>
+                {session.reachable ? null : (
+                  <span className="badge down">unreachable</span>
+                )}
+              </span>
+            </span>
           </button>
           <button
             type="button"
             className="session-stop"
             title={`end ${session.id}`}
+            aria-label={`end ${session.id}`}
             onClick={() => onStop(session.id)}
           >
             Stop

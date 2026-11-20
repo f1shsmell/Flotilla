@@ -1,4 +1,5 @@
 import path from "node:path";
+import { writeFileSync } from "node:fs";
 
 import { randomUUID } from "node:crypto";
 
@@ -429,7 +430,7 @@ function createWindow(): void {
     width,
     height,
     ...(smoke ? { x: -32000, y: -32000 } : {}),
-    backgroundColor: "#14161a",
+    backgroundColor: "#f6f4ee",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -482,6 +483,23 @@ function createWindow(): void {
     window.webContents.once("did-finish-load", () => {
       void import("./smoke.js").then(async (smoke) => {
         const ok = await smoke.run(window!);
+        // FLT_GUI_SMOKE_SHOT saves the window as it ended: the UI review reads
+        // a real render, not a description of one.
+        const shot = process.env.FLT_GUI_SMOKE_SHOT;
+        if (shot && window) {
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            const image = await window.webContents.capturePage();
+            writeFileSync(shot, image.toPNG());
+            console.log(`smoke: shot ${shot}`);
+          } catch (cause) {
+            // A failed shot must end the run: an unhandled rejection here would
+            // leave the process alive until the CI deadline.
+            console.error(`smoke: shot ${shot} failed:`, cause);
+            app.exit(1);
+            return;
+          }
+        }
         app.exit(ok ? 0 : 1);
       });
     });

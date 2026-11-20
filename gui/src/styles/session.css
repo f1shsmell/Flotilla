@@ -10,6 +10,11 @@
   min-height: 0;
   /* Anchors .agent-settings-overlay. */
   position: relative;
+  /* One static wash of signal blue over the paper gives the reading room depth
+     without a painted loop. */
+  background:
+    radial-gradient(1100px 480px at 88% -12%, var(--accent-bg), transparent 62%),
+    var(--bg);
 }
 
 /* The settings panel sits over the session rather than beside it: the terminal
@@ -86,7 +91,8 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   padding: var(--sp-4) var(--sp-5);
-  background: var(--sunken);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
   min-height: 0;
 }
 
@@ -112,7 +118,7 @@
    write, so it is marked by its place and its edge rather than by colour: a
    status colour here would read as a state the session is in. */
 .entry.user {
-  border-left: 2px solid var(--line);
+  border-left: 2px solid var(--line-strong);
   padding-left: var(--sp-3);
   color: var(--dim);
 }
@@ -146,9 +152,11 @@
 
 .permission {
   border: 1px solid var(--warn);
+  border-left-width: 3px;
   border-radius: var(--r-md);
   padding: var(--sp-4) var(--sp-5);
   background: var(--note-bg);
+  box-shadow: var(--shadow-1);
 }
 
 .permission p {
@@ -159,4 +167,46 @@
   display: flex;
   gap: var(--sp-3);
   flex-wrap: wrap;
+}
+
+/* The harbor the window shows when no session is open: a picture, a greeting,
+   and the next step — never a bare sentence in an empty room. */
+.harbor-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  text-align: center;
+  padding: var(--sp-7);
+  animation: harbor-in 400ms ease-out backwards;
+}
+
+@keyframes harbor-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.brand-lockup {
+  width: min(480px, 86%);
+  height: auto;
+}
+
+.harbor-empty h2 {
+  margin: var(--sp-3) 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.harbor-empty p {
+  margin: 0;
+  max-width: 52ch;
 }

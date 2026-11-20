@@ -1,34 +1,59 @@
 /* The design tokens. One file holds every value the rest of the CSS refers to,
-   so a colour or a spacing step changes in one place. Names follow the shape
-   Studio's design system uses: surfaces, text, lines, state, then scale. */
+   so a colour or a spacing step changes in one place. The identity is a harbor
+   at morning: warm paper, deep-sea ink, and the signal-flag colours a fleet
+   actually flies — amber for blocked, sea green for done, signal blue for
+   working, red for down, violet for unclassified. */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
   /* Surfaces, from the window down to a well. */
-  --bg: #14161a;
-  --panel: #1b1e24;
-  --sunken: #101216;
-  --note-bg: #1f1a10;
+  --bg: #f6f4ee;
+  --panel: #fffdf9;
+  --sunken: #f0ede4;
+  --note-bg: #fbf3e2;
 
-  /* Lines and text. */
-  --line: #2a2f38;
-  --text: #e6e9ef;
-  --dim: #cbd5e1;
-  --muted: #9aa3b2;
+  /* Lines and ink. */
+  --line: #e4dfd2;
+  --line-strong: #cfc8b8;
+  --text: #1b2a41;
+  --dim: #44566e;
+  /* Muted still carries real information at 11-12px, so it stays above 4.5:1
+     on every surface it sits on, paper included. */
+  --muted: #5a687d;
 
-  /* State: the only colours that may draw the eye. */
-  --accent: #6aa9ff;
-  --ok: #4ade80;
-  --down: #f87171;
-  --warn: #fbbf24;
+  /* State: the only colours that may draw the eye. Each doubles as badge ink
+     on its own wash, so all of them clear 4.5:1 there too. */
+  --accent: #0b5fd9;
+  --ok: #0a6e49;
+  --down: #b02a30;
+  --warn: #92400e;
+  --unknown: #6750c9;
+  --primary: #1b2a41;
+  --primary-hover: #243652;
+
+  /* State washes, so a badge is a pill of tinted paper rather than bare text. */
+  --accent-bg: rgba(11, 95, 217, 0.08);
+  --ok-bg: rgba(10, 110, 73, 0.1);
+  --down-bg: rgba(176, 42, 48, 0.08);
+  --warn-bg: rgba(146, 64, 14, 0.1);
+  --unknown-bg: rgba(103, 80, 201, 0.08);
 
   /* Diff washes, kept apart from the state colours so a changed line does not
      read as a status. */
-  --add-bg: rgba(74, 222, 128, 0.12);
-  --add-text: #b9f6ca;
-  --del-bg: rgba(248, 113, 113, 0.12);
-  --del-text: #fecaca;
+  --add-bg: rgba(14, 138, 95, 0.1);
+  --add-text: #0b6b47;
+  --del-bg: rgba(207, 51, 57, 0.08);
+  --del-text: #b02a30;
+
+  /* The terminal island stays deep navy inside the light shell: a terminal is
+     read like an instrument, and its screen keeps the dark it was born with. */
+  --term-bg: #0d1522;
+  --term-line: #22304a;
+  --term-text: #e6ecf5;
+  --term-cursor: #7cb8ff;
+  --term-selection: #2a3d5c;
+  --term-scroll-hover: #33445f;
 
   /* Type. */
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -38,8 +63,8 @@
   --fs-tiny: 12px;
   --fs-label: 11px;
 
-  /* Scale. One step of padding, one of gap, one radius: the layout reads as
-     aligned because it does not invent a new pixel value per rule. */
+  /* Scale. One step of padding, one of gap, one radius family: the layout reads
+     as aligned because it does not invent a new pixel value per rule. */
   --sp-1: 4px;
   --sp-2: 6px;
   --sp-3: 8px;
@@ -48,8 +73,13 @@
   --sp-6: 16px;
   --sp-7: 20px;
 
-  --r-sm: 6px;
-  --r-md: 8px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-pill: 999px;
+
+  /* Harbor light: two soft shadows, one resting and one lifted. */
+  --shadow-1: 0 1px 2px rgba(27, 42, 65, 0.06), 0 1px 1px rgba(27, 42, 65, 0.04);
+  --shadow-2: 0 4px 12px rgba(27, 42, 65, 0.1), 0 1px 3px rgba(27, 42, 65, 0.06);
 
   /* The fleet column. */
   --fleet-width: 320px;

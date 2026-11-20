@@ -19,13 +19,28 @@
 .terminal {
   flex: 1;
   min-height: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--term-line);
   border-radius: var(--r-md);
   padding: var(--sp-2);
-  background: var(--sunken);
+  background: var(--term-bg);
+  box-shadow: var(--shadow-2);
   overflow: hidden;
 }
 
 .terminal .xterm {
   height: 100%;
+}
+
+/* The island keeps its own night scrollbar: the warm thumb of the light shell
+   would glare on the navy screen. */
+.terminal *::-webkit-scrollbar-thumb {
+  background: var(--term-line);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.terminal *::-webkit-scrollbar-thumb:hover {
+  background: var(--term-scroll-hover);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
