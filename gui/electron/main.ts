@@ -421,9 +421,14 @@ function createWindow(): void {
   const width = saved.window?.width ?? 1180;
   const height = saved.window?.height ?? 780;
 
+  // The smoke window renders offscreen, as the harness documents: a window on
+  // the desktop invites clicks that steer the run, and a run steered by hand
+  // is not evidence. Real windows open where the user left them.
+  const smoke = Boolean(process.env.FLT_GUI_SMOKE);
   window = new BrowserWindow({
     width,
     height,
+    ...(smoke ? { x: -32000, y: -32000 } : {}),
     backgroundColor: "#14161a",
     show: false,
     webPreferences: {
@@ -434,7 +439,7 @@ function createWindow(): void {
       // A smoke window the OS marks occluded stops painting frames, freezing
       // the log mid-turn. Throttling off keeps the run painting; a real window
       // keeps the default, since a covered window catches up when uncovered.
-      backgroundThrottling: !process.env.FLT_GUI_SMOKE,
+      backgroundThrottling: !smoke,
     },
   });
 
