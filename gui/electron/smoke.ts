@@ -10,6 +10,18 @@ async function body(target: BrowserWindow): Promise<string> {
   return target.webContents.executeJavaScript("document.body.innerText");
 }
 
+// rejectEchoNeedle guards the reply check: the log renders the user's own
+// prompt as an echo before the agent says anything, so a needle the prompt
+// already contains would pass the run without the agent ever answering.
+export function rejectEchoNeedle(prompt: string, expect: string): void {
+  if (expect !== "" && prompt.includes(expect)) {
+    throw new Error(
+      `the expected reply ${JSON.stringify(expect)} is part of the prompt; ` +
+        "the user echo would satisfy it — choose a needle the prompt does not contain",
+    );
+  }
+}
+
 async function waitFor(target: BrowserWindow, needle: string, deadline: number): Promise<string> {
   let text = "";
   while (Date.now() < deadline) {
@@ -19,7 +31,12 @@ async function waitFor(target: BrowserWindow, needle: string, deadline: number):
     }
     await step();
   }
-  throw new Error(`${needle} never appeared; body was:\n${text}`);
+  // Visibility is part of the failure: a hidden page stops painting frames,
+  // which is the first thing to rule out when a log looks frozen.
+  const visibility = (await target.webContents
+    .executeJavaScript("document.visibilityState")
+    .catch(() => "unknown")) as string;
+  throw new Error(`${needle} never appeared (visibility: ${visibility}); body was:\n${text}`);
 }
 
 async function clickButton(target: BrowserWindow, text: string): Promise<void> {
@@ -195,7 +212,10 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   // FLT_GUI_SMOKE_AGENTS names an agent whose Enabled switch the run flips on
   // the settings page, then flips back. It is the settings page's walk.
   const agentsAgent = process.env.FLT_GUI_SMOKE_AGENTS ?? "";
-  const deadline = Date.now() + 120000;
+  // A real agent's turn can outlast the default budget (codex takes ~2 minutes
+  // on a cold transport), so a run may name its own deadline.
+  const budget = Number(process.env.FLT_GUI_SMOKE_DEADLINE_MS);
+  const deadline = Date.now() + (Number.isFinite(budget) && budget > 0 ? budget : 120000);
 
   target.webContents.on("render-process-gone", (_event, details) => {
     console.error(`smoke: the renderer is gone (${details.reason}, ${details.exitCode})`);
@@ -205,6 +225,10 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   });
 
   try {
+    rejectEchoNeedle(prompt, expect);
+    // A terminal echoes typed input too, so the same guard covers its needle.
+    rejectEchoNeedle(prompt, expectTerminal);
+
     if (form !== "") {
       await waitFor(target, "Start", deadline);
 

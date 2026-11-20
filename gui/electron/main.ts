@@ -431,6 +431,10 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // A smoke window the OS marks occluded stops painting frames, freezing
+      // the log mid-turn. Throttling off keeps the run painting; a real window
+      // keeps the default, since a covered window catches up when uncovered.
+      backgroundThrottling: !process.env.FLT_GUI_SMOKE,
     },
   });
 
