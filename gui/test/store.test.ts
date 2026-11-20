@@ -783,3 +783,63 @@ describe("fleet order", () => {
     expect(after?.sessions.map((s) => s.id)).toEqual(["a", "b"]);
   });
 });
+
+// The W5-6 acceptance scale: ten sessions, and the one waiting for the user is
+// always the first row, wherever it started and whatever the others are doing.
+describe("fleet order at ten sessions", () => {
+  const nine = [
+    { id: "s0", state: "idle" },
+    { id: "s1", state: "working" },
+    { id: "s2", state: "done" },
+    { id: "s3", state: "unknown" },
+    { id: "s4", state: "idle" },
+    { id: "s5", state: "working" },
+    { id: "s6", state: "done" },
+    { id: "s7", state: "idle" },
+    { id: "s8", state: "working" },
+  ];
+
+  it("puts the blocked session on top even when reported last", () => {
+    const status = parseStatus({
+      sessions: [...nine, { id: "decide", state: "blocked" }],
+    });
+
+    expect(status.sessions).toHaveLength(10);
+    expect(status.sessions[0].id).toBe("decide");
+  });
+
+  it("lifts a session that becomes blocked above the other nine", () => {
+    const current = parseStatus({ sessions: [...nine, { id: "s9", state: "idle" }] });
+    expect(current.sessions[0].id).toBe("s2");
+
+    const next = withLifecycle(current, "s5", "blocked");
+    expect(next?.sessions[0].id).toBe("s5");
+    expect(next?.sessions).toHaveLength(10);
+  });
+
+  it("keeps two blocked sessions in report order above the other eight", () => {
+    const status = parseStatus({
+      sessions: [
+        { id: "b2", state: "blocked" },
+        ...nine.slice(0, 8),
+        { id: "b1", state: "blocked" },
+      ],
+    });
+
+    expect(status.sessions.map((s) => s.id).slice(0, 2)).toEqual(["b2", "b1"]);
+  });
+
+  it("sinks an answered session below the finished turns", () => {
+    const current = parseStatus({
+      sessions: [...nine, { id: "decide", state: "blocked" }],
+    });
+
+    const next = withLifecycle(current, "decide", "idle");
+    expect(next?.sessions[0].id).toBe("s2");
+    // The sort is stable: the answered session keeps its place among the idle
+    // rows it joins, below every finished turn, unknown and working session.
+    expect(next?.sessions.map((s) => s.id)).toEqual([
+      "s2", "s6", "s3", "s1", "s5", "s8", "decide", "s0", "s4", "s7",
+    ]);
+  });
+});
