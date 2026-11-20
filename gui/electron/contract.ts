@@ -269,10 +269,14 @@ export const wireTypes = {
     "rows": { go: "Rows", type: "int" },
     "state": { go: "State", type: "State" },
   },
+  "session.PermissionOption": {
+    "id": { go: "ID", type: "string" },
+    "kind": { go: "Kind", type: "string" },
+  },
   "session.PermissionQuestion": {
     "id": { go: "ID", type: "string" },
     "kind": { go: "Kind", type: "string" },
-    "options": { go: "Options", type: "[]string" },
+    "options": { go: "Options", type: "[]PermissionOption" },
     "title": { go: "Title", type: "string" },
   },
   "session.PermissionReply": {

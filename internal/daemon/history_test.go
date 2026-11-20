@@ -33,7 +33,7 @@ func allowTools(t *testing.T) ipc.Handler {
 
 		option := "allow"
 		if len(q.Options) > 0 {
-			option = q.Options[0]
+			option = q.Options[0].ID
 		}
 		if _, err := peer.Call(callCtx, session.MethodPermissionReply, session.PermissionReply{
 			ID:       q.ID,

@@ -248,7 +248,16 @@ type PermissionQuestion struct {
 	// Kind is the tool kind, such as "edit".
 	Kind string `json:"kind"`
 	// Options are the choices the agent offered.
-	Options []string `json:"options"`
+	Options []PermissionOption `json:"options"`
+}
+
+// PermissionOption is one choice, carrying the ACP kind so a client reads what
+// the choice does rather than guessing from its id.
+type PermissionOption struct {
+	// ID is the value an answer returns.
+	ID string `json:"id"`
+	// Kind is the ACP kind, such as "allow_once" or "reject_once".
+	Kind string `json:"kind"`
 }
 
 // PermissionReply is the client's answer to a question.

@@ -269,9 +269,9 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 		h.acp.mu.Unlock()
 	}()
 
-	options := make([]string, 0, len(req.Options))
+	options := make([]session.PermissionOption, 0, len(req.Options))
 	for _, opt := range req.Options {
-		options = append(options, opt.ID)
+		options = append(options, session.PermissionOption{ID: opt.ID, Kind: opt.Kind})
 	}
 
 	h.mu.Lock()

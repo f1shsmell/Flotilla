@@ -52,6 +52,7 @@ var WireTypes = []string{
 	"session.PromptRequest",
 	"session.PromptResponse",
 	"session.PermissionQuestion",
+	"session.PermissionOption",
 	"session.PermissionReply",
 	"session.ResizeRequest",
 	"session.StopRequest",

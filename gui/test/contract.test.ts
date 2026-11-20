@@ -33,6 +33,8 @@ const wired: { go: string; ts: string; renamed?: Record<string, string> }[] = [
   { go: "comments.Comment", ts: "Comment" },
   { go: "session.Control", ts: "Control" },
   { go: "session.Choice", ts: "Choice" },
+  { go: "session.PermissionQuestion", ts: "Permission" },
+  { go: "session.PermissionOption", ts: "PermissionOption" },
 ];
 
 // interfaceFields reads one interface body. Every field has to be written as
