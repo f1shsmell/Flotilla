@@ -64,6 +64,14 @@
   color: var(--muted);
 }
 
+.agent-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.agent-table tbody tr:hover td {
+  background: var(--sunken);
+}
+
 .agent-table input[type="checkbox"] {
   accent-color: var(--accent);
 }

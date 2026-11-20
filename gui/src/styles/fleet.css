@@ -1,5 +1,6 @@
 /* The window frame and the fleet column: everything the user reads before a
-   session is open. */
+   session is open. The sidebar is a white deck over paper; each session is a
+   card flying its state's signal colour on the left rail. */
 
 .app {
   display: grid;
@@ -8,6 +9,7 @@
 }
 
 .fleet {
+  background: var(--panel);
   border-right: 1px solid var(--line);
   padding: var(--sp-6);
   overflow-y: auto;
@@ -15,14 +17,70 @@
 
 .fleet header {
   display: grid;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   margin-bottom: var(--sp-5);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.brand-mark {
+  flex: none;
 }
 
 .fleet h1 {
   font-size: 18px;
+  font-weight: 700;
   margin: 0;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
+}
+
+.fleet-stats {
+  margin: 0;
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+}
+
+.fleet-stats .attention {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.fleet-tools {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.fleet-tools button {
+  flex: 1;
+  font-size: var(--fs-small);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+/* A failed read is a banner, not a red sentence loose in the column: it has a
+   place, a wash, and an edge, so the eye finds it without hunting. */
+.banner {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  border-left: 3px solid;
+  font-size: var(--fs-small);
+  margin-bottom: var(--sp-3);
+  word-break: break-word;
+}
+
+.banner-error {
+  background: var(--down-bg);
+  border-left-color: var(--down);
+  color: var(--down);
+}
+
+.banner-warn {
+  background: var(--warn-bg);
+  border-left-color: var(--warn);
+  color: var(--warn);
 }
 
 .sessions {
@@ -30,110 +88,274 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--sp-1);
+  gap: var(--sp-3);
 }
 
-.session-row-wrap {
+/* Cards arrive once, in order, when the fleet lands: a one-shot entrance, not
+   a loop. The delay rides a custom property so the stagger is per row. */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.session-card-wrap {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: var(--sp-1);
   align-items: center;
+  animation: card-in 280ms ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
 }
 
 .session-row {
   width: 100%;
+  min-width: 0;
   text-align: left;
+  /* One column: the rail is absolute, so a two-column grid would drop the
+     card body into an auto-sized track and leave the right half empty. */
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px var(--sp-3);
-  background: transparent;
-  border-color: transparent;
+  grid-template-columns: 1fr;
+  gap: var(--sp-3);
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.session-row:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-1);
+  transform: translateY(-1px);
 }
 
 .session-row.selected {
-  background: var(--panel);
-  border-color: var(--line);
+  border-color: var(--primary);
+  box-shadow: var(--shadow-1);
+}
+
+/* The rail is the card's signal flag: one glance down the column reads the
+   fleet's states without reading a word. */
+.card-rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--muted);
+  transition: background-color 200ms ease;
+}
+
+.rail-blocked {
+  background: var(--warn);
+}
+
+.rail-done {
+  background: var(--ok);
+}
+
+.rail-working {
+  background: var(--accent);
+}
+
+.rail-idle {
+  background: var(--line-strong);
+}
+
+.rail-unknown {
+  background: var(--unknown);
+}
+
+.card-main {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-left: var(--sp-1);
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
 }
 
 .session-id {
   font-family: var(--mono);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Ending a session is rare and must not read as the row's primary action. */
+.card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.card-command {
+  font-size: var(--fs-tiny);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Ending a session is rare and must not read as the card's primary action. */
 .session-stop {
   font-size: var(--fs-label);
   padding: 2px var(--sp-2);
   background: transparent;
   border-color: transparent;
   color: var(--muted);
+  opacity: 0.65;
 }
 
-.session-stop:hover {
-  border-color: var(--line);
-  color: inherit;
+.session-stop:hover:not(:disabled) {
+  opacity: 1;
+  border-color: var(--down-bg);
+  background: var(--down-bg);
+  color: var(--down);
+  box-shadow: none;
 }
 
+/* Badges are pills of tinted paper with a signal dot: colour and shape carry
+   the state together, so it survives a greyscale read. */
 .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-size: var(--fs-label);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px var(--sp-3);
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  flex: none;
 }
 
 .badge.ok {
   color: var(--ok);
+  background: var(--ok-bg);
 }
 
 .badge.down {
   color: var(--down);
+  background: var(--down-bg);
 }
 
-/* Lifecycle badges. blocked and done are the states that ask something of the
-   user, so only they get colour; working is a quiet accent and idle/unknown
-   stay muted rather than claiming attention. */
 .badge.blocked {
   color: var(--warn);
+  background: var(--warn-bg);
 }
 
 .badge.done {
   color: var(--ok);
+  background: var(--ok-bg);
 }
 
 .badge.working {
   color: var(--accent);
+  background: var(--accent-bg);
 }
 
-.badge.idle,
-.badge.unknown {
+.badge.idle {
   color: var(--muted);
+  background: var(--sunken);
+}
+
+.badge.unknown {
+  color: var(--unknown);
+  background: var(--unknown-bg);
+}
+
+/* Chips name the mode and the project: quiet facts, never states. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--sunken);
+  color: var(--dim);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.chip-dir {
+  font-weight: 500;
+  color: var(--muted);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-channel {
+  margin-left: auto;
+  text-transform: uppercase;
+}
+
+.fleet-empty {
+  padding: var(--sp-6) var(--sp-3);
+  text-align: center;
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.fleet-empty-title {
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.fleet-empty p {
+  margin: 0;
+  font-size: var(--fs-tiny);
 }
 
 .new-session {
   display: grid;
   gap: var(--sp-2);
-  /* 14px in the file this layout came from, which is between two scale steps:
-     keeping it is what makes the refactor a token change rather than a change
-     of look. */
-  margin-bottom: 14px;
+  margin-bottom: var(--sp-5);
   padding-bottom: var(--sp-5);
   border-bottom: 1px solid var(--line);
 }
 
 .new-session p {
   margin: 0;
-  font-size: var(--fs-tiny);
+  font-size: var(--fs-label);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 
 .new-session input,
 .new-session select {
-  font: inherit;
-  color: var(--text);
-  background: var(--sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: var(--sp-1) var(--sp-3);
   min-width: 0;
+  font-size: var(--fs-small);
 }
 
 .new-session .row {
@@ -174,12 +396,19 @@
   text-align: left;
   background: transparent;
   border-color: transparent;
-  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-3);
+  font-size: var(--fs-small);
+}
+
+.agent-option:hover:not(:disabled) {
+  background: var(--sunken);
+  box-shadow: none;
 }
 
 .agent-option.selected {
-  background: var(--panel);
-  border-color: var(--line);
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .agent-option .mono {
@@ -194,9 +423,12 @@ button.link {
   padding: 2px 0;
   text-align: left;
   font-size: var(--fs-tiny);
+  font-weight: 500;
 }
 
 button.link:hover:not(:disabled) {
   border-color: transparent;
+  background: transparent;
+  box-shadow: none;
   text-decoration: underline;
 }

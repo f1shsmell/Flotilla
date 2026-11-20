@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentSettings } from "./components/AgentSettings";
+import { BrandLockup, BrandMark } from "./components/Brand";
 import { FleetList } from "./components/FleetList";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionView } from "./components/SessionView";
+import { fleetSummary, mainEmpty } from "./fleetView";
 import {
   addPermission,
   answerPermission,
@@ -14,11 +16,9 @@ import {
   failTurn,
   loseSession,
   newSession,
-  needsAttention,
   parseAgents,
   parseStatus,
   startTurn,
-  summarise,
   withControls,
   withLifecycle,
   type AgentChange,
@@ -521,39 +521,45 @@ export function App(): React.ReactElement {
     await refresh(true);
   }, [refresh]);
 
-  const counts = fleet ? summarise(fleet) : { total: 0, reachable: 0 };
-  // How many sessions are waiting on the user. It is a count of rows the list
-  // will colour, not a second opinion about their state.
-  const attention = fleet
-    ? fleet.sessions.filter((session) => needsAttention(session.lifecycle)).length
-    : 0;
+  const counts = fleetSummary(fleet);
 
   return (
     <div className="app">
       <aside className="fleet">
         <header>
-          <h1>Flotilla</h1>
-          <p className="muted">
-            {fleet ? `${counts.reachable}/${counts.total} reachable` : "…"}
-            {fleet ? ` · pid ${fleet.pid}` : ""}
-            {attention > 0 ? ` · ${attention} need you` : ""}
+          <div className="brand">
+            <BrandMark />
+            <h1>Flotilla</h1>
+            <span className="chip chip-channel">{fleet ? fleet.channel : "…"}</span>
+          </div>
+          <p className="fleet-stats" title={fleet ? `daemon pid ${fleet.pid}` : undefined}>
+            {fleet ? `${counts.reachable}/${counts.total} reachable` : "Hailing the daemon…"}
+            {counts.attention > 0 ? (
+              <span className="attention"> · {counts.attention} need you</span>
+            ) : null}
           </p>
-          <button type="button" onClick={() => void refresh(true)}>
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setRoute(route === "agents" ? "session" : "agents")}
-          >
-            {route === "agents" ? "Back" : "Agents"}
-          </button>
+          <div className="fleet-tools">
+            <button type="button" onClick={() => void refresh(true)}>
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => setRoute(route === "agents" ? "session" : "agents")}
+            >
+              {route === "agents" ? "Back" : "Agents"}
+            </button>
+          </div>
         </header>
 
-        {fleetError ? <p className="error">{fleetError}</p> : null}
+        {fleetError ? (
+          <div className="banner banner-error" role="alert">
+            {fleetError}
+          </div>
+        ) : null}
         {fleet?.failures.map((failure) => (
-          <p className="warn" key={failure}>
+          <div className="banner banner-warn" key={failure}>
             {failure}
-          </p>
+          </div>
         ))}
 
         <NewSessionForm
@@ -573,7 +579,11 @@ export function App(): React.ReactElement {
       </aside>
 
       <main className="session">
-        {openError ? <p className="error">{openError}</p> : null}
+        {openError ? (
+          <div className="banner banner-error" role="alert">
+            {openError}
+          </div>
+        ) : null}
         {session ? (
           <SessionView
             state={session}
@@ -602,11 +612,19 @@ export function App(): React.ReactElement {
             }}
           />
         ) : (
-          <p className="empty">
-            {fleet && fleet.sessions.length > 0
-              ? "Pick a session to watch it work."
-              : "No sessions yet. Start one on the left."}
-          </p>
+          <div className="harbor-empty">
+            <BrandLockup />
+            <h2>
+              {mainEmpty(fleet) === "pick"
+                ? "Pick a session to watch it work."
+                : "The harbor is quiet."}
+            </h2>
+            <p className="muted">
+              {mainEmpty(fleet) === "pick"
+                ? "Its log, terminal and diff will appear here."
+                : "Start a session on the left to send your first agent to sea."}
+            </p>
+          </div>
         )}
         {/* The settings overlay covers the session instead of replacing it:
             xterm keeps its scrollback and its measured size, so closing the

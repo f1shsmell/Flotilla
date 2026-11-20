@@ -205,6 +205,9 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const heal = process.env.FLT_GUI_SMOKE_HEAL ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
+  // FLT_GUI_SMOKE_STARTS is a JSON array of start requests: a fleet of several
+  // sessions for the walks (and screenshots) that need more than one card.
+  const startRequests = process.env.FLT_GUI_SMOKE_STARTS ?? "";
   const form = process.env.FLT_GUI_SMOKE_FORM ?? "";
   const diffFile = process.env.FLT_GUI_SMOKE_DIFF ?? "";
   const diffLine = process.env.FLT_GUI_SMOKE_PATCH ?? "";
@@ -318,6 +321,25 @@ export async function run(target: BrowserWindow): Promise<boolean> {
       // once the start and the attach have both come back.
       await waitFor(target, "Cancel turn", deadline);
       console.log("smoke: submitted the form");
+    }
+
+    if (startRequests !== "") {
+      let requests: unknown[];
+      try {
+        requests = JSON.parse(startRequests) as unknown[];
+      } catch (cause) {
+        throw new Error(`FLT_GUI_SMOKE_STARTS is not JSON: ${String(cause)}`);
+      }
+      for (const request of requests) {
+        const started = (await target.webContents.executeJavaScript(
+          `window.flotilla.start(${JSON.stringify(request)})`,
+        )) as { id?: string };
+        if (!started?.id) {
+          throw new Error(`start request returned no session id: ${JSON.stringify(request)}`);
+        }
+        console.log(`smoke: started ${started.id}`);
+        await waitFor(target, started.id, deadline);
+      }
     }
 
     if (startRequest !== "") {
