@@ -1,5 +1,6 @@
 import { dirLabel } from "../fleetView";
 import type { Lifecycle, StatusEntry } from "../store";
+import { IconStop } from "./Icons";
 
 interface Props {
   sessions: StatusEntry[];
@@ -35,7 +36,7 @@ export function FleetList({
     return (
       <div className="fleet-empty">
         <p className="fleet-empty-title">Sessions you start will appear here.</p>
-        <p className="muted">Choose an agent above and press Start.</p>
+        <p className="muted">Pick an agent in the composer card and press Start.</p>
       </div>
     );
   }
@@ -87,6 +88,7 @@ export function FleetList({
             aria-label={`end ${session.id}`}
             onClick={() => onStop(session.id)}
           >
+            <IconStop />
             Stop
           </button>
         </li>

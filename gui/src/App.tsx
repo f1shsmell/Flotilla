@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentSettings } from "./components/AgentSettings";
-import { BrandLockup, BrandMark } from "./components/Brand";
+import { BrandMark } from "./components/Brand";
 import { FleetList } from "./components/FleetList";
+import { HarborEmpty } from "./components/HarborEmpty";
+import { IconBack, IconPlus, IconRefresh, IconSliders } from "./components/Icons";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionView } from "./components/SessionView";
-import { fleetSummary, mainEmpty } from "./fleetView";
+import { StatusBar } from "./components/StatusBar";
+import { mainEmpty } from "./fleetView";
 import {
   addPermission,
   answerPermission,
@@ -80,6 +83,7 @@ export function App(): React.ReactElement {
   // settings the picker sends the user to when nothing installed matches.
   const [route, setRoute] = useState<"session" | "agents">("session");
   const [selected, setSelected] = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
   const [session, setSession] = useState<SessionState | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   // The panel a session opens on is the window's state, not the session view's:
@@ -337,6 +341,7 @@ export function App(): React.ReactElement {
     // Opening a session is what the window shows, and a settings panel on top
     // would hide the session the user just asked for.
     setRoute("session");
+    setComposing(false);
 
     const previous = selectedId.current;
     if (previous !== null && previous !== id) {
@@ -521,7 +526,30 @@ export function App(): React.ReactElement {
     await refresh(true);
   }, [refresh]);
 
-  const counts = fleetSummary(fleet);
+  const composerCard = (
+    <div className="composer-card">
+      {composing ? (
+        <button
+          type="button"
+          className="link composer-close"
+          onClick={() => setComposing(false)}
+        >
+          Close
+        </button>
+      ) : null}
+      <NewSessionForm
+        agents={agents.agents}
+        unavailable={agentsError}
+        loaded={agentsLoaded}
+        onStart={start}
+        embedded={composing}
+        onOpenAgentSettings={() => {
+          setComposing(false);
+          setRoute("agents");
+        }}
+      />
+    </div>
+  );
 
   return (
     <div className="app">
@@ -532,20 +560,37 @@ export function App(): React.ReactElement {
             <h1>Flotilla</h1>
             <span className="chip chip-channel">{fleet ? fleet.channel : "…"}</span>
           </div>
-          <p className="fleet-stats" title={fleet ? `daemon pid ${fleet.pid}` : undefined}>
-            {fleet ? `${counts.reachable}/${counts.total} reachable` : "Hailing the daemon…"}
-            {counts.attention > 0 ? (
-              <span className="attention"> · {counts.attention} need you</span>
-            ) : null}
-          </p>
           <div className="fleet-tools">
+            {/* With an empty fleet the composer card is already the first
+                view's action point, so a second button for it would be dead. */}
+            {session !== null || mainEmpty(fleet) === "pick" ? (
+              <button
+                type="button"
+                className="primary fleet-new"
+                aria-pressed={composing}
+                onClick={() => {
+                  // The settings overlay paints above the composer card, so
+                  // opening the card must also leave the settings page.
+                  setRoute("session");
+                  setComposing((open) => !open);
+                }}
+              >
+                <IconPlus />
+                New session
+              </button>
+            ) : null}
             <button type="button" onClick={() => void refresh(true)}>
+              <IconRefresh />
               Refresh
             </button>
             <button
               type="button"
-              onClick={() => setRoute(route === "agents" ? "session" : "agents")}
+              onClick={() => {
+                setComposing(false);
+                setRoute(route === "agents" ? "session" : "agents");
+              }}
             >
+              {route === "agents" ? <IconBack /> : <IconSliders />}
               {route === "agents" ? "Back" : "Agents"}
             </button>
           </div>
@@ -561,14 +606,6 @@ export function App(): React.ReactElement {
             {failure}
           </div>
         ))}
-
-        <NewSessionForm
-          agents={agents.agents}
-          unavailable={agentsError}
-          loaded={agentsLoaded}
-          onStart={start}
-          onOpenAgentSettings={() => setRoute("agents")}
-        />
 
         <FleetList
           sessions={fleet?.sessions ?? []}
@@ -612,20 +649,17 @@ export function App(): React.ReactElement {
             }}
           />
         ) : (
-          <div className="harbor-empty">
-            <BrandLockup />
-            <h2>
-              {mainEmpty(fleet) === "pick"
-                ? "Pick a session to watch it work."
-                : "The harbor is quiet."}
-            </h2>
-            <p className="muted">
-              {mainEmpty(fleet) === "pick"
-                ? "Its log, terminal and diff will appear here."
-                : "Start a session on the left to send your first agent to sea."}
-            </p>
-          </div>
+          <HarborEmpty mode={composing ? "compose" : mainEmpty(fleet)}>
+            {composing || mainEmpty(fleet) === "quiet" ? composerCard : null}
+          </HarborEmpty>
         )}
+        {/* Composing over a live session covers it like the settings panel does:
+            the terminal stays mounted underneath with its scrollback intact. */}
+        {session !== null && composing ? (
+          <div className="composer-overlay">
+            <HarborEmpty mode="compose">{composerCard}</HarborEmpty>
+          </div>
+        ) : null}
         {/* The settings overlay covers the session instead of replacing it:
             xterm keeps its scrollback and its measured size, so closing the
             panel returns to the same view rather than a re-created term. */}
@@ -643,6 +677,7 @@ export function App(): React.ReactElement {
           </div>
         ) : null}
       </main>
+      <StatusBar status={fleet} />
     </div>
   );
 }

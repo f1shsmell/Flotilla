@@ -21,6 +21,9 @@ interface Props {
   // onOpenAgentSettings is the picker's way out when nothing installed matches.
   // A window with no settings page yet just does not render it.
   onOpenAgentSettings?: () => void;
+  // embedded is set when a greeting above the card already names the form, so
+  // the overline would read the same words twice on one screen.
+  embedded?: boolean;
 }
 
 const policies = ["supervised", "accept-edits", "auto", "full-access"];
@@ -34,6 +37,7 @@ export function NewSessionForm({
   loaded = true,
   onStart,
   onOpenAgentSettings,
+  embedded = false,
 }: Props): React.ReactElement {
   const [query, setQuery] = useState("");
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -137,7 +141,7 @@ export function NewSessionForm({
         void submit();
       }}
     >
-      <p className="muted">New session</p>
+      {embedded ? null : <p className="muted overline">New session</p>}
 
       <div className="agent-picker">
         <div className="row">

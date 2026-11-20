@@ -5,6 +5,7 @@
 .app {
   display: grid;
   grid-template-columns: var(--fleet-width) 1fr;
+  grid-template-rows: 1fr auto;
   height: 100%;
 }
 
@@ -38,26 +39,50 @@
   letter-spacing: 0.01em;
 }
 
-.fleet-stats {
-  margin: 0;
+/* The shell's global readout lives on its own row under both columns, so the
+   daemon's health is never mistaken for one card's state. */
+.status-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-6);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
   font-size: var(--fs-tiny);
   color: var(--muted);
 }
 
-.fleet-stats .attention {
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.status-daemon {
+  font-family: var(--mono);
+}
+
+.status-bar .attention {
   color: var(--warn);
   font-weight: 600;
 }
 
 .fleet-tools {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--sp-2);
 }
 
 .fleet-tools button {
-  flex: 1;
   font-size: var(--fs-small);
   padding: var(--sp-2) var(--sp-3);
+}
+
+.fleet-tools .fleet-new {
+  grid-column: 1 / -1;
 }
 
 /* A failed read is a banner, not a red sentence loose in the column: it has a
@@ -208,7 +233,7 @@
 }
 
 .card-command {
-  font-size: var(--fs-tiny);
+  font-size: var(--fs-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -217,7 +242,7 @@
 
 /* Ending a session is rare and must not read as the card's primary action. */
 .session-stop {
-  font-size: var(--fs-label);
+  font-size: var(--fs-tiny);
   padding: 2px var(--sp-2);
   background: transparent;
   border-color: transparent;
@@ -239,7 +264,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  font-size: var(--fs-label);
+  font-size: var(--fs-tiny);
   font-weight: 600;
   letter-spacing: 0.02em;
   padding: 1px var(--sp-3);
@@ -299,7 +324,7 @@
   border-radius: var(--r-pill);
   background: var(--sunken);
   color: var(--dim);
-  font-size: var(--fs-label);
+  font-size: var(--fs-tiny);
   font-weight: 600;
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -347,7 +372,12 @@
 
 .new-session p {
   margin: 0;
-  font-size: var(--fs-label);
+  font-size: var(--fs-tiny);
+}
+
+/* Only the label is an overline; the picker's hints and the error paragraph
+   are sentences and must not shout. */
+.new-session .overline {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -367,12 +397,8 @@
   flex: 1;
 }
 
-/* The picker's hint lines are sentences, not labels: the uppercase label style
-   above would make a whole sentence shout. */
+/* The picker's hint lines are quiet sentences beside the label, not labels. */
 .new-session .agent-picker p {
-  font-size: var(--fs-tiny);
-  text-transform: none;
-  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -412,7 +438,7 @@
 }
 
 .agent-option .mono {
-  font-size: var(--fs-label);
+  font-size: var(--fs-tiny);
   color: var(--muted);
 }
 
@@ -422,6 +448,7 @@ button.link {
   color: var(--accent);
   padding: 2px 0;
   text-align: left;
+  justify-content: flex-start;
   font-size: var(--fs-tiny);
   font-weight: 500;
 }
