@@ -166,6 +166,12 @@ type Daemon struct {
 
 // New builds a daemon. Call Run to serve.
 func New(cfg Config, spawn Spawner) *Daemon {
+	// A nil spawner defaults to the real one: session.start must not be able
+	// to panic the daemon.
+	if spawn == nil {
+		spawn = ExecSpawner(cfg.Log)
+	}
+
 	configDir := cfg.ConfigDir
 	if configDir == "" {
 		configDir = filepath.Join(cfg.StateDir, "config")
