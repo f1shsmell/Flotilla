@@ -70,6 +70,60 @@ func TestAnAdapterPatternBlocksATerminalSession(t *testing.T) {
 	t.Fatalf("the session stayed %q after the agent printed a declared prompt", h.CurrentState())
 }
 
+// TestAWrappedPromptBlocksATerminalSession pins the read source end to end: a
+// narrow terminal folds the agent's question across two lines, and the pattern
+// spans the fold. Detection reads the rendered screen with soft wraps joined,
+// so the question is still one question.
+func TestAWrappedPromptBlocksATerminalSession(t *testing.T) {
+	dir := t.TempDir()
+	command, args := helperCommand(t)
+
+	h, err := Start(context.Background(), Config{
+		ID:       "sess-wrapped",
+		Token:    "shared",
+		StateDir: dir,
+		Command:  command,
+		Args:     args,
+		Env:      append(os.Environ(), helperEnv+"=1"),
+		Cols:     12,
+		Rows:     24,
+		Adapter:  adapters.Adapter{Blocked: []string{"trust this folder"}},
+	}, session.NewRegistry(dir), discardLogger())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	go func() { _ = h.Serve(ctx) }()
+
+	rec, err := waitForRecord(t, session.NewRegistry(dir), "sess-wrapped")
+	if err != nil {
+		t.Fatalf("the host never published a record: %v", err)
+	}
+
+	conn, err := ipc.Dial(ctx, rec.Endpoint, dir, ipc.Config{Token: "shared", Role: "test"})
+	if err != nil {
+		t.Fatalf("dial the host: %v", err)
+	}
+	t.Cleanup(conn.Close)
+
+	if err := conn.SendData(session.StreamInput, []byte("Do you trust this folder?\r\n")); err != nil {
+		t.Fatalf("send input: %v", err)
+	}
+
+	deadline := time.Now().Add(waitFor)
+	for time.Now().Before(deadline) {
+		if h.CurrentState() == session.StateBlocked {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the session stayed %q after the agent printed a wrapped prompt", h.CurrentState())
+}
+
 // TestWithoutAPatternTheSameLineDoesNotBlock pins the off switch end to end: an
 // agent that declared no patterns is never classified from its output, so the
 // same line that blocked above leaves this session unknown.

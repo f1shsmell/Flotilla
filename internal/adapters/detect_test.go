@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -12,7 +11,7 @@ func TestADetectorWithoutPatternsNeverMatches(t *testing.T) {
 	if d.Armed() {
 		t.Fatal("a detector with no patterns is armed")
 	}
-	if pattern, ok := d.Push([]byte("Do you trust this folder?\n")); ok {
+	if pattern, ok := d.Observe("Do you trust this folder?"); ok {
 		t.Fatalf("an empty detector matched %q", pattern)
 	}
 }
@@ -22,7 +21,7 @@ func TestADetectorWithoutPatternsNeverMatches(t *testing.T) {
 func TestADetectorMatchesAPrompt(t *testing.T) {
 	d := NewDetector([]string{"do you trust"})
 
-	pattern, ok := d.Push([]byte("Welcome\nDo you trust the files in this folder?\n"))
+	pattern, ok := d.Observe("Welcome\nDo you trust the files in this folder?")
 	if !ok {
 		t.Fatal("the prompt did not match")
 	}
@@ -31,72 +30,124 @@ func TestADetectorMatchesAPrompt(t *testing.T) {
 	}
 }
 
-// TestADetectorMatchesALineSplitAcrossReads pins the carried tail: a PTY read
-// can end in the middle of the prompt, and the split line is still one line.
-func TestADetectorMatchesALineSplitAcrossReads(t *testing.T) {
-	d := NewDetector([]string{"allow this tool"})
-
-	if _, ok := d.Push([]byte("Allow th")); ok {
-		t.Fatal("matched a half line")
-	}
-	if _, ok := d.Push([]byte("is tool? [y/N]")); !ok {
-		t.Fatal("the second half did not complete the match")
-	}
-}
-
-// TestADetectorSeesThroughColour pins the escape handling: a prompt wrapped in a
-// colour code is still the prompt, and the bytes on the wire carry the code.
-func TestADetectorSeesThroughColour(t *testing.T) {
-	d := NewDetector([]string{"approve this edit"})
-
-	if _, ok := d.Push([]byte("\x1b[1mApprove this edit\x1b[0m? ")); !ok {
-		t.Fatal("a styled prompt did not match")
-	}
-}
-
-// TestADetectorKeepsItsTailBounded pins the flood path: a writer with no newline
-// must not grow the carried line without limit.
-func TestADetectorKeepsItsTailBounded(t *testing.T) {
-	d := NewDetector([]string{"never appears"})
-
-	for i := 0; i < 4; i++ {
-		d.Push([]byte(strings.Repeat("x", 32<<10)))
-	}
-	if len(d.pending) > maxPendingLine {
-		t.Fatalf("the carried line grew to %d bytes", len(d.pending))
-	}
-}
-
-// TestANewLineDoesNotJoinTheNextOne pins the opposite failure: two complete
-// lines must not be spliced into one, or a prompt could be assembled from the
-// end of one line and the start of another.
-func TestANewLineDoesNotJoinTheNextOne(t *testing.T) {
+// TestAnUnchangedSnapshotDoesNotMatchAgain pins the flood path: a screen that
+// keeps printing the same prompt is one question, not a new one on every read.
+func TestAnUnchangedSnapshotDoesNotMatchAgain(t *testing.T) {
 	d := NewDetector([]string{"do you trust"})
 
-	if _, ok := d.Push([]byte("do you trust\n")); !ok {
-		t.Fatal("a complete line did not match")
+	if _, ok := d.Observe("Do you trust this folder?"); !ok {
+		t.Fatal("the first sight of the prompt did not match")
 	}
-
-	// The next read starts a new line: nothing carried over, so a pattern split
-	// across the boundary cannot match.
-	other := NewDetector([]string{"do you trust"})
-	if _, ok := other.Push([]byte("nothing here\n")); ok {
-		t.Fatal("an unrelated line matched")
-	}
-	if _, ok := other.Push([]byte("do you")); ok {
-		t.Fatal("a fragment after a complete line matched")
+	if _, ok := d.Observe("Do you trust this folder?"); ok {
+		t.Fatal("the same screen matched twice")
 	}
 }
 
-// TestResetDropsTheCarriedLine pins the cleared-screen case: text before a clear
-// is not part of the prompt after it.
-func TestResetDropsTheCarriedLine(t *testing.T) {
+// TestAnAnsweredPromptStillOnScreenDoesNotRematch pins the way out: after the
+// user answers, the prompt may still be visible above the agent's reply. Only
+// new or changed lines are read, so the old question cannot block the session
+// again while it waits to scroll away.
+func TestAnAnsweredPromptStillOnScreenDoesNotRematch(t *testing.T) {
+	d := NewDetector([]string{"do you trust"})
+
+	if _, ok := d.Observe("Do you trust this folder?"); !ok {
+		t.Fatal("the prompt did not match")
+	}
+	if _, ok := d.Observe("Do you trust this folder?\ny"); ok {
+		t.Fatal("the answered prompt re-matched after the reply arrived")
+	}
+}
+
+// TestAChangedLineMatchesAgain pins the other half of the diff: a line that
+// grows is new text. A prompt completed across two reads is one question.
+func TestAChangedLineMatchesAgain(t *testing.T) {
+	d := NewDetector([]string{"allow this tool"})
+
+	if _, ok := d.Observe("Allow th"); ok {
+		t.Fatal("matched a half line")
+	}
+	if _, ok := d.Observe("Allow this tool? [y/N]"); !ok {
+		t.Fatal("the completed line did not match")
+	}
+}
+
+// TestARedrawnPromptMatches pins the approval-UI case: a full-screen agent
+// paints its question with cursor addressing over whatever was there before.
+// The painted line is changed text, so it is read.
+func TestARedrawnPromptMatches(t *testing.T) {
+	d := NewDetector([]string{"approve this edit"})
+
+	if _, ok := d.Observe("an earlier frame"); ok {
+		t.Fatal("an unrelated frame matched")
+	}
+	if _, ok := d.Observe("Approve this edit?"); !ok {
+		t.Fatal("the redrawn prompt did not match")
+	}
+}
+
+// TestAClearAndIdenticalRedrawMatchesAgain pins the re-prompt case: an agent
+// that clears the screen and asks the same question again is asking again. The
+// clear empties the remembered screen, so the identical text is new.
+func TestAClearAndIdenticalRedrawMatchesAgain(t *testing.T) {
 	d := NewDetector([]string{"trust this folder"})
 
-	d.Push([]byte("trust this "))
-	d.Reset()
-	if _, ok := d.Push([]byte("folder")); ok {
-		t.Fatal("a reset detector completed a line from before the reset")
+	if _, ok := d.Observe("Trust this folder?"); !ok {
+		t.Fatal("the first prompt did not match")
+	}
+	if _, ok := d.Observe(""); ok {
+		t.Fatal("a cleared screen matched")
+	}
+	if _, ok := d.Observe("Trust this folder?"); !ok {
+		t.Fatal("the identical re-prompt after a clear did not match")
+	}
+}
+
+// TestADetectorIsCaseInsensitive pins the matching rule: patterns are declared
+// in lower case and the screen is folded to meet them.
+func TestADetectorIsCaseInsensitive(t *testing.T) {
+	d := NewDetector([]string{"do you trust"})
+
+	if _, ok := d.Observe("DO YOU TRUST THIS FOLDER?"); !ok {
+		t.Fatal("an upper-case prompt did not match")
+	}
+}
+
+// TestTwoLinesAreNotSplicedIntoOne pins the opposite failure: a pattern must
+// not be assembled from the end of one line and the start of another.
+func TestTwoLinesAreNotSplicedIntoOne(t *testing.T) {
+	d := NewDetector([]string{"do you trust"})
+
+	if _, ok := d.Observe("do you\ntrust"); ok {
+		t.Fatal("a pattern split across two lines matched")
+	}
+}
+
+// TestAPromptCompletedAfterAnAnswerDoesNotRematch pins the split-read race: the
+// session blocked on the first half of a prompt, the user answered, and the
+// rest of the prompt arrived afterwards. The pattern was already on the screen,
+// so its completion is not a new question.
+func TestAPromptCompletedAfterAnAnswerDoesNotRematch(t *testing.T) {
+	d := NewDetector([]string{"do you trust"})
+
+	if _, ok := d.Observe("Do you trust this fol"); !ok {
+		t.Fatal("the first half of the prompt did not match")
+	}
+	if _, ok := d.Observe("Do you trust this folder?\ny"); ok {
+		t.Fatal("the prompt's completion re-matched after the answer")
+	}
+}
+
+// TestAnAnswerEchoedOntoThePromptLineDoesNotRematch pins the readline case: many
+// agents read the answer on the prompt's own line, so the echo changes that
+// line. The pattern never left the screen, so it is not asked again.
+func TestAnAnswerEchoedOntoThePromptLineDoesNotRematch(t *testing.T) {
+	d := NewDetector([]string{"allow this edit"})
+
+	if _, ok := d.Observe("Allow this edit? [y/N]"); !ok {
+		t.Fatal("the prompt did not match")
+	}
+	if _, ok := d.Observe("Allow this edit? [y/N] y"); ok {
+		t.Fatal("the answer echoed onto the prompt line re-matched")
 	}
 }
 

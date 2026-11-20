@@ -100,6 +100,8 @@ type Host struct {
 	// the read path for every ACP session and for a terminal agent nobody
 	// described.
 	detector *adapters.Detector
+	// screen is the visible-screen model the detector reads; it exists exactly when detector does.
+	screen *screen
 	// injectMu serialises structured prompt injections: two pastes
 	// interleaving in one terminal would shred both.
 	injectMu sync.Mutex
@@ -183,6 +185,7 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 	if cfg.Mode == session.ModePTY {
 		if detector := adapters.NewDetector(cfg.Adapter.Blocked); detector.Armed() {
 			h.detector = detector
+			h.screen = newScreen(cfg.Cols, cfg.Rows)
 		}
 	}
 
@@ -197,6 +200,9 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 
 	ptmx, err := xpty.NewPty(cfg.Cols, cfg.Rows)
 	if err != nil {
+		if h.screen != nil {
+			h.screen.close()
+		}
 		return nil, fmt.Errorf("create pty: %w", err)
 	}
 	h.pty = ptmx
@@ -210,6 +216,9 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 
 	if err := ptmx.Start(cmd); err != nil {
 		_ = ptmx.Close()
+		if h.screen != nil {
+			h.screen.close()
+		}
 		return nil, fmt.Errorf("start %q on the pty: %w", cfg.Command, err)
 	}
 	h.cmd = cmd
@@ -495,6 +504,9 @@ func (h *Host) resize(req session.ResizeRequest) error {
 	if err := h.pty.Resize(req.Cols, req.Rows); err != nil {
 		return fmt.Errorf("resize the pty: %w", err)
 	}
+	if h.screen != nil {
+		h.screen.resize(req.Cols, req.Rows)
+	}
 	return nil
 }
 
@@ -524,24 +536,22 @@ func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {
 	}
 }
 
-// observe classifies one chunk of terminal output. A pattern the adapter
-// declared as "waiting for the user" turns the session blocked: that is the
-// state a fleet view needs, and the only judgement this build makes from
-// wording. Nothing is inferred from the absence of a match — a terminal session
-// that is quiet is unknown, not idle.
+// observe classifies one chunk of terminal output. The chunk feeds the screen
+// model, and the detector reads the rendered screen: a declared "waiting for
+// the user" pattern turns the session blocked when it is new to the screen. An
+// answered prompt stays quiet while it scrolls away; absence of a match proves
+// nothing — a quiet terminal session is unknown, not idle.
 func (h *Host) observe(chunk []byte) {
 	if h.detector == nil {
 		return
 	}
-	if h.CurrentState() == session.StateBlocked {
-		// Already blocked: keep the carried line bounded rather than matching
-		// the same prompt on every read of the same screen.
-		h.detector.Reset()
-		return
+	if h.screen.write(chunk) {
+		// A wiped screen ends the old question: forget it so a re-prompt reads
+		// as new even when it is the same text.
+		h.detector.Observe("")
 	}
-
-	pattern, matched := h.detector.Push(chunk)
-	if !matched {
+	pattern, matched := h.detector.Observe(h.screen.detectionText())
+	if !matched || h.CurrentState() == session.StateBlocked {
 		return
 	}
 	h.log.Info("session looks blocked", "session", h.cfg.ID, "pattern", pattern)
@@ -583,6 +593,9 @@ func (h *Host) Close() error {
 			if err := h.pty.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close the pty: %w", err))
 			}
+		}
+		if h.screen != nil {
+			h.screen.close()
 		}
 		errs = append(errs, h.closeACP()...)
 	})
