@@ -24,15 +24,19 @@
 
 | 事实 | 位置 | 对方案的含义 |
 |---|---|---|
-| `Address{Channel, Name}` 只有本机命名空间 | `internal/ipc/transport.go:12` | 需要新增"远端地址"的表达，且不能破坏现有 pipe/UDS 语义 |
+| `Address{Channel, Name}` 只有本机命名空间 | `internal/ipc/transport.go:12` | 需要加 `Kind`（pipe/unix/tcp）与 `Addr`，且不能破坏现有语义 |
 | `dial` 是每平台的私有函数 | `internal/ipc/transport_windows.go:52`、`transport_other.go:112` | 远程档在这里分叉，上层无感 |
+| `ipc.Dial`/`Listen` 的非测试调用点只有 4 处 | `daemon/attach.go:101`、`daemon/client.go:23`、`daemon/daemon.go:221`、`host/host.go:288` | 加一个传输是「一个实现 + 一个字段」，不动上层 |
 | 握手带 `Token` / `Role` / `Client` / `Session` | `internal/ipc/handshake.go` | 远程连接复用同一套认证字段，不需要第二套 |
 | 控制面 JSON-RPC，数据面 `kind(1)+stream(4)+len(4)` | `internal/ipc/frame.go` | relay 只需要当哑管道转字节；WebSocket 天然承载 binary |
-| capability gate 已落地 | `internal/ipc/capability.go` | 远程端与本地端之间也能协商裁剪，旧手机连新 daemon 只少拿字段 |
+| capability gate 已落地，只有 `diagnostics_v1` | `internal/ipc/capability.go` | **传输变化不需要新能力位**（它裁剪字段，不裁剪连接方式） |
 | daemon 的客户端只有 `Connect` 一个入口 | `internal/daemon/client.go:20` | 远程只要换掉 `ipc.Dial` 的地址解析，`flt` 与 GUI 自动获得能力 |
 
 **一句话**：`ipc.Conn` 是唯一的连接抽象，它的上游（daemon、CLI、GUI）不知道也不关心
-底下是 pipe、UDS 还是 SSH 管道。方案必须保住这条。
+底下是 pipe、UDS 还是 TCP 转发端口。方案必须保住这条。
+
+四项设计细节（多机路由、Windows bootstrap、端口冲突、capability）的展开见
+[remote-access-open-questions.md](remote-access-open-questions.md)。
 
 ## 二、四家参考实现（只写读过的）
 
@@ -146,23 +150,34 @@
 > [remote-access-review.md](remote-access-review.md)。
 
 ```
-GUI ──pipe──▶ 本机 daemon ──TCP──▶ 127.0.0.1:<随机端口>
-                                      ▲
-                                      │ ssh -L 转发
-                                      │
-                              远端 flt-daemon（常驻，只绑 loopback）
+GUI ──┬── pipe ──▶ 本机 daemon（channel=stable）
+      ├── tcp ───▶ 127.0.0.1:P1 ──ssh -L──▶ 远端A daemon（workspace=/srv/app）
+      └── tcp ───▶ 127.0.0.1:P2 ──ssh -L──▶ 远端B daemon（workspace=/home/dev/api）
 ```
 
-- 实现点：`internal/ipc` 的 `Listen`/`Dial` 增加 `tcp` 传输（今天只有 pipe/UDS）。
-  **`Address` 不需要 `Remote` 字段**——远程只是把 daemon 的地址换成一个本地转发端口。
+- **每个 (host, workspace) 一个远端 daemon，GUI 并行多连接——不是代理。**
+  2026-11-22 调研定案（[open-questions](remote-access-open-questions.md) 第一节）：
+  内核的 `remote.Client` 是每条 SSH 连接一个、**不持有 workspace**；workspace 只用于
+  **状态分片**（`<home>/.reasonix/remote/<workspace-slug>.serve.json`）。
+  代理方案要把远端 daemon 的整个方法面在本地重新实现一遍，每加一个方法改两处；
+  并列则新方法只实现一次，且一条连接断了不拖累其他机器。
+- 会话 id 因此需要**机器作用域**：`<host>/<session>`。Paseo 的
+  `AgentAddress{serverId, agentId}` 是同一形状。
+- 实现点：`internal/ipc` 的 `Listen`/`Dial` 增加 `tcp` 传输，`Address` 加
+  `Kind` + `Addr`。**不加 capability 位**：传输变化不裁剪任何字段，加位是类别错误。
 - 远端：一个常驻 `flt-daemon`，绑 `127.0.0.1` 的**随机端口**，token 写文件
-  （`ipc.WriteTokenFile` 已有，ACL 收紧），**绝不进 argv**。
+  （`ipc.WriteTokenFile` 已有，ACL 收紧），**绝不进 argv**。`ipc.listen` 的 tcp 分支
+  要**拒绝非环回地址**，不信任调用方。
 - bootstrap：远端安装/定位 `flt`、起进程、记录端口与 token 以便复用。这是主要工作量。
+  Windows 远端用 PowerShell `-EncodedCommand`（UTF-16LE base64）绕开 cmd 引号，
+  home 用 SFTP `RealPath(".")` 而非 `~`。
 - supervisor：六态 `idle / connecting / live / degraded / reconnecting / stopped`，
   带 keepalive 与指数退避。**`degraded` 必须说明哪一条转发坏了**，不能只给颜色。
+- 转发：本地 `-L` 监听器**跨重连保留**（否则 GUI 里存的地址每次断线都变），
+  用 `127.0.0.1:0` 让 OS 分配后记住实际端口；冲突用 typed error，不做字符串匹配。
 - 主机密钥：系统 `known_hosts` 只读参考 + 自有 TOFU 文件（双份，照内核）。
 - 验收：`TestRemoteForwardOverSSH` —— 测试里用进程内 SSH 替身，`flt status` 经转发
-  拿到 fleet；断链后重连，远端会话仍在。
+  拿到 fleet；断链后重连，远端会话仍在；两个远端 workspace 的会话 id 不串。
 - 代价：**一到两周**（不是上一稿估的 1–2 天），因为 bootstrap 与 supervisor 是主体。
 - 不解决：手机蜂窝场景（SSH 在手机上不现实）。
 
@@ -291,13 +306,19 @@ type Link = "idle" | "connecting" | "live" | "degraded" | "reconnecting" | "stop
 
 ## 九、未核实项（如实列出）
 
-- **远端 daemon 与本地 daemon 的关系**：两个独立 daemon 各管各的会话，还是本地 daemon
-  代理远端？上一稿假定后者（一个窗口看两台机器），但内核的做法是**每个远端一个 serve
-  进程、本地按 workspace 路由**。这条要重新设计，是档 A 的核心问题，本文档没有答案。
-- 内核的 bootstrap 如何处理 Windows 远端（`windowsshell.go` 约 10KB，未细读）。
-- `forward.Set` 的端口冲突处理（`addrinuse.go` 存在，逻辑未细读）。
-- Flotilla 的 `ipc` 加 `tcp` 传输时，capability gate 是否需要新能力位（倾向不需要：
-  传输变了，协议没变）。
+**2026-11-22 已解决四项**（详见 [remote-access-open-questions.md](remote-access-open-questions.md)）：
+多机路由改为「每个 (host, workspace) 一个远端 daemon、GUI 并行多连接」；
+Windows 远端用 `-EncodedCommand` + SFTP `RealPath(".")`；
+转发端口冲突用「本地监听器持久 + 远端先试原端口」；
+`ipc` 加 tcp **不需要** capability 位，但 `Address` 要加 `Kind`。
+
+仍然未核实的：
+
+- 同一 workspace 被**两台机器上的两个客户端同时要**时，内核靠远端 state 文件的 pid 检查
+  （`serveLock` 是远端文件锁，跨机器不互斥）。Flotilla 是否需要跨机互斥未定。
+- 会话 id 加机器作用域后，daemon 侧是否要改（倾向不改：作用域是 GUI 的投影）。
+- 内核 `bootstrap.install.go`（11KB）的安装路径选择逻辑未细读；`flt` 二进制更小，
+  可能不需要那套复杂度。
 - 档 B 的 Go 侧 WSS 客户端选型（`nhooyr.io/websocket` vs `gorilla/websocket`）未定；
   relay-kit 的 Node fixture 用 `ws`，互操作要实测。
 - 手机端技术栈未定（Capacitor 复用 renderer，还是原生）；用户两套先例分别是

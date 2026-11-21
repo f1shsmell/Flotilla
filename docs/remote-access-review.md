@@ -150,10 +150,13 @@ supervisor（六态 + 退避）、known_hosts 双份。这不是 1–2 天，是
 
 ## 八、仍未核实
 
-- 内核的 bootstrap 如何处理 Windows 远端（`windowsshell.go` 有 10KB，未细读）。
-- `forward.Set` 的端口冲突处理（`addrinuse.go` 存在，逻辑未细读）。
-- Flotilla 的 `ipc` 加 `tcp` 传输时，capability gate 是否需要新能力位（倾向不需要：
-  传输变了，协议没变）。
-- 远端 `flt-daemon` 与本地 daemon 的关系：两个独立 daemon 各管各的会话，
-  还是本地 daemon 代理远端？上一稿假定后者（一个窗口看两台机器），但内核的做法是
-  **每个远端一个 `serve` 进程，本地按 workspace 路由**。这条要重新设计，是档 A 的核心问题。
+**2026-11-22 已全部解决**，展开见 [remote-access-open-questions.md](remote-access-open-questions.md)。
+结论摘要：
+
+- Windows 远端：PowerShell `-EncodedCommand`（UTF-16LE base64）绕开 cmd 引号；
+  home 用 SFTP `RealPath(".")` 而非 `~`；SFTP 与原生路径是两种拼写，只许单向派生。
+- 端口冲突：本地 `-L` 监听器**跨重连保留**（地址稳定），远端 `-R` 每次重建、
+  **先试原端口再退回新端口**；冲突用 typed error。
+- capability：**不需要新位**。传输是连接方式，不是字段；加位是类别错误。
+- 远端 daemon 与本地 daemon：**并列，不是代理**。每个 (host, workspace) 一个远端
+  daemon（workspace 是状态分片键），GUI 并行多连接。代理要把整个方法面在本地重实现一遍。

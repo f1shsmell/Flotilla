@@ -31,11 +31,18 @@
 │ ● blocked  sess-a   acp   ...     │
 │ ● working  sess-b   acp   ...     │
 └───────────────────────────────────┘
-┌ build-01 · SSH · 2 会话 ──── 延迟 12ms ┐
+┌ build-01 · /srv/app · 2 会话 ── 12ms ┐
 │ ● done     sess-c   pty   ...      │
 │ ◌ unknown  sess-d   acp   ...      │
 └────────────────────────────────────┘
 ```
+
+**2026-11-22 修订**：分组的键是 **(host, workspace)**，不是「机器」。调研确认
+（[open-questions](remote-access-open-questions.md) 第一节）远端 daemon 按 workspace
+分片，一台机器上两个 workspace 是两个 daemon、两条连接。所以同一台机器的两段
+必须分开显示——合并会把「哪个目录里的活卡住了」这个信息抹掉。
+
+机器头显示 `host · workspace`，workspace 用 `dirLabel()` 取末段（已有函数）。
 
 三条规则：
 
@@ -71,7 +78,8 @@ export type Link =
 - `degraded` 必须携带 `broken: string[]`（哪几条转发/会话），否则界面无法指路。
 
 投影函数 `machineGroups(status)` 是纯函数，输入 `Status`，输出
-`{ id, label, kind, link, broken, sessions }[]`。**排序规则不在这里**，它继续由
+`{ key, host, workspace, link, broken, sessions }[]`，其中 `key` 是
+`host + "\0" + workspace`。**排序规则不在这里**，它继续由
 `orderSessions` 负责，两者正交。
 
 ### 2.4 视觉
