@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/f1shsmell/flotilla/internal/session"
 )
 
 // ErrInvalidScenario reports a file that cannot describe a turn.
@@ -23,12 +25,11 @@ var ErrInvalidScenario = errors.New("replay: invalid scenario")
 type Scenario struct {
 	// Name identifies the scenario in a log or a picker.
 	Name string `json:"name"`
-	// Capabilities are what the agent advertised, so a replay exercises the
-	// same client paths a live agent would: resume, load, or neither.
+	// Capabilities are what the agent advertised, so a replay exercises the same client paths.
 	Capabilities Capabilities `json:"capabilities,omitempty"`
-	// Turns are answered in order. A client that prompts more often than the
-	// scenario has turns falls back to the last one rather than failing: a demo
-	// must not break because somebody typed twice.
+	// Surface is what the recorded agent let the client adjust, so a demo exercises its composer bar.
+	Surface []session.Control `json:"surface,omitempty"`
+	// Turns are answered in order; prompting past the last one repeats it rather than failing.
 	Turns []Turn `json:"turns"`
 }
 
@@ -86,7 +87,63 @@ func Decode(payload []byte) (Scenario, error) {
 			return Scenario{}, fmt.Errorf("turn %d: %w", i, err)
 		}
 	}
+	seen := make(map[string]bool, len(s.Surface))
+	for i, control := range s.Surface {
+		if seen[control.ID] {
+			return Scenario{}, fmt.Errorf("surface %d repeats control %q: %w", i, control.ID, ErrInvalidScenario)
+		}
+		seen[control.ID] = true
+		if err := validateControl(control); err != nil {
+			return Scenario{}, fmt.Errorf("surface %d: %w", i, err)
+		}
+	}
 	return s, nil
+}
+
+// validateControl refuses a setting the replay cannot honour: a value outside
+// the offered choices would render a select whose current value is not in its
+// own list, and a write of it would have nowhere to land.
+func validateControl(c session.Control) error {
+	if c.ID == "" || c.Name == "" {
+		return fmt.Errorf("control %q carries no id or name: %w", c.ID, ErrInvalidScenario)
+	}
+	switch c.Kind {
+	case session.ControlBoolean:
+		if c.Current != "true" && c.Current != "false" {
+			return fmt.Errorf("boolean control %q current %q is not true or false: %w", c.ID, c.Current, ErrInvalidScenario)
+		}
+	case session.ControlMode, session.ControlSelect:
+		if len(c.Choices) == 0 {
+			return fmt.Errorf("control %q offers no choice: %w", c.ID, ErrInvalidScenario)
+		}
+		offered := make(map[string]bool, len(c.Choices))
+		grouped, loose := false, false
+		for _, choice := range c.Choices {
+			if choice.Value == "" {
+				return fmt.Errorf("control %q offers a choice with no value: %w", c.ID, ErrInvalidScenario)
+			}
+			if offered[choice.Value] {
+				return fmt.Errorf("control %q offers %q twice: %w", c.ID, choice.Value, ErrInvalidScenario)
+			}
+			offered[choice.Value] = true
+			if choice.Group != "" {
+				grouped = true
+			} else {
+				loose = true
+			}
+		}
+		// The wire's select options are a oneOf, flat or grouped: a mixed list
+		// would lose half its choices in the announcement.
+		if grouped && loose {
+			return fmt.Errorf("control %q mixes grouped and flat choices: %w", c.ID, ErrInvalidScenario)
+		}
+		if !offered[c.Current] {
+			return fmt.Errorf("control %q current %q is not among its choices: %w", c.ID, c.Current, ErrInvalidScenario)
+		}
+	default:
+		return fmt.Errorf("control %q has kind %q, want mode, select or boolean: %w", c.ID, c.Kind, ErrInvalidScenario)
+	}
+	return nil
 }
 
 // validate refuses a turn the replay cannot express. An empty turn would answer

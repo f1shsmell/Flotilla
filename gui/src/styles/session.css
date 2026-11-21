@@ -62,27 +62,47 @@
   align-items: center;
 }
 
-/* The agent's own settings, projected by the daemon. They sit under the header
-   so a mode switch reads as part of the session, not of the window's chrome. */
+/* The agent's own settings, projected by the daemon. They ride the composer
+   bar under the field as ghost selects: the current value is the label, and
+   the box only appears on hover or focus. */
 .surface-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-4);
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
 .surface-control {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  min-width: 0;
 }
 
 .surface-control select {
   font: inherit;
+  font-size: var(--fs-small);
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-2);
+  max-width: 160px;
+  cursor: pointer;
+}
+
+.surface-control select:hover {
   color: var(--text);
   background: var(--sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: 3px var(--sp-3);
+  border-color: var(--line);
+}
+
+/* The permission dial wears the harbor's amber: one glance says how much
+   the agent may do unasked. */
+.surface-control.kind-mode select,
+.surface-control.kind-mode select:hover {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 .log {
@@ -109,6 +129,18 @@
   word-break: break-word;
 }
 
+/* Answers close a beat of the log and a new prompt opens the next one above a
+   hairline, so turns read as paragraphs rather than one wall of lines. */
+.entry.message {
+  margin-bottom: var(--sp-4);
+}
+
+.entry.user:not(:first-child) {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
 .entry.thought {
   color: var(--muted);
   font-style: italic;
@@ -132,14 +164,7 @@
   font-size: var(--fs-small);
 }
 
-.composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-3);
-  align-items: end;
-}
-
-.composer textarea {
+.session-composer textarea {
   font: inherit;
   color: var(--text);
   background: var(--sunken);
@@ -148,6 +173,16 @@
   padding: var(--sp-3) var(--sp-4);
   resize: vertical;
   min-height: 56px;
+  width: 100%;
+}
+
+/* The field and the settings selects answer focus with the harbor's signal
+   blue, so the place typing lands is never a guess. */
+.session-composer textarea:focus,
+.surface-control select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
 .permission {
@@ -271,6 +306,9 @@
 }
 
 .turn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-size: var(--fs-tiny);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -281,19 +319,35 @@
   white-space: nowrap;
 }
 
-.turn-pill.turn-working {
+/* The dot and the hues are the fleet badge's: one state vocabulary across the
+   window, so a card and the open session never tell two stories. */
+.turn-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  flex: none;
+}
+
+.turn-pill.life-working {
   background: var(--accent-bg);
   color: var(--accent);
 }
 
-.turn-pill.turn-ended {
+.turn-pill.life-done {
   background: var(--ok-bg);
   color: var(--ok);
 }
 
-.turn-pill.turn-lost {
-  background: var(--down-bg);
-  color: var(--down);
+.turn-pill.life-blocked {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.turn-pill.life-unknown {
+  background: var(--unknown-bg);
+  color: var(--unknown);
 }
 
 /* Kind icons sit on the text baseline and stay quiet: they label the row, they
@@ -327,6 +381,17 @@
   font-size: var(--fs-small);
   color: var(--dim);
   list-style: none;
+  border-radius: var(--r-sm);
+  transition: background 120ms ease;
+}
+
+.entry-run summary:hover,
+.entry-run[open] summary {
+  background: var(--panel);
+}
+
+.entry-run[open] summary {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
 }
 
 .entry-run summary::-webkit-details-marker {
@@ -360,6 +425,8 @@
   /* .chip is inline-flex, and ellipsis does not apply to a flex container; as a
      flex item this blockifies to block, where the truncation reads. */
   display: inline-block;
+  background: var(--panel);
+  border: 1px solid var(--line);
 }
 
 .run-body {
@@ -371,8 +438,8 @@
   margin-bottom: var(--sp-2);
 }
 
-/* The composer is a card with a toolbar: the mode, any pending permission, and
-   an honest send hint sit above the field rather than guessing at shortcuts. */
+/* The composer is a card: the field on top, one bar below carrying the mode,
+   the agent's settings, any pending permission, an honest send hint and send. */
 .session-composer {
   display: grid;
   gap: var(--sp-2);
@@ -383,11 +450,11 @@
   box-shadow: var(--shadow-1);
 }
 
-.composer-toolbar {
+.composer-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   min-width: 0;
 }
 

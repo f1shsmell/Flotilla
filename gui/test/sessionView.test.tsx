@@ -2,10 +2,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { SessionView } from "../src/components/SessionView";
-import type { Entry, SessionState } from "../src/store";
+import type { Control, Entry, Lifecycle, SessionState } from "../src/store";
 
 function entry(key: string, kind: Entry["kind"], toolTitle?: string): Entry {
   return { key, kind, text: `${kind} ${key}`, toolTitle };
+}
+
+function modelControl(): Control {
+  return {
+    id: "model",
+    name: "Model",
+    kind: "select",
+    current: "sonnet",
+    choices: [
+      { value: "sonnet", name: "Sonnet" },
+      { value: "opus", name: "Opus" },
+    ],
+  };
 }
 
 function state(over: Partial<SessionState> = {}): SessionState {
@@ -28,10 +41,15 @@ function state(over: Partial<SessionState> = {}): SessionState {
   };
 }
 
-function render(s: SessionState, view: "stream" | "diff" = "stream"): string {
+function render(
+  s: SessionState,
+  view: "stream" | "diff" = "stream",
+  lifecycle: Lifecycle = "idle",
+): string {
   return renderToStaticMarkup(
     <SessionView
       state={s}
+      lifecycle={lifecycle}
       view={view}
       onView={() => {}}
       onPrompt={() => {}}
@@ -67,10 +85,56 @@ describe("the session chrome keeps the smoke contract", () => {
 });
 
 describe("the session chrome reads as a product", () => {
-  it("wears a turn state pill beside the session name", () => {
-    const html = render(state({ turn: "working" }));
-    expect(html).toMatch(/class="turn-pill[^"]*"/);
-    expect(html).toContain("working");
+  it("wears the fleet's lifecycle word in the pill, not the stream's turn", () => {
+    const html = render(state({ turn: "working" }), "stream", "blocked");
+    expect(html).toContain('class="turn-pill life-blocked"');
+    // The pill carries the lifecycle word in the session header; the fleet
+    // card repeats it in nav context, so both readings are wanted.
+    expect(html).toContain('class="turn-pill life-blocked">blocked</span>');
+    expect(html).toMatch(/life-blocked"[^>]*>blocked</);
+    // The stream's turn still reads in the header line the heal probe uses.
+    expect(html).toContain("· working");
+  });
+
+  it("colours done and idle with the fleet's own palette", () => {
+    expect(render(state(), "stream", "done")).toContain('class="turn-pill life-done"');
+    expect(render(state(), "stream", "idle")).toContain('class="turn-pill life-idle"');
+    expect(render(state(), "stream", "unknown")).toContain('class="turn-pill life-unknown"');
+  });
+
+  it("names each setting select for assistive tech and the smoke harness", () => {
+    const html = render(state({ controls: [modelControl()] }));
+    expect(html).toContain('aria-label="Model"');
+  });
+
+  it("keeps the settings bar below the input, inside the composer", () => {
+    const html = render(state({ controls: [modelControl()] }));
+    const composer = html.indexOf('class="session-composer"');
+    expect(composer).toBeGreaterThan(-1);
+    // The composer is the view's last block, so its close is the first
+    // </div></div> after it opens: the select must sit inside that span.
+    const inside = html.slice(composer);
+    const close = inside.indexOf("</div></div>");
+    const field = inside.indexOf("<textarea");
+    const select = inside.indexOf('aria-label="Model"');
+    expect(field).toBeGreaterThan(-1);
+    expect(select).toBeGreaterThan(field);
+    expect(select).toBeLessThan(close);
+    expect(html.slice(0, composer)).not.toContain('aria-label="Model"');
+  });
+
+  it("names each select on hover, with the value a truncation would hide", () => {
+    const html = render(state({ controls: [modelControl()] }));
+    expect(html).toContain('title="Model: Sonnet"');
+  });
+
+  it("marks the permission dial apart from the other ghost selects", () => {
+    const html = render(
+      state({
+        controls: [{ ...modelControl(), id: "mode", name: "Permission mode", kind: "mode" }],
+      }),
+    );
+    expect(html).toContain('class="surface-control kind-mode"');
   });
 
   it("folds a run of tool calls into one expandable row that still names them", () => {
@@ -83,7 +147,7 @@ describe("the session chrome reads as a product", () => {
     expect(html).toContain('class="chip run-object mono">Edit</span>');
   });
 
-  it("gives the composer a toolbar with an accurate send hint", () => {
+  it("gives the composer a bar with an accurate send hint", () => {
     const html = render(state());
     expect(html).toContain("Enter to send");
     expect(html).toMatch(/class="session-composer"/);

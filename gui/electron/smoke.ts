@@ -206,6 +206,10 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const compose = process.env.FLT_GUI_SMOKE_COMPOSE ?? "";
   const expand = process.env.FLT_GUI_SMOKE_EXPAND ?? "";
+  // FLT_GUI_SMOKE_SET_CONTROL writes one setting as "Name=value" and waits for
+  // the agent's own update to land it back in the select: the round trip a
+  // live agent's composer bar performs, not a local DOM edit.
+  const setControl = process.env.FLT_GUI_SMOKE_SET_CONTROL ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   // FLT_GUI_SMOKE_STARTS is a JSON array of start requests: a fleet of several
   // sessions for the walks (and screenshots) that need more than one card.
@@ -529,6 +533,54 @@ export async function run(target: BrowserWindow): Promise<boolean> {
         deadline,
       );
       console.log("smoke: ok (expanded tool run)");
+    }
+
+    if (setControl !== "") {
+      const eq = setControl.indexOf("=");
+      if (eq <= 0 || eq === setControl.length - 1) {
+        throw new Error('FLT_GUI_SMOKE_SET_CONTROL must read "Name=value"');
+      }
+      if (open === "") {
+        throw new Error("the set-control walk needs FLT_GUI_SMOKE_OPEN to name the session");
+      }
+      const name = setControl.slice(0, eq);
+      const value = setControl.slice(eq + 1);
+      const selector = `.surface-controls select[aria-label=${JSON.stringify(name)}]`;
+      await waitForCondition(
+        target,
+        `!!document.querySelector(${JSON.stringify(selector)})`,
+        `the composer bar to offer ${name}`,
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const select = document.querySelector(${JSON.stringify(selector)});
+        if (!select) { throw new Error("no select named " + ${JSON.stringify(name)}); }
+        const offered = [...select.options].some((option) => option.value === ${JSON.stringify(value)});
+        if (!offered) { throw new Error("the select does not offer " + ${JSON.stringify(value)}); }
+        // A select already reading the target would satisfy the round-trip
+        // wait without any write, so the walk refuses to prove nothing.
+        if (select.value === ${JSON.stringify(value)}) {
+          throw new Error("the select already reads " + ${JSON.stringify(value)});
+        }
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype, "value").set;
+        setter.call(select, ${JSON.stringify(value)});
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      // React snaps a controlled select back to the stored current on the next
+      // render, so after one step the value only reads new again once the
+      // agent's surface update has round-tripped through the store.
+      await step();
+      await waitForCondition(
+        target,
+        `(() => {
+          const select = document.querySelector(${JSON.stringify(selector)});
+          return !!select && select.value === ${JSON.stringify(value)};
+        })()`,
+        `the agent's update to store ${name}=${value}`,
+        deadline,
+      );
+      console.log("smoke: ok (set control round trip)");
     }
 
     if (compose !== "") {

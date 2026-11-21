@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { DiffPanel } from "./DiffPanel";
 import { foldLog, runObjects, type ToolRun } from "../eventView";
-import type { Choice, Control, Entry, SessionState } from "../store";
+import type { Choice, Control, Entry, Lifecycle, SessionState } from "../store";
 import {
   IconMessage,
   IconPlan,
@@ -17,6 +17,8 @@ import { Terminal } from "./Terminal";
 
 interface Props {
   state: SessionState;
+  // lifecycle is the fleet's word for this session, so pill and fleet card never disagree.
+  lifecycle: Lifecycle;
   view: "stream" | "diff";
   onView: (view: "stream" | "diff") => void;
   onPrompt: (text: string) => void;
@@ -60,10 +62,18 @@ function ControlSelect({
     }
   }
 
+  const currentName =
+    control.kind === "boolean"
+      ? control.current === "true"
+        ? "On"
+        : "Off"
+      : (choices.find((choice) => choice.value === control.current)?.name || control.current);
+
   return (
-    <label className="surface-control">
-      <span className="muted">{control.name}</span>
+    <label className={`surface-control kind-${control.kind}`}>
       <select
+        aria-label={control.name}
+        title={`${control.name}: ${currentName}`}
         value={control.current}
         onChange={(event) => onSet(control.id, event.target.value)}
       >
@@ -183,6 +193,7 @@ function ToolRunRow({
 
 export function SessionView({
   state,
+  lifecycle,
   view,
   onView,
   onPrompt,
@@ -224,9 +235,7 @@ export function SessionView({
         <div>
           <div className="session-title">
             <h2>{state.id}</h2>
-            <span className={`turn-pill turn-${state.turn}`} aria-hidden="true">
-              {state.turn}
-            </span>
+            <span className={`turn-pill life-${lifecycle}`}>{lifecycle}</span>
           </div>
           <p className="muted">
             {state.mode} · {state.turn}
@@ -253,14 +262,6 @@ export function SessionView({
           </button>
         </div>
       </header>
-
-      {state.controls.length > 0 ? (
-        <div className="surface-controls">
-          {state.controls.map((control) => (
-            <ControlSelect key={control.id} control={control} onSet={onSetControl} />
-          ))}
-        </div>
-      ) : null}
 
       {state.error ? <p className="error">{state.error}</p> : null}
 
@@ -326,8 +327,29 @@ export function SessionView({
 
       {state.mode === "acp" ? (
         <div className="session-composer">
-          <div className="composer-toolbar">
+          <textarea
+            value={draft}
+            placeholder="Prompt the agent…"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+          />
+          {/* The settings bar sits under the field: the selects read as the
+              turn's dials beside the send they qualify, not as a second
+              header competing with the session's own. */}
+          <div className="composer-bar">
             <span className="chip composer-mode">{state.mode}</span>
+            {state.controls.length > 0 ? (
+              <div className="surface-controls">
+                {state.controls.map((control) => (
+                  <ControlSelect key={control.id} control={control} onSet={onSetControl} />
+                ))}
+              </div>
+            ) : null}
             {state.permissions.length > 0 ? (
               <span
                 className="composer-shield"
@@ -343,19 +365,6 @@ export function SessionView({
                 ? "Send unlocks when the turn ends"
                 : "Enter to send · Shift+Enter for newline"}
             </span>
-          </div>
-          <div className="composer">
-            <textarea
-              value={draft}
-              placeholder="Prompt the agent…"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-            />
             <button type="button" className="primary" onClick={submit} disabled={working}>
               <IconSend />
               {working ? "Working…" : "Send"}

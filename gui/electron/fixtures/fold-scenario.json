@@ -1,6 +1,40 @@
 {
   "name": "fold-demo",
   "capabilities": { "resume": true },
+  "surface": [
+    {
+      "id": "mode",
+      "name": "Permission mode",
+      "kind": "mode",
+      "current": "default",
+      "choices": [
+        { "value": "default", "name": "Ask first" },
+        { "value": "acceptEdits", "name": "Accept edits" },
+        { "value": "plan", "name": "Plan only" }
+      ]
+    },
+    {
+      "id": "model",
+      "name": "Model",
+      "kind": "select",
+      "current": "sonnet",
+      "choices": [
+        { "value": "sonnet", "name": "Sonnet" },
+        { "value": "opus", "name": "Opus" }
+      ]
+    },
+    {
+      "id": "effort",
+      "name": "Thinking",
+      "kind": "select",
+      "current": "low",
+      "choices": [
+        { "value": "low", "name": "Low" },
+        { "value": "high", "name": "High" }
+      ]
+    },
+    { "id": "fast", "name": "Fast answers", "kind": "boolean", "current": "false" }
+  ],
   "turns": [
     {
       "updates": [
