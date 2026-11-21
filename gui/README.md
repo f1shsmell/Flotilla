@@ -11,6 +11,7 @@ electron/client.ts   one authenticated connection: handshake, calls, notificatio
 electron/daemon.ts   connect, or start the daemon and retry
 electron/home.ts     FLT_HOME and the channel's paths, mirroring internal/home
 electron/main.ts     window, IPC handlers, one connection per open session
+electron/window.ts   the BrowserWindow settings: the security switches, offscreen smoke
 electron/smoke.ts    offscreen run that drives the real UI (FLT_GUI_SMOKE)
 src/store.ts         pure folding of the wire into what the view renders
 src/App.tsx          one store, components project it; updates flush on a frame

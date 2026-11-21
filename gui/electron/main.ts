@@ -12,6 +12,7 @@ import { ensure } from "./daemon";
 import { reconnect, type ReconnectTask } from "./reconnect";
 import { Coalescer } from "./stream";
 import { readUiState, saveUiState, type UiState } from "./uiState";
+import { windowSetup } from "./window";
 
 const channel = process.env.FLT_CHANNEL ?? "stable";
 
@@ -422,27 +423,9 @@ function createWindow(): void {
   const width = saved.window?.width ?? 1180;
   const height = saved.window?.height ?? 780;
 
-  // The smoke window renders offscreen, as the harness documents: a window on
-  // the desktop invites clicks that steer the run, and a run steered by hand
-  // is not evidence. Real windows open where the user left them.
-  const smoke = Boolean(process.env.FLT_GUI_SMOKE);
-  window = new BrowserWindow({
-    width,
-    height,
-    ...(smoke ? { x: -32000, y: -32000 } : {}),
-    backgroundColor: "#f6f4ee",
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      // A smoke window the OS marks occluded stops painting frames, freezing
-      // the log mid-turn. Throttling off keeps the run painting; a real window
-      // keeps the default, since a covered window catches up when uncovered.
-      backgroundThrottling: !smoke,
-    },
-  });
+  window = new BrowserWindow(
+    windowSetup(__dirname, { width, height, smoke: Boolean(process.env.FLT_GUI_SMOKE) }),
+  );
 
   // Size is remembered on close rather than on every resize event: a drag emits
   // hundreds of them, and only the size the user settled on matters.
