@@ -77,6 +77,8 @@ true before a signed one ships.
 | `FLT_GUI_SMOKE_DIFF` | file to open in the diff panel |
 | `FLT_GUI_SMOKE_PATCH` | added line to find in that file's patch |
 | `FLT_GUI_SMOKE_NOTE` | note to leave on that line |
+| `FLT_GUI_SMOKE_EXPAND` | open the first folded tool run, prove its body and that the fold survives a trip to the diff and back; needs `FLT_GUI_SMOKE_PROMPT` |
+| `FLT_GUI_SMOKE_SET_CONTROL` | write one setting as `Name=value` (the select's label) and wait for the agent's own update to store it; needs `FLT_GUI_SMOKE_OPEN` and a scenario with a surface |
 
 `FLT_GUI_SMOKE_FORM` and `FLT_GUI_SMOKE_AGENTS` are the two paths that walk this
 build's agent catalogue: the first picks an agent by name in the new-session
@@ -88,6 +90,33 @@ login. Its binary (`flt-replay-agent`) ships beside the daemon, and the catalogu
 looks for it there before PATH. An adapter file under
 `$FLT_HOME/config/adapters` pointing at `flt-fake-acp-agent` is the other way to
 get an agent that costs nothing.
+
+The fold leg needs a turn with several tool calls in a row, which the builtin
+scenario does not have: `electron/fixtures/fold-scenario.json` records one, plus
+the surface the composer bar renders. From the repository root, with a built GUI
+(`pnpm --dir gui build`); the `fold-demo` channel keeps the walk off any daemon
+the desktop app (`stable`) or another walk already serves — a `token mismatch`
+means some other daemon owns that channel, so pick another name. A session host
+keeps its scenario in memory, so a run after editing the fixture needs a fresh
+`FLT_HOME`; the daemon outlives the window and keeps that home's token, so a
+second walk with a different home needs its own channel; and a host holds its
+session id's pipe until the session is stopped, so a re-run needs a new session
+id too (or stop the old session from the fleet first):
+
+```bash
+go build -o /tmp/flt-daemon.exe ./cmd/flt-daemon
+go build -o /tmp/flt-session-host.exe ./cmd/flt-session-host
+go build -o /tmp/flt-replay-agent.exe ./cmd/flt-replay-agent
+# Paths embedded in JSON reach the agent unconverted, so give them native form.
+bin=/tmp/flt-replay-agent.exe fix="$PWD/gui/electron/fixtures/fold-scenario.json"
+if command -v cygpath >/dev/null; then bin="$(cygpath -m "$bin")"; fix="$(cygpath -m "$fix")"; fi
+FLT_HOME=/tmp/flt-fold-set FLT_CHANNEL=fold-demo FLT_DAEMON_BIN=/tmp/flt-daemon.exe FLT_GUI_SMOKE=1 \
+  FLT_GUI_SMOKE_OPEN=fold-1 FLT_GUI_SMOKE_PROMPT="prove the fold" \
+  FLT_GUI_SMOKE_EXPECT="Folded run proved" FLT_GUI_SMOKE_EXPAND=1 \
+  FLT_GUI_SMOKE_SET_CONTROL="Model=opus" \
+  FLT_GUI_SMOKE_START='{"id":"fold-1","command":"'"$bin"'","args":["'"$fix"'"],"mode":"acp"}' \
+  pnpm --dir gui start
+```
 
 A headless run against a real daemon and a real agent:
 

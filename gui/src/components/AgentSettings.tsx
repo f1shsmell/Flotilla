@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { AgentChange, AgentEntry } from "../store";
+import { IconBack, IconRefresh } from "./Icons";
 
 interface Props {
   agents: AgentEntry[];
@@ -64,9 +65,11 @@ export function AgentSettings({
         </div>
         <div className="row">
           <button type="button" onClick={onRefresh}>
+            <IconRefresh />
             Refresh
           </button>
           <button type="button" onClick={onClose}>
+            <IconBack />
             Back
           </button>
         </div>

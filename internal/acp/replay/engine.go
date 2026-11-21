@@ -2,13 +2,23 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 
 	sdk "github.com/coder/acp-go-sdk"
+
+	"github.com/f1shsmell/flotilla/internal/session"
 )
+
+// ErrInvalidSetting reports a set the recorded surface cannot honour.
+var ErrInvalidSetting = errors.New("replay: invalid setting")
+
+// errNoConnection reports a write arriving before the SDK handed over its
+// connection, whose receive loop starts at construction.
+var errNoConnection = errors.New("replay: no agent connection")
 
 // Agent answers prompts from a recorded scenario. It is a real ACP agent on the
 // wire, so a session driven by it reaches the daemon, the host and the renderer
@@ -19,9 +29,9 @@ type Agent struct {
 
 	mu    sync.Mutex
 	turns int
-	// tools remembers the calls already announced, because ACP sends a tool
-	// twice — once started, once updated — and the second must not create a
-	// second line in the client's timeline.
+	// surface is the live copy of the recorded settings, moved by sets under mu.
+	surface []session.Control
+	// tools remembers announced calls: ACP sends a tool twice, started and updated.
 	tools map[sdk.ToolCallId]bool
 }
 
@@ -32,7 +42,11 @@ var (
 
 // NewAgent returns an agent that answers from s.
 func NewAgent(s Scenario) *Agent {
-	return &Agent{scenario: s, tools: make(map[sdk.ToolCallId]bool)}
+	return &Agent{
+		scenario: s,
+		tools:    make(map[sdk.ToolCallId]bool),
+		surface:  append([]session.Control(nil), s.Surface...),
+	}
 }
 
 // SetAgentConnection receives the connection the SDK builds. Its receive loop
@@ -71,7 +85,10 @@ func (a *Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, 
 // NewSession names the session after its workspace, so a replayed window shows
 // an id that reads like the one a live agent would have chosen.
 func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
-	return sdk.NewSessionResponse{SessionId: sdk.SessionId("replay-" + baseName(params.Cwd))}, nil
+	return sdk.NewSessionResponse{
+		SessionId:     sdk.SessionId("replay-" + baseName(params.Cwd)),
+		ConfigOptions: a.configOptions(),
+	}, nil
 }
 
 // LoadSession has nothing to restore: a scenario is the whole conversation.
@@ -80,9 +97,10 @@ func (a *Agent) LoadSession(context.Context, sdk.LoadSessionRequest) (sdk.LoadSe
 }
 
 // ResumeSession accepts the id it is given, which is what a client checking a
-// resumed session expects to hear.
+// resumed session expects to hear. The surface comes back with it: a resumed
+// session offers the same settings a new one does.
 func (a *Agent) ResumeSession(context.Context, sdk.ResumeSessionRequest) (sdk.ResumeSessionResponse, error) {
-	return sdk.ResumeSessionResponse{}, nil
+	return sdk.ResumeSessionResponse{ConfigOptions: a.configOptions()}, nil
 }
 
 // Cancel ends the turn being streamed. The stream checks the context between
@@ -94,9 +112,158 @@ func (a *Agent) SetSessionMode(context.Context, sdk.SetSessionModeRequest) (sdk.
 	return sdk.SetSessionModeResponse{}, nil
 }
 
-// SetSessionConfigOption accepts any option.
-func (a *Agent) SetSessionConfigOption(context.Context, sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
-	return sdk.SetSessionConfigOptionResponse{}, nil
+// SetSessionConfigOption moves one recorded setting and announces the whole
+// option list before responding, so a client that reads the surface after its
+// set returns sees the value it asked for.
+func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
+	var id, value string
+	var sessionID sdk.SessionId
+	var boolean bool
+	switch {
+	case params.ValueId != nil:
+		sessionID, id, value = params.ValueId.SessionId, string(params.ValueId.ConfigId), string(params.ValueId.Value)
+	case params.Boolean != nil:
+		sessionID, id, boolean = params.Boolean.SessionId, string(params.Boolean.ConfigId), params.Boolean.Value
+		value = fmt.Sprintf("%t", boolean)
+	default:
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("set config option carries no value: %w", ErrInvalidSetting)
+	}
+
+	a.mu.Lock()
+	conn := a.conn
+	if conn == nil {
+		a.mu.Unlock()
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("set control %q: %w", id, errNoConnection)
+	}
+	index := -1
+	for i, control := range a.surface {
+		if control.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		a.mu.Unlock()
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("control %q is not offered: %w", id, ErrInvalidSetting)
+	}
+	control := a.surface[index]
+	if control.Kind == session.ControlBoolean {
+		if value != "true" && value != "false" {
+			a.mu.Unlock()
+			return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("boolean control %q takes true or false, got %q: %w", id, value, ErrInvalidSetting)
+		}
+	} else if !offers(control, value) {
+		a.mu.Unlock()
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("control %q does not offer %q: %w", id, value, ErrInvalidSetting)
+	}
+	control.Current = value
+	a.surface[index] = control
+	options := configOptionsOf(a.surface)
+	// The announcement leaves under the lock that moved the surface: two
+	// concurrent sets must reach the client in applied order, or an older
+	// snapshot landing last would overwrite the newer one.
+	if err := conn.SessionUpdate(ctx, sdk.SessionNotification{
+		SessionId: sessionID,
+		Update: sdk.SessionUpdate{
+			ConfigOptionUpdate: &sdk.SessionConfigOptionUpdate{ConfigOptions: options},
+		},
+	}); err != nil {
+		// A failed announce leaves the move applied: the surface is the agent's
+		// state and a resume resyncs the client, while a rollback could reorder
+		// a concurrent set's announcement.
+		a.mu.Unlock()
+		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("replay: announce control %q: %w", id, err)
+	}
+	a.mu.Unlock()
+	return sdk.SetSessionConfigOptionResponse{ConfigOptions: options}, nil
+}
+
+// offers reports whether a select or mode control lists value among its choices.
+func offers(c session.Control, value string) bool {
+	for _, choice := range c.Choices {
+		if choice.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+// configOptions reads the live surface under the lock a set takes.
+func (a *Agent) configOptions() []sdk.SessionConfigOption {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return configOptionsOf(a.surface)
+}
+
+// configOptionsOf turns recorded controls into the announced option shapes: a
+// mode is a mode-category select, the newer API for the same setting, so one
+// write path serves every control the bar renders.
+func configOptionsOf(surface []session.Control) []sdk.SessionConfigOption {
+	options := make([]sdk.SessionConfigOption, 0, len(surface))
+	for _, control := range surface {
+		if control.Kind == session.ControlBoolean {
+			options = append(options, sdk.SessionConfigOption{Boolean: &sdk.SessionConfigOptionBoolean{
+				Id:           sdk.SessionConfigId(control.ID),
+				Name:         control.Name,
+				Type:         "boolean",
+				CurrentValue: control.Current == "true",
+			}})
+			continue
+		}
+		selectOption := &sdk.SessionConfigOptionSelect{
+			Id:           sdk.SessionConfigId(control.ID),
+			Name:         control.Name,
+			Type:         "select",
+			CurrentValue: sdk.SessionConfigValueId(control.Current),
+		}
+		if control.Kind == session.ControlMode {
+			category := sdk.SessionConfigOptionCategoryMode
+			selectOption.Category = &category
+		}
+		selectOption.Options = choicesOf(control.Choices)
+		options = append(options, sdk.SessionConfigOption{Select: selectOption})
+	}
+	return options
+}
+
+// choicesOf projects the recorded choices onto the wire's oneOf: a flat list or
+// grouped sections, never both. Decode refuses a mixed recording, so choosing
+// the grouped shape here drops nothing a file could carry.
+func choicesOf(choices []session.Choice) sdk.SessionConfigSelectOptions {
+	var ungrouped sdk.SessionConfigSelectOptionsUngrouped
+	var groups sdk.SessionConfigSelectOptionsGrouped
+	for _, choice := range choices {
+		option := sdk.SessionConfigSelectOption{
+			Value: sdk.SessionConfigValueId(choice.Value),
+			Name:  choice.Name,
+		}
+		if choice.Group == "" {
+			ungrouped = append(ungrouped, option)
+			continue
+		}
+		index := -1
+		for i, group := range groups {
+			if group.Name == choice.Group {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			groups = append(groups, sdk.SessionConfigSelectGroup{
+				Group: sdk.SessionConfigGroupId(choice.Group),
+				Name:  choice.Group,
+			})
+			index = len(groups) - 1
+		}
+		groups[index].Options = append(groups[index].Options, option)
+	}
+	var options sdk.SessionConfigSelectOptions
+	if len(groups) > 0 {
+		options.Grouped = &groups
+	} else if len(ungrouped) > 0 {
+		options.Ungrouped = &ungrouped
+	}
+	return options
 }
 
 // CloseSession does nothing: a scenario holds no per-session state worth
@@ -114,10 +281,13 @@ func (a *Agent) ListSessions(context.Context, sdk.ListSessionsRequest) (sdk.List
 // one the final turn is repeated, because a demo must not break when somebody
 // types twice.
 func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.PromptResponse, error) {
-	turn := a.nextTurn()
 	a.mu.Lock()
 	conn := a.conn
 	a.mu.Unlock()
+	if conn == nil {
+		return sdk.PromptResponse{}, fmt.Errorf("prompt: %w", errNoConnection)
+	}
+	turn := a.nextTurn()
 
 	for _, update := range turn.Updates {
 		// A cancelled context ends the turn cleanly: the client asked to stop,

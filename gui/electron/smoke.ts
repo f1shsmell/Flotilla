@@ -205,6 +205,11 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const heal = process.env.FLT_GUI_SMOKE_HEAL ?? "";
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const compose = process.env.FLT_GUI_SMOKE_COMPOSE ?? "";
+  const expand = process.env.FLT_GUI_SMOKE_EXPAND ?? "";
+  // FLT_GUI_SMOKE_SET_CONTROL writes one setting as "Name=value" and waits for
+  // the agent's own update to land it back in the select: the round trip a
+  // live agent's composer bar performs, not a local DOM edit.
+  const setControl = process.env.FLT_GUI_SMOKE_SET_CONTROL ?? "";
   const startRequest = process.env.FLT_GUI_SMOKE_START ?? "";
   // FLT_GUI_SMOKE_STARTS is a JSON array of start requests: a fleet of several
   // sessions for the walks (and screenshots) that need more than one card.
@@ -469,6 +474,113 @@ export async function run(target: BrowserWindow): Promise<boolean> {
 
     if (prompt !== "") {
       await sendPrompt(target, prompt);
+    }
+
+    if (expand !== "") {
+      if (prompt === "") {
+        throw new Error("the expand walk needs FLT_GUI_SMOKE_PROMPT to produce the fold");
+      }
+      // Open the first folded run so the shot proves the fold carries its calls:
+      // the summary names them, the body reveals each one. The turn may still be
+      // in flight when the prompt leg returns, so wait for the fold itself.
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run summary")`,
+        "a folded tool run to appear in the log",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const summary = document.querySelector(".entry-run summary");
+        if (!summary) { throw new Error("no folded tool run in the log"); }
+        summary.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run[open]")`,
+        "the folded tool run to open",
+        deadline,
+      );
+      await waitForCondition(
+        target,
+        `document.querySelectorAll(".entry-run[open] .run-body .entry").length >= 2`,
+        "the opened fold to reveal its calls",
+        deadline,
+      );
+      // A view switch unmounts the log; the fold the reader opened must survive
+      // the trip to the diff and back.
+      await target.webContents.executeJavaScript(`(() => {
+        const diff = [...document.querySelectorAll(".session-actions button")]
+          .find((button) => button.textContent === "Diff");
+        if (!diff) { throw new Error("no Diff button"); }
+        diff.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".diff")`,
+        "the diff view to render before returning to the log",
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const log = [...document.querySelectorAll(".session-actions button")]
+          .find((button) => button.textContent === "Log");
+        if (!log) { throw new Error("no Log button"); }
+        log.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".entry-run[open]")`,
+        "the fold to stay open across the view switch",
+        deadline,
+      );
+      console.log("smoke: ok (expanded tool run)");
+    }
+
+    if (setControl !== "") {
+      const eq = setControl.indexOf("=");
+      if (eq <= 0 || eq === setControl.length - 1) {
+        throw new Error('FLT_GUI_SMOKE_SET_CONTROL must read "Name=value"');
+      }
+      if (open === "") {
+        throw new Error("the set-control walk needs FLT_GUI_SMOKE_OPEN to name the session");
+      }
+      const name = setControl.slice(0, eq);
+      const value = setControl.slice(eq + 1);
+      const selector = `.surface-controls select[aria-label=${JSON.stringify(name)}]`;
+      await waitForCondition(
+        target,
+        `!!document.querySelector(${JSON.stringify(selector)})`,
+        `the composer bar to offer ${name}`,
+        deadline,
+      );
+      await target.webContents.executeJavaScript(`(() => {
+        const select = document.querySelector(${JSON.stringify(selector)});
+        if (!select) { throw new Error("no select named " + ${JSON.stringify(name)}); }
+        const offered = [...select.options].some((option) => option.value === ${JSON.stringify(value)});
+        if (!offered) { throw new Error("the select does not offer " + ${JSON.stringify(value)}); }
+        // A select already reading the target would satisfy the round-trip
+        // wait without any write, so the walk refuses to prove nothing.
+        if (select.value === ${JSON.stringify(value)}) {
+          throw new Error("the select already reads " + ${JSON.stringify(value)});
+        }
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype, "value").set;
+        setter.call(select, ${JSON.stringify(value)});
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      // React snaps a controlled select back to the stored current on the next
+      // render, so after one step the value only reads new again once the
+      // agent's surface update has round-tripped through the store.
+      await step();
+      await waitForCondition(
+        target,
+        `(() => {
+          const select = document.querySelector(${JSON.stringify(selector)});
+          return !!select && select.value === ${JSON.stringify(value)};
+        })()`,
+        `the agent's update to store ${name}=${value}`,
+        deadline,
+      );
+      console.log("smoke: ok (set control round trip)");
     }
 
     if (compose !== "") {

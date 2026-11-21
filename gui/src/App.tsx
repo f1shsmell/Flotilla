@@ -624,6 +624,9 @@ export function App(): React.ReactElement {
         {session ? (
           <SessionView
             state={session}
+            lifecycle={
+              fleet?.sessions.find((entry) => entry.id === session.id)?.lifecycle ?? "unknown"
+            }
             view={view}
             onView={setView}
             onPrompt={(text) => void prompt(text)}

@@ -62,27 +62,47 @@
   align-items: center;
 }
 
-/* The agent's own settings, projected by the daemon. They sit under the header
-   so a mode switch reads as part of the session, not of the window's chrome. */
+/* The agent's own settings, projected by the daemon. They ride the composer
+   bar under the field as ghost selects: the current value is the label, and
+   the box only appears on hover or focus. */
 .surface-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-4);
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
 .surface-control {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  min-width: 0;
 }
 
 .surface-control select {
   font: inherit;
+  font-size: var(--fs-small);
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-2);
+  max-width: 160px;
+  cursor: pointer;
+}
+
+.surface-control select:hover {
   color: var(--text);
   background: var(--sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: 3px var(--sp-3);
+  border-color: var(--line);
+}
+
+/* The permission dial wears the harbor's amber: one glance says how much
+   the agent may do unasked. */
+.surface-control.kind-mode select,
+.surface-control.kind-mode select:hover {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 .log {
@@ -109,6 +129,18 @@
   word-break: break-word;
 }
 
+/* Answers close a beat of the log and a new prompt opens the next one above a
+   hairline, so turns read as paragraphs rather than one wall of lines. */
+.entry.message {
+  margin-bottom: var(--sp-4);
+}
+
+.entry.user:not(:first-child) {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
 .entry.thought {
   color: var(--muted);
   font-style: italic;
@@ -132,14 +164,7 @@
   font-size: var(--fs-small);
 }
 
-.composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-3);
-  align-items: end;
-}
-
-.composer textarea {
+.session-composer textarea {
   font: inherit;
   color: var(--text);
   background: var(--sunken);
@@ -148,6 +173,16 @@
   padding: var(--sp-3) var(--sp-4);
   resize: vertical;
   min-height: 56px;
+  width: 100%;
+}
+
+/* The field and the settings selects answer focus with the harbor's signal
+   blue, so the place typing lands is never a guess. */
+.session-composer textarea:focus,
+.surface-control select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
 .permission {
@@ -260,4 +295,183 @@
     var(--bg);
   display: flex;
   min-height: 0;
+}
+
+/* The session name and its live state read together: the pill is the state at
+   a glance, the mono name is the identity the smoke harness and the user read. */
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.turn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--sunken);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The dot and the hues are the fleet badge's: one state vocabulary across the
+   window, so a card and the open session never tell two stories. */
+.turn-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  flex: none;
+}
+
+.turn-pill.life-working {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.turn-pill.life-done {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.turn-pill.life-blocked {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.turn-pill.life-unknown {
+  background: var(--unknown-bg);
+  color: var(--unknown);
+}
+
+/* Kind icons sit on the text baseline and stay quiet: they label the row, they
+   are not the row's content. */
+.entry .icon {
+  vertical-align: -2px;
+  margin-right: var(--sp-2);
+  color: var(--muted);
+}
+
+.entry.user .icon {
+  color: var(--dim);
+}
+
+/* A folded run of tool calls. The summary names the count and the objects, so
+   collapsing never hides what happened; opening reveals each call. */
+.entry-run {
+  margin: 0 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+}
+
+.entry-run summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--dim);
+  list-style: none;
+  border-radius: var(--r-sm);
+  transition: background 120ms ease;
+}
+
+.entry-run summary:hover,
+.entry-run[open] summary {
+  background: var(--panel);
+}
+
+.entry-run[open] summary {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+
+.entry-run summary::-webkit-details-marker {
+  display: none;
+}
+
+.entry-run summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.entry-run[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.entry-run summary .icon {
+  color: var(--muted);
+}
+
+.run-verb {
+  font-weight: 600;
+}
+
+.run-object {
+  font-weight: 500;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* .chip is inline-flex, and ellipsis does not apply to a flex container; as a
+     flex item this blockifies to block, where the truncation reads. */
+  display: inline-block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.run-body {
+  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  border-top: 1px solid var(--line);
+}
+
+.run-body .entry {
+  margin-bottom: var(--sp-2);
+}
+
+/* The composer is a card: the field on top, one bar below carrying the mode,
+   the agent's settings, any pending permission, an honest send hint and send. */
+.session-composer {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.composer-mode {
+  text-transform: uppercase;
+}
+
+.composer-shield {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--warn);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+}
+
+.composer-hint {
+  margin-left: auto;
+  font-size: var(--fs-tiny);
 }

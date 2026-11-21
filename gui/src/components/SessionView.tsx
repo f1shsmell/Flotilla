@@ -1,13 +1,24 @@
 import { useState } from "react";
 
 import { DiffPanel } from "./DiffPanel";
-
-import type { Choice, Control, Entry, SessionState } from "../store";
+import { foldLog, runObjects, type ToolRun } from "../eventView";
+import type { Choice, Control, Entry, Lifecycle, SessionState } from "../store";
+import {
+  IconMessage,
+  IconPlan,
+  IconSend,
+  IconShield,
+  IconThought,
+  IconTool,
+  IconUser,
+} from "./Icons";
 import { PermissionCard } from "./PermissionCard";
 import { Terminal } from "./Terminal";
 
 interface Props {
   state: SessionState;
+  // lifecycle is the fleet's word for this session, so pill and fleet card never disagree.
+  lifecycle: Lifecycle;
   view: "stream" | "diff";
   onView: (view: "stream" | "diff") => void;
   onPrompt: (text: string) => void;
@@ -51,10 +62,18 @@ function ControlSelect({
     }
   }
 
+  const currentName =
+    control.kind === "boolean"
+      ? control.current === "true"
+        ? "On"
+        : "Off"
+      : (choices.find((choice) => choice.value === control.current)?.name || control.current);
+
   return (
-    <label className="surface-control">
-      <span className="muted">{control.name}</span>
+    <label className={`surface-control kind-${control.kind}`}>
       <select
+        aria-label={control.name}
+        title={`${control.name}: ${currentName}`}
         value={control.current}
         onChange={(event) => onSet(control.id, event.target.value)}
       >
@@ -77,19 +96,50 @@ function ControlSelect({
   );
 }
 
+function KindIcon({ kind }: { kind: Entry["kind"] }): React.ReactElement {
+  switch (kind) {
+    case "user":
+      return <IconUser />;
+    case "thought":
+      return <IconThought />;
+    case "tool":
+      return <IconTool />;
+    case "plan":
+      return <IconPlan />;
+    default:
+      return <IconMessage />;
+  }
+}
+
 function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
   switch (entry.kind) {
     case "user":
       // The person's own words: the only line in the log the agent did not
       // produce, so it reads as a distinct turn rather than agent output.
-      return <p className="entry user">{entry.text}</p>;
+      return (
+        <p className="entry user">
+          <KindIcon kind={entry.kind} />
+          {entry.text}
+        </p>
+      );
     case "message":
-      return <p className="entry message">{entry.text}</p>;
+      return (
+        <p className="entry message">
+          <KindIcon kind={entry.kind} />
+          {entry.text}
+        </p>
+      );
     case "thought":
-      return <p className="entry thought">{entry.text}</p>;
+      return (
+        <p className="entry thought">
+          <KindIcon kind={entry.kind} />
+          {entry.text}
+        </p>
+      );
     case "tool":
       return (
         <p className="entry tool">
+          <KindIcon kind={entry.kind} />
           <span className="mono">{entry.toolTitle || entry.key}</span>
           {entry.toolStatus ? <span className="muted"> · {entry.toolStatus}</span> : null}
         </p>
@@ -97,14 +147,53 @@ function EntryLine({ entry }: { entry: Entry }): React.ReactElement {
     default:
       return (
         <p className="entry other">
+          <KindIcon kind={entry.kind} />
           <span className="muted">{entry.kind}</span> {entry.text}
         </p>
       );
   }
 }
 
+// A run of tool calls reads as one event with its objects named on the summary;
+// opening it reveals each call. Native details keeps the fold cheap, and the
+// open flag lives in the view so a switch to the diff and back does not reset
+// every fold the reader opened.
+function ToolRunRow({
+  run,
+  open,
+  onToggle,
+}: {
+  run: ToolRun;
+  open: boolean;
+  onToggle: (key: string, open: boolean) => void;
+}): React.ReactElement {
+  return (
+    <details
+      className="entry-run"
+      open={open}
+      onToggle={(event) => onToggle(run.key, event.currentTarget.open)}
+    >
+      <summary>
+        <IconTool />
+        <span className="run-verb">{run.entries.length} tool calls</span>
+        {runObjects(run).map((name) => (
+          <span key={name} className="chip run-object mono">
+            {name}
+          </span>
+        ))}
+      </summary>
+      <div className="run-body">
+        {run.entries.map((entry) => (
+          <EntryLine key={entry.key} entry={entry} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function SessionView({
   state,
+  lifecycle,
   view,
   onView,
   onPrompt,
@@ -116,7 +205,20 @@ export function SessionView({
   onResize,
 }: Props): React.ReactElement {
   const [draft, setDraft] = useState("");
+  const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(new Set());
   const working = state.turn === "working";
+
+  const toggleRun = (key: string, open: boolean): void => {
+    setOpenRuns((current) => {
+      const next = new Set(current);
+      if (open) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  };
 
   const submit = (): void => {
     const text = draft.trim();
@@ -131,7 +233,10 @@ export function SessionView({
     <div className="session-view">
       <header className="session-header">
         <div>
-          <h2>{state.id}</h2>
+          <div className="session-title">
+            <h2>{state.id}</h2>
+            <span className={`turn-pill life-${lifecycle}`}>{lifecycle}</span>
+          </div>
           <p className="muted">
             {state.mode} · {state.turn}
             {state.stopReason ? ` · ${state.stopReason}` : ""}
@@ -157,14 +262,6 @@ export function SessionView({
           </button>
         </div>
       </header>
-
-      {state.controls.length > 0 ? (
-        <div className="surface-controls">
-          {state.controls.map((control) => (
-            <ControlSelect key={control.id} control={control} onSet={onSetControl} />
-          ))}
-        </div>
-      ) : null}
 
       {state.error ? <p className="error">{state.error}</p> : null}
 
@@ -212,13 +309,24 @@ export function SessionView({
           {state.entries.length === 0 ? (
             <p className="empty">Nothing yet. Send a prompt.</p>
           ) : (
-            state.entries.map((entry) => <EntryLine key={entry.key} entry={entry} />)
+            foldLog(state.entries).map((row) =>
+              row.kind === "run" ? (
+                <ToolRunRow
+                  key={row.key}
+                  run={row}
+                  open={openRuns.has(row.key)}
+                  onToggle={toggleRun}
+                />
+              ) : (
+                <EntryLine key={row.entry.key} entry={row.entry} />
+              ),
+            )
           )}
         </div>
       )}
 
       {state.mode === "acp" ? (
-        <div className="composer">
+        <div className="session-composer">
           <textarea
             value={draft}
             placeholder="Prompt the agent…"
@@ -230,9 +338,38 @@ export function SessionView({
               }
             }}
           />
-          <button type="button" className="primary" onClick={submit} disabled={working}>
-            {working ? "Working…" : "Send"}
-          </button>
+          {/* The settings bar sits under the field: the selects read as the
+              turn's dials beside the send they qualify, not as a second
+              header competing with the session's own. */}
+          <div className="composer-bar">
+            <span className="chip composer-mode">{state.mode}</span>
+            {state.controls.length > 0 ? (
+              <div className="surface-controls">
+                {state.controls.map((control) => (
+                  <ControlSelect key={control.id} control={control} onSet={onSetControl} />
+                ))}
+              </div>
+            ) : null}
+            {state.permissions.length > 0 ? (
+              <span
+                className="composer-shield"
+                aria-label={`${state.permissions.length} pending permission${state.permissions.length === 1 ? "" : "s"}`}
+                title={`${state.permissions.length} pending permission${state.permissions.length === 1 ? "" : "s"}`}
+              >
+                <IconShield />
+                {state.permissions.length}
+              </span>
+            ) : null}
+            <span className="muted composer-hint">
+              {working
+                ? "Send unlocks when the turn ends"
+                : "Enter to send · Shift+Enter for newline"}
+            </span>
+            <button type="button" className="primary" onClick={submit} disabled={working}>
+              <IconSend />
+              {working ? "Working…" : "Send"}
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

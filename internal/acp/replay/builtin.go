@@ -1,5 +1,7 @@
 package replay
 
+import "github.com/f1shsmell/flotilla/internal/session"
+
 // Builtin is the scenario a session runs when nobody names one. It exists so
 // the replay preset works out of the box: a demo, a GIF recording or a GUI
 // smoke run can start a session with no fixture to prepare and no token spent.
@@ -11,6 +13,33 @@ func Builtin() Scenario {
 	return Scenario{
 		Name:         "builtin",
 		Capabilities: Capabilities{Resume: true},
+		// The composer bar is part of what a session shows: a demo with no
+		// surface would hide the controls a live agent offers.
+		Surface: []session.Control{
+			{
+				ID: "mode", Name: "Permission mode", Kind: session.ControlMode, Current: "default",
+				Choices: []session.Choice{
+					{Value: "default", Name: "Ask first"},
+					{Value: "acceptEdits", Name: "Accept edits"},
+					{Value: "plan", Name: "Plan only"},
+				},
+			},
+			{
+				ID: "model", Name: "Model", Kind: session.ControlSelect, Current: "sonnet",
+				Choices: []session.Choice{
+					{Value: "sonnet", Name: "Sonnet"},
+					{Value: "opus", Name: "Opus"},
+				},
+			},
+			{
+				ID: "effort", Name: "Thinking", Kind: session.ControlSelect, Current: "low",
+				Choices: []session.Choice{
+					{Value: "low", Name: "Low"},
+					{Value: "high", Name: "High"},
+				},
+			},
+			{ID: "fast", Name: "Fast answers", Kind: session.ControlBoolean, Current: "false"},
+		},
 		Turns: []Turn{
 			{
 				Updates: []Update{
