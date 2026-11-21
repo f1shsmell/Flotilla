@@ -32,6 +32,9 @@ its discipline.
   [AGENTS.md](AGENTS.md))
 - Positioning: [docs/positioning.md](docs/positioning.md)
 - Support matrix, verified only: [docs/support-matrix.md](docs/support-matrix.md)
+- Remote access and the phone client, design only:
+  [docs/remote-access.md](docs/remote-access.md) ·
+  [docs/ui-remote-design.md](docs/ui-remote-design.md)
 - Conventions and workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Versioning: [VERSIONING.md](VERSIONING.md) · Releases:
   [RELEASING.md](RELEASING.md) · Security: [SECURITY.md](SECURITY.md)
