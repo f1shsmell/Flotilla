@@ -139,29 +139,38 @@
 
 ## 三、方案分档
 
-### 档 A：SSH stdio 桥（零服务器，先做）
+### 档 A：SSH 端口转发 + 远端常驻 daemon（零服务器，先做）
+
+> **2026-11-22 修订**：上一稿写的是「SSH stdio 桥」。读了内核
+> `internal/platform/remote` 之后判定该形态选错，改为端口转发。完整理由见
+> [remote-access-review.md](remote-access-review.md)。
 
 ```
-GUI ──本地 pipe──▶ flt-daemon ──?──▶ 远端 flt-daemon
-                        │
-                        └─ flt remote attach --ssh user@host
-                             本地 loopback listener
-                             ↕ ssh stdio（stdin/stdout 就是字节流）
-                             远端 `flt serve --stdio`
+GUI ──pipe──▶ 本机 daemon ──TCP──▶ 127.0.0.1:<随机端口>
+                                      ▲
+                                      │ ssh -L 转发
+                                      │
+                              远端 flt-daemon（常驻，只绑 loopback）
 ```
 
-- 实现点：`internal/ipc` 增加 `Remote` 传输，`dial` 在 `Address.Remote != ""` 时
-  返回一个包住 `ssh` 子进程 stdio 的 `net.Conn`（`net.Pipe` 语义，带 idle 检测）。
-- 远端 `flt serve --stdio` 只需把本地 daemon pipe 的两端对接 stdio，**协议零改动**。
-- 认证：SSH 自己的密钥认证。token 仍然在握手时发送，但**它只在 SSH 隧道内出现**，
-  不落到任何第三方。
-- 验收：`TestRemoteAttachOverStdio` —— 进程内起 daemon，`ssh` 用
-  `cmd /c type` 之类的替身管道（测试里替换 `ssh` 为 `TestHelperStdioBridge`），
-  `flt status` 经桥拿到 fleet；杀 daemon 重连，会话不断。
-- 代价：约 1–2 天。需要用户在远端装 `flt`（与 herdr 的取舍相同）。
+- 实现点：`internal/ipc` 的 `Listen`/`Dial` 增加 `tcp` 传输（今天只有 pipe/UDS）。
+  **`Address` 不需要 `Remote` 字段**——远程只是把 daemon 的地址换成一个本地转发端口。
+- 远端：一个常驻 `flt-daemon`，绑 `127.0.0.1` 的**随机端口**，token 写文件
+  （`ipc.WriteTokenFile` 已有，ACL 收紧），**绝不进 argv**。
+- bootstrap：远端安装/定位 `flt`、起进程、记录端口与 token 以便复用。这是主要工作量。
+- supervisor：六态 `idle / connecting / live / degraded / reconnecting / stopped`，
+  带 keepalive 与指数退避。**`degraded` 必须说明哪一条转发坏了**，不能只给颜色。
+- 主机密钥：系统 `known_hosts` 只读参考 + 自有 TOFU 文件（双份，照内核）。
+- 验收：`TestRemoteForwardOverSSH` —— 测试里用进程内 SSH 替身，`flt status` 经转发
+  拿到 fleet；断链后重连，远端会话仍在。
+- 代价：**一到两周**（不是上一稿估的 1–2 天），因为 bootstrap 与 supervisor 是主体。
 - 不解决：手机蜂窝场景（SSH 在手机上不现实）。
 
-### 档 B：自建 E2E relay（手机端才需要）
+**档 A 的前置条件（写死）**：单写者写泵。远程会引入多客户端共享一个 daemon 连接，
+`internal/daemon/relay.go` 的 `peerQueue` 是唯一写路径，任何新增写者都必须走它。
+内核 `relay_write.go` 的注释说明了不加这条的后果（gorilla 只允许单写者）。
+
+### 档 B：字节级 E2E relay（手机端才需要）
 
 **直接复用 `relay-kit` 的 `relay-e2e/v1` 协议，不另造。**
 
@@ -171,10 +180,17 @@ GUI ──本地 pipe──▶ flt-daemon ──?──▶ 远端 flt-daemon
   抢占语义、挂起与超时码。
 - 理由三：用户自己维护过 Alma 与 Codex-Android 两条链路，踩坑记录是现成的。
 - 我们只需写两端：Go 的 relay agent（桌面侧，出站 WSS）与 Flotilla 手机的 E2E 客户端。
-  桌面侧把 E2E 明文接到**本地 daemon pipe**，于是又回到"`ipc.Conn` 之上一切不变"。
+  桌面侧把 E2E 明文接到**本地 daemon 的 pipe/UDS**，于是又回到"`ipc.Conn` 之上一切不变"。
 - 分帧：E2E 隧道内跑的是 `ipc` 的帧格式（`kind+stream+len`），不是 HTTP。
   这一条与 Alma/Codex 不同（它们转 HTTP/SSE），因为 Flotilla 的 daemon 本来就是
   JSON-RPC over 流，不需要 HTTP 门面。
+
+**2026-11-22 补充：不做消息级 mux。** 内核的 `CLOUD_MUX_PLAN.md` 之所以需要 mux
+（逻辑流 + credit 背压），是因为它的账号中继是 **L7 消息管道**——只搬消息，没有字节背压。
+Flotilla 的中继搬的是**字节流**，TCP 背压天然可用，`kind+stream+len` 帧自带边界。
+`Reasonix-Android/docs/RELAY_DESIGN.md` 否决 alma-relay Protocol 3 的那条理由，
+对 Flotilla 依然成立。**只有当中继将来需要按消息做授权或多人协作时才引入 mux。**
+
 - 验收：`TestRelayKitInterop` —— Go 桌面 agent ↔ relay-kit 的 Node fixture，
   跑完握手、重放攻击被拒、抢占后旧连接收到 4000。
 
@@ -208,9 +224,36 @@ GUI ──本地 pipe──▶ flt-daemon ──?──▶ 远端 flt-daemon
 |---|---|---|
 | `link` | 本机 GUI ↔ daemon（或 relay 段）是否活着 | 与"会话是否在跑"混淆，用户以为活干完了 |
 | `session` | host 是否答得上（attach 成功） | 与 `link` 混淆，重连按钮按了没反应 |
-| `remote` | 远端机器是否可达（档 A 是 SSH 进程存活，档 B 是 relay 段 + agent 在线） | 与 `session` 混淆，用户去查错地方 |
+| `remote` | 远端机器是否可达（档 A 是 SSH 转发是否挂着，档 B 是 relay 段 + agent 在线） | 与 `session` 混淆，用户去查错地方 |
+
+**2026-11-22 修订**：`link` 不能是布尔，要有 `degraded`。内核的六态
+`idle / connecting / connected / reconnecting / degraded / stopped` 比我上一稿的三层
+更精确，关键在 **`degraded`**：连上了，但至少一条转发没挂上。三态模型里没有位置放这个
+事实，它会落到"`link` 活着但某个会话打不开"，用户看到的正是"连着呢怎么打不开"。
+
+所以：
+
+```ts
+type Link = "idle" | "connecting" | "live" | "degraded" | "reconnecting" | "stopped";
+```
+
+`degraded` **必须带上"哪一条坏了"**（哪个转发/哪个会话），不能只给一个颜色。
 
 `reachable` 这个现有布尔要拆开；`unknown` 永远是 `unknown`，不当作完成。
+
+## 五之二、三条不可配置的硬规则
+
+读内核 `internal/platform/remote` 与 `docs/STUDIO_SHELL_BOUNDARIES.md` 之后补入，
+它们是"错了就是洞"的类型，不是风格问题：
+
+1. **token 不进 argv。** 进程列表在本机任何同用户进程可读，argv 里的 token 等于公开。
+   内核的注释写明 `file-based token (never in argv)`。Flotilla 的
+   `ipc.WriteTokenFile` 已经做对（文件 + `restrictToOwner`），远程档要保住：
+   远端 bootstrap 的参数里只许出现 token 的**文件路径**。
+2. **主机密钥双份判定。** 系统 `known_hosts` 只读参考 + 自有 TOFU 文件（可写）。
+   首次确认要人，之后每次连接验证，变化即拒绝并给出显式"重新确认"路径。
+3. **环回边界不可配置。** 远端 daemon 只许绑 `127.0.0.1` 的**随机端口**，
+   不许 `0.0.0.0`，不许绑定到主机名。这条要写进代码，不是文档里的建议。
 
 ## 六、手机端的边界（只读、批注、审批）
 
@@ -239,16 +282,22 @@ GUI ──本地 pipe──▶ flt-daemon ──?──▶ 远端 flt-daemon
 
 | 档 | 落在 | 前置 |
 |---|---|---|
-| A | PLAN M3「多机（SSH 节点入列）」 | `ipc.Address` 加 `Remote`；`flt serve --stdio` |
+| A | PLAN M3「多机（SSH 节点入列）」 | `ipc` 的 `tcp` 传输；远端 bootstrap + supervisor；单写者写泵 |
 | B | PLAN M3「跨设备 relay」 | 档 A 的传输抽象；relay-kit 协议互操作测试 |
 | C | 不做 | — |
 
 档 A 可以提前到 M2 末尾做，因为它不依赖 Orchestrator，且能立刻解决"两台机器一个窗口"。
+**但它的成本是 1–2 周**（bootstrap + supervisor + known_hosts），不是上一稿估的 1–2 天。
 
 ## 九、未核实项（如实列出）
 
-- 档 A 的 `ssh` stdio 在 Windows 上的行缓冲/二进制模式：`ssh.exe` 默认二进制安全，
-  但**未在本机实测**；实现前要跑一次 `ssh host cat` 传二进制帧的探针。
+- **远端 daemon 与本地 daemon 的关系**：两个独立 daemon 各管各的会话，还是本地 daemon
+  代理远端？上一稿假定后者（一个窗口看两台机器），但内核的做法是**每个远端一个 serve
+  进程、本地按 workspace 路由**。这条要重新设计，是档 A 的核心问题，本文档没有答案。
+- 内核的 bootstrap 如何处理 Windows 远端（`windowsshell.go` 约 10KB，未细读）。
+- `forward.Set` 的端口冲突处理（`addrinuse.go` 存在，逻辑未细读）。
+- Flotilla 的 `ipc` 加 `tcp` 传输时，capability gate 是否需要新能力位（倾向不需要：
+  传输变了，协议没变）。
 - 档 B 的 Go 侧 WSS 客户端选型（`nhooyr.io/websocket` vs `gorilla/websocket`）未定；
   relay-kit 的 Node fixture 用 `ws`，互操作要实测。
 - 手机端技术栈未定（Capacitor 复用 renderer，还是原生）；用户两套先例分别是

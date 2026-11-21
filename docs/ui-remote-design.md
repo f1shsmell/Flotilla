@@ -42,26 +42,36 @@
 - **机器头是分隔，不是可折叠面板。** 折叠会藏住 `blocked`，与"等你拍板的恒在最上"
   直接冲突。分段之后**全局排序不变**：`blocked(0) < done(1) < unknown(2) <
   working(3) < idle(4)` 仍然跨机器生效，机器只是视觉分组。
-- **机器状态与��话状态分开报。** 机器头只显示三种：`online`（绿点）、
-  `reconnecting`（琥珀点 + 转圈，但**转圈只在真重连时动**）、`offline`（红点，
+- **机器状态与会话状态分开报。** 机器头只显示四种：`live`（绿点）、
+  `degraded`（琥珀点，**不转圈**——它已经连上了，只是某条转发坏了）、
+  `reconnecting`（琥珀点 + 转圈，转圈只在真重连时动）、`offline`（红点，
   且该段会话一律显示 `unknown`，不显示上次的 `done`）。
 - **离线机器的会话不删。** 保留最后已知状态并打 `stale` 标记，点击时尝试重连；
   删除是用户动作。
 
 ### 2.3 新的连接状态投影（纯函数，可测）
 
-`store.ts` 现有 `StatusEntry.reachable: boolean` 拆成三值，保持向后兼容：
+`store.ts` 现有 `StatusEntry.reachable: boolean` 拆成六值，保持向后兼容。
+**2026-11-22 修订**：上一稿是 `live | stale | lost` 三值，与内核的六态不符——
+三值里没有位置放 `degraded`（连上了但转发没挂上），而那正是用户最常撞到的
+"连着呢怎么打不开"。
 
 ```ts
-export type Link = "live" | "stale" | "lost";
+export type Link =
+  | "idle"        // 还没开始连
+  | "connecting"  // 首次连接中
+  | "live"        // 心跳在阈值内
+  | "degraded"    // 连上了，但至少一条转发/会话不可达；必须带上是哪一条
+  | "reconnecting"// 掉线后正在退避重连
+  | "stopped";    // 主动关闭或重连预算耗尽
 ```
 
-- `live`：本段最近一次心跳在阈值内。
-- `stale`：连得上但超过一个心跳周期没有新帧——**不是**"已断开"，UI 说"正在确认"。
-- `lost`：连接已关闭或重连预算耗尽。
+- `stale` 不再是状态值，而是一个**正交标记**：`live` 但超过一个心跳周期没有新帧时
+  打上它，UI 说"正在确认"。它不改变 `Link`，因为"慢"和"坏"是两件事。
+- `degraded` 必须携带 `broken: string[]`（哪几条转发/会话），否则界面无法指路。
 
 投影函数 `machineGroups(status)` 是纯函数，输入 `Status`，输出
-`{ id, label, kind, link, sessions }[]`。**排序规则不在这里**，它继续由
+`{ id, label, kind, link, broken, sessions }[]`。**排序规则不在这里**，它继续由
 `orderSessions` 负责，两者正交。
 
 ### 2.4 视觉
@@ -70,7 +80,8 @@ export type Link = "live" | "stale" | "lost";
 
 | 含义 | token | 说明 |
 |---|---|---|
-| online | `--ok` | 与 `done` 同色系但不共用 badge，机器头用 6px 圆点 |
+| live | `--ok` | 与 `done` 同色系但不共用 badge，机器头用 6px 圆点 |
+| degraded | `--warn` | 琥珀点，**无动画**——它不是"在努力"，是"部分坏了" |
 | reconnecting | `--warn` | 琥珀，与 `blocked` 同色——**这正是问题**，见下 |
 | offline | `--down` | 红 |
 | 远端机器 | `--dim` 文本 + `--sunken` 底 | 机器头比会话卡轻一级 |
@@ -78,7 +89,8 @@ export type Link = "live" | "stale" | "lost";
 **冲突处理**：`reconnecting` 与 `blocked` 都用琥珀。解法是形状而非颜色——
 `blocked` 是会话卡上的**实心 pill**，机器头是**一个 6px 圆点 + 旋转的环**。
 颜色相同但位置与形状不同，且机器头永远在会话卡之外。若实测仍混淆，
-`reconnecting` 改用 `--dim` + 动画环（不引入新色相）。
+`reconnecting` 改用 `--dim` + 动画环（不引入新色相）。`degraded` 用同一个点但
+**不转**，于是"在重试"与"部分坏了"靠动画区分，不靠新颜色。
 
 ## 三、手机：独立信息架构
 
@@ -137,7 +149,7 @@ export type Link = "live" | "stale" | "lost";
 
 | 规则 | 来源 | UI 表现 |
 |---|---|---|
-| 半开连接不产生错误 | `RELAY_WATCHDOG.md` | 连接状态在 40s 内可能仍显示 `live`；**不显示"已断开"直到确定**，中间态是 `stale`（"正在确认"） |
+| 半开连接不产生错误 | `RELAY_WATCHDOG.md` | 连接状态在 40s 内可能仍显示 `live`；**不显示"已断开"直到确定**，此时打 `stale` 标记（"正在确认"），`Link` 本身不变 |
 | 写入不重试 | 同上 | 发送失败直接标红并保留草稿，**不自动重发**；重发是用户动作 |
 | 后台定时器冻结 | 同上 | 回前台立即重建流（带 cursor），**不显示"已同步"直到第一帧到达** |
 | 自动切换只在同机 | `sameMachine.ts` | 换机器必须显式确认；`unknown` 不自动切 |
@@ -187,7 +199,7 @@ export type Link = "live" | "stale" | "lost";
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| 1 | `Link` 三值投影 + `machineGroups` 纯函数 | 单测：三段分组、排序不变、离线段全 `unknown` |
+| 1 | `Link` 六值投影 + `machineGroups` 纯函数 | 单测：三段分组、排序不变、`degraded` 带上 `broken`、离线段全 `unknown` |
 | 2 | 桌面舰队分组头 | 真窗口截图；10 会话 + 2 机器的排序回归 |
 | 3 | 配对两屏（桌面 + 手机壳） | 截图；二维码过期/指纹变化三条错误路径 |
 | 4 | 手机三入口 + 注意力条 | 截图（窄窗 390pt）；触控目标核验 |
