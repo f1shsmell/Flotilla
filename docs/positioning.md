@@ -17,15 +17,21 @@ diff 审查、一键 commit/push/开 PR 不离开应用。
 
 - **ACP-first**：协议是一等公民，PTY 是底线而非主路径。
 - **会话比应用活得久**：GUI 重启、daemon 重启不丢会话。诚实边界：session host
-  崩溃即会话丢失（PTY 与 ACP 一样——agent 句柄与 ACP 会话 id 都在 host 里，
-  崩溃后的 resume 尚未接入）；OS 重启只恢复布局与历史。不承诺进程级复活。
+  进程崩溃即会话丢失（PTY 与 ACP 一样——agent 句柄与 ACP 会话 id 都在 host 里）；
+  host 内的 agent 进程自行退出则不算丢失：ACP 会重启 agent 并 `session/resume`
+  接回原会话，PTY 无句柄可接。OS 重启只恢复布局与历史。不承诺进程级复活。
 - **BYO 订阅**：不转售 token、不做网关、不锁模型。凭证是你自己的。
 - **适配器是数据**：多数新 agent = 一个 JSON 定义，社区可贡献覆盖。
 
-## 首发支持矩阵（营销话术以此为限）
+## 首发支持矩阵（营销话术以此为限，只写已取证的）
 
-claude-agent-acp 适配器、Gemini CLI（原生 ACP）、另选 1 个社区 ACP agent 证明
-通用性。PTY 层承诺"任何 CLI 可开、可交互"，不承诺结构化视图。
+- **claude-agent-acp**：全会话绿，五档权限；模式/模型切换走协议、不重启会话
+- **codex-acp**：全会话绿；钉 `@agentclientprotocol/codex-acp@2.8.0`，需隔离 `CODEX_HOME`
+- **PTY 兜底**：任何 CLI 可开、可交互，不承诺结构化视图
+
+未列入承诺的两家：Gemini CLI 本机未安装、零取证；opencode 只取证到
+握手与会话建立（回合被 provider 鉴权拒绝），不写「全会话绿」。逐条证据见
+[docs/support-matrix.md](support-matrix.md)。
 
 ## 不做
 

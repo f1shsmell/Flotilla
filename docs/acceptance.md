@@ -185,6 +185,34 @@ PROBE-OK
   daemon,`session.start` mode=pty command=原生 claude 路径,attach 后按
   上述步骤发键,回合结束核对文件落位。
 
+### W9 安全基线:开关与来源都是门
+
+W9 的把关项「renderer contextIsolation on / nodeIntegration off / preload
+bridge,pipe token 只存 main 进程」此前只由 review 执行:三个开关写在
+`gui/electron/main.ts` 的 `createWindow()` 里,测试读不到。现在拆成两处可执行
+证据:
+
+- `gui/electron/window.ts` 的 `windowSetup()` 返回整个 `BrowserWindow` 参数,
+  `main.ts` 只调用它。
+- `gui/test/security.test.ts` 的三道门:窗口开关(isolation on / Node off /
+  sandbox on / preload 路径 / 只有 smoke 才关帧节流)、preload 暴露面(每个方法
+  都走 `flotilla:` 命名通道,没有 token 或 fs 类名字)、renderer 源码(不许
+  `node:` import,不许 `ipcRenderer` / `contextBridge`)。
+- `internal/doccheck` 钉住文档对自己仓库形状的描述:根目录与 `docs/` 下的
+  Markdown 里,反引号包起来的单段目录名(形如 `docs/` 这种写法)必须是树里
+  真实存在的目录。
+
+两处都做过故意改坏的验证:`nodeIntegration: true` 与 renderer 里一行
+`import fs from "node:fs"` 分别让对应测试变红,改回即绿。文档门的首跑就红了
+两次——`CONTRIBUTING.md` 与 `FLOTILLA.md` 都指向仓库里并不存在的顶层
+adapters 目录,而适配器实际读的是 `$FLT_HOME/config/adapters`
+(`internal/agent/catalog.go`)。
+
+```bash
+go test ./internal/doccheck/
+pnpm --dir gui test security.test.ts
+```
+
 ### CJK 读源上游限制
 
 读源用 charmbracelet x/vt v0.1.0:跨自动换行边界的宽字符会被丢弃,因此恰好
