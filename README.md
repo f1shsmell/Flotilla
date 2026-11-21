@@ -16,8 +16,10 @@ its discipline.
   Protocol; a full-interaction PTY fallback for any other CLI.
 - **Sessions outlive the app**: GUI and daemon restarts keep sessions alive.
   Honest boundary: a session-host crash loses the session, PTY and ACP alike —
-  the host holds the agent's handles and its ACP session id, and resuming one
-  is not implemented yet. OS restarts restore layout and history only.
+  the host holds the agent's handles. An agent process that exits on its own is
+  not a lost session: the host relaunches it and resumes the ACP conversation
+  (`session/resume`); a PTY has no handle to resume. OS restarts restore layout
+  and history only.
 - **BYO subscription**: no token resale, no model lock-in.
 - **Adapters are data**: most new agents are one JSON definition.
 - **Replay for demos**: a recorded turn answers from disk, so demos, GIFs and

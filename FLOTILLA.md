@@ -36,11 +36,13 @@ protocol).
 ## Conventions
 
 - Monorepo: one Go module with `cmd/{flt,flt-daemon,flt-session-host}` and
-  `internal/`, plus `gui/` (Electron + React + TS), `adapters/`, `docs/`. Dependency
+  `internal/`, plus `gui/` (Electron + React + TS) and `docs/`. Dependency
   direction: `gui → daemon → session-host`; adapters are data loaded by the
-  host engine. Contract types (IPC messages, adapter schema) live in one Go
-  package; TS types are generated from it (tygo/go2ts) or held by a wire-parity
-  gate — a type two sides mirror by hand is a parity bug waiting to happen.
+  host engine from `$FLT_HOME/config/adapters`, so a definition travels with the
+  state root rather than with the source tree. Contract types (IPC messages,
+  adapter schema) live in one Go package; TS types are generated from it
+  (tygo/go2ts) or held by a wire-parity gate — a type two sides mirror by hand
+  is a parity bug waiting to happen.
 - Libraries: PTY via `charmbracelet/x/xpty` (fallback `aymanbagabas/go-pty`);
   ACP client via `coder/acp-go-sdk`; SQLite via `modernc.org/sqlite` (pure Go,
   keeps cross-compilation). creack/pty has no Windows backend; do not add it.
@@ -124,6 +126,10 @@ bash scripts/check-coverage.sh        # sensitive paths, when they change
 # gui changes:
 pnpm --dir gui lint && pnpm --dir gui test
 ```
+
+`internal/doccheck` runs inside `go test ./...`: a document that names a
+top-level directory the tree does not have fails there, so a contributor guide
+cannot send the next reader to a path that was never created.
 
 The contract gate is the answer to "two sides mirror a type by hand". Go is the
 source: `cmd/flt-contract` renders the method names, the wire constants and the
