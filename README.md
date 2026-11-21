@@ -33,10 +33,7 @@ its discipline.
 - Positioning: [docs/positioning.md](docs/positioning.md)
 - Support matrix, verified only: [docs/support-matrix.md](docs/support-matrix.md)
 - Remote access and the phone client, design only:
-  [docs/remote-access.md](docs/remote-access.md) ·
-  [docs/ui-remote-design.md](docs/ui-remote-design.md) ·
-  [docs/remote-access-review.md](docs/remote-access-review.md) ·
-  [docs/remote-access-open-questions.md](docs/remote-access-open-questions.md)
+  [docs/remote-and-phone-design.md](docs/remote-and-phone-design.md)
 - Conventions and workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Versioning: [VERSIONING.md](VERSIONING.md) · Releases:
   [RELEASING.md](RELEASING.md) · Security: [SECURITY.md](SECURITY.md)
