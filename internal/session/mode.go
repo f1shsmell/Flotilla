@@ -319,4 +319,7 @@ type UpdateMessage struct {
 	// and the text alone cannot tell one message in pieces from a second message
 	// of the same kind, and a second prompt must not run into the first.
 	Continued bool `json:"cont,omitempty"`
+	// SessionID names the session the update arrived under. A child session
+	// sends its own id, so an empty value is the session the client attached to.
+	SessionID string `json:"session_id,omitempty"`
 }

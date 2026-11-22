@@ -65,6 +65,9 @@ type Update struct {
 	ToolCallID string
 	ToolTitle  string
 	ToolStatus string
+	// SessionID is the session the update arrived under. A child session sends
+	// its own id here, so this is the only attribution the protocol carries.
+	SessionID string
 	// Raw is the SDK's own encoding of the update.
 	Raw json.RawMessage
 }
@@ -199,8 +202,8 @@ func (c *Client) WriteTextFile(_ context.Context, params sdk.WriteTextFileReques
 // to the user.
 func (c *Client) RequestPermission(ctx context.Context, params sdk.RequestPermissionRequest) (sdk.RequestPermissionResponse, error) {
 	req := PermissionRequest{
-		Title: deref(params.ToolCall.Title),
-		Kind:  string(deref(params.ToolCall.Kind)),
+		Title: patchValue(params.ToolCall.Title),
+		Kind:  string(patchValue(params.ToolCall.Kind)),
 	}
 	for _, opt := range params.Options {
 		req.Options = append(req.Options, Option{ID: string(opt.OptionId), Kind: string(opt.Kind)})
@@ -251,7 +254,7 @@ func (c *Client) SessionUpdate(_ context.Context, params sdk.SessionNotification
 	if c.cfg.OnUpdate == nil {
 		return nil
 	}
-	c.cfg.OnUpdate(flatten(params.Update))
+	c.cfg.OnUpdate(flatten(params.Update, params.SessionId))
 	return nil
 }
 
@@ -259,6 +262,20 @@ func (c *Client) SessionUpdate(_ context.Context, params sdk.SessionNotification
 // access and nothing more, and saying so beats pretending to support it.
 func (c *Client) CreateTerminal(context.Context, sdk.CreateTerminalRequest) (sdk.CreateTerminalResponse, error) {
 	return sdk.CreateTerminalResponse{}, ErrUnsupported
+}
+
+// CompleteElicitation ignores the notification an agent sends when one of its
+// own elicitations closes. This build never opens one, so there is nothing to
+// finish; returning an error here would fail a turn over work we never started.
+func (c *Client) CompleteElicitation(context.Context, sdk.CompleteElicitationNotification) error {
+	return nil
+}
+
+// CreateElicitation refuses to put a question to the user. This build asks the
+// person only through permission requests, which carry the tool call they are
+// about; a free-form elicitation would be a second, unreviewed way in.
+func (c *Client) CreateElicitation(context.Context, sdk.CreateElicitationRequest) (sdk.CreateElicitationResponse, error) {
+	return sdk.CreateElicitationResponse{}, ErrUnsupported
 }
 
 // KillTerminal refuses terminal requests.
@@ -374,7 +391,10 @@ func planText(entries []sdk.PlanEntry) string {
 	return strings.Join(lines, "\n")
 }
 
-func sliceLines(content string, line, limit *int) string {
+// sliceLines cuts content to the 1-based line and the count the agent asked
+// for. Both are int64 because that is the wire type, and the content is already
+// bounded by the byte limit, so neither can overflow the conversion.
+func sliceLines(content string, line, limit *int64) string {
 	if line == nil && limit == nil {
 		return content
 	}
@@ -382,26 +402,27 @@ func sliceLines(content string, line, limit *int) string {
 	lines := strings.Split(content, "\n")
 	start := 0
 	if line != nil && *line > 0 {
-		start = min(*line-1, len(lines))
+		start = min(int(*line-1), len(lines))
 	}
 	end := len(lines)
 	if limit != nil && *limit > 0 {
-		end = min(start+*limit, len(lines))
+		end = min(start+int(*limit), len(lines))
 	}
 	return strings.Join(lines[start:end], "\n")
 }
 
-func deref[T any](p *T) T {
-	var zero T
-	if p == nil {
-		return zero
-	}
-	return *p
+// patchValue reads a patch member as the value it carries, and the zero value
+// for one that is unset or null. A null clears a stored value in the protocol;
+// this client keeps no stored copy of a tool call's title or kind, so the two
+// non-value states read the same here.
+func patchValue[T any](p sdk.Patch[T]) T {
+	v, _ := p.Value()
+	return v
 }
 
 // flatten converts one SDK update into the shape the daemon forwards.
-func flatten(update sdk.SessionUpdate) Update {
-	out := Update{Kind: kindOther}
+func flatten(update sdk.SessionUpdate, sessionID sdk.SessionId) Update {
+	out := Update{Kind: kindOther, SessionID: string(sessionID)}
 
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -422,8 +443,8 @@ func flatten(update sdk.SessionUpdate) Update {
 	case update.ToolCallUpdate != nil:
 		out.Kind = kindTool
 		out.ToolCallID = string(update.ToolCallUpdate.ToolCallId)
-		out.ToolTitle = deref(update.ToolCallUpdate.Title)
-		out.ToolStatus = string(deref(update.ToolCallUpdate.Status))
+		out.ToolTitle = patchValue(update.ToolCallUpdate.Title)
+		out.ToolStatus = string(patchValue(update.ToolCallUpdate.Status))
 	case update.Plan != nil:
 		out.Kind = kindPlan
 		// A plan's content lives in its entries, never in a text field, so a

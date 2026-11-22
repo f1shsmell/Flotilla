@@ -277,6 +277,12 @@ func (a *Agent) ListSessions(context.Context, sdk.ListSessionsRequest) (sdk.List
 	return sdk.ListSessionsResponse{}, nil
 }
 
+// DeleteSession accepts the call and keeps nothing: a replay has no stored
+// history to drop, so the session it was asked about simply stays servable.
+func (a *Agent) DeleteSession(context.Context, sdk.DeleteSessionRequest) (sdk.DeleteSessionResponse, error) {
+	return sdk.DeleteSessionResponse{}, nil
+}
+
 // Prompt streams one recorded turn. Turns are answered in order; past the last
 // one the final turn is repeated, because a demo must not break when somebody
 // types twice.

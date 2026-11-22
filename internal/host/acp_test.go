@@ -415,6 +415,59 @@ func TestChunkUpdateLeavesASmallUpdateAlone(t *testing.T) {
 	}
 }
 
+// TestACPHostCarriesAChildSessionsId pins the attribution over the real link: a
+// child session's update arrives with the child's id, so a client can keep it
+// out of the parent's history. Without this the child's work reads as the
+// parent's own.
+func TestACPHostCarriesAChildSessionsId(t *testing.T) {
+	_, dir := startACPHostEnv(t, acp.Auto, 0, []string{"FLT_FAKE_CHILD_UPDATE=1"})
+
+	updates := make(chan session.UpdateMessage, 64)
+	conn := dialHost(t, dir, func(msg session.UpdateMessage) { updates <- msg }, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "go"}); err != nil {
+		t.Fatalf("session.prompt: %v", err)
+	}
+
+	deadline := time.After(waitFor)
+	for {
+		select {
+		case u := <-updates:
+			if u.SessionID == "sess-child-1" {
+				if u.Kind != acp.UpdateMessage || u.Text != "working in the child" {
+					t.Fatalf("child update = %+v, want the child's message", u)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no update carried the child session id")
+		}
+	}
+}
+
+// TestChunkUpdateKeepsItsSessionId pins that splitting for the frame limit keeps
+// who the update belongs to: every piece of a child's message stays the child's.
+func TestChunkUpdateKeepsItsSessionId(t *testing.T) {
+	msg := session.UpdateMessage{
+		Kind:      acp.UpdateMessage,
+		Text:      strings.Repeat("x", 40),
+		SessionID: "sess_child_1",
+	}
+
+	parts := chunkUpdate(msg, 10)
+	if len(parts) < 2 {
+		t.Fatalf("chunkUpdate returned %d parts, want the text split", len(parts))
+	}
+	for i, part := range parts {
+		if part.SessionID != "sess_child_1" {
+			t.Fatalf("part %d session = %q, want sess_child_1", i, part.SessionID)
+		}
+	}
+}
+
 // TestACPHostSendsAnUpdateTooLargeForOneFrame pins what used to vanish: the
 // wire refused an update past the frame limit and the client never saw it.
 func TestACPHostSendsAnUpdateTooLargeForOneFrame(t *testing.T) {

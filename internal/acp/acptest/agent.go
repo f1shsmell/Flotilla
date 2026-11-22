@@ -226,6 +226,19 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		return sdk.PromptResponse{}, fmt.Errorf("send an update: %w", err)
 	}
 
+	// A child session's update: the outer sessionId names the child, which is
+	// the only attribution ACP v1 carries. FLT_FAKE_CHILD_UPDATE selects the
+	// variant, because a client that lost the id cannot be told apart from an
+	// agent that never had one.
+	if os.Getenv("FLT_FAKE_CHILD_UPDATE") != "" {
+		if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+			SessionId: sdk.SessionId("sess-child-1"),
+			Update:    sdk.UpdateAgentMessageText("working in the child"),
+		}); err != nil {
+			return sdk.PromptResponse{}, fmt.Errorf("send a child update: %w", err)
+		}
+	}
+
 	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
 		SessionId: s.id,
 		Update: sdk.StartToolCall(
@@ -247,9 +260,9 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 			SessionId: s.id,
 			ToolCall: sdk.ToolCallUpdate{
 				ToolCallId: sdk.ToolCallId("call-1"),
-				Title:      sdk.Ptr("edit config.json"),
-				Kind:       sdk.Ptr(sdk.ToolKindEdit),
-				Status:     sdk.Ptr(sdk.ToolCallStatusPending),
+				Title:      sdk.PatchSet("edit config.json"),
+				Kind:       sdk.PatchSet(sdk.ToolKindEdit),
+				Status:     sdk.PatchSet(sdk.ToolCallStatusPending),
 			},
 			Options: []sdk.PermissionOption{
 				{Kind: sdk.PermissionOptionKindAllowOnce, Name: "Allow", OptionId: sdk.PermissionOptionId("allow")},
@@ -378,6 +391,15 @@ func (a *Agent) CloseSession(_ context.Context, params sdk.CloseSessionRequest) 
 	delete(a.sessions, params.SessionId)
 	a.mu.Unlock()
 	return sdk.CloseSessionResponse{}, nil
+}
+
+// DeleteSession forgets the session, like CloseSession: the fake keeps no
+// history behind it, so there is nothing separate for a delete to drop.
+func (a *Agent) DeleteSession(_ context.Context, params sdk.DeleteSessionRequest) (sdk.DeleteSessionResponse, error) {
+	a.mu.Lock()
+	delete(a.sessions, params.SessionId)
+	a.mu.Unlock()
+	return sdk.DeleteSessionResponse{}, nil
 }
 
 // ListSessions reports every live session.
