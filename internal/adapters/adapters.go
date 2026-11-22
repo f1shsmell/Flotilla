@@ -20,6 +20,12 @@ var ErrInvalid = fmt.Errorf("adapter: invalid definition")
 // Adapter is the JSON part of an agent definition that the host engine reads.
 // Every field is optional: an agent that names none gets the cautious path.
 type Adapter struct {
+	// Env is the environment the agent's process needs over and above the
+	// host's own, keyed by variable name. A value that names an executable on
+	// PATH resolves to its absolute path at spawn: an adapter cannot know
+	// where a machine keeps its binaries, and a consumer that does not search
+	// PATH would fail on a bare name.
+	Env map[string]string `json:"env,omitempty"`
 	// Blocked lists the patterns that mean "the agent is waiting for the user":
 	// an approval prompt, a trust dialog, a question. The host matches them
 	// against a terminal line and never uses the match for anything but that
@@ -127,7 +133,8 @@ func (a Adapter) Empty() bool {
 		a.Paste == "" &&
 		len(a.TrustArgs) == 0 &&
 		len(a.ResumeArgs) == 0 &&
-		a.ResumeCommand == ""
+		a.ResumeCommand == "" &&
+		len(a.Env) == 0
 }
 
 // ResumeArgsFor substitutes one session id into the resume arguments. An
