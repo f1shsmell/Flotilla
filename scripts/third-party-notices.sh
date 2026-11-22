@@ -46,4 +46,9 @@ go list -m -f '{{if and .Dir (not .Main)}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}
     } >> "$out"
   done
 
+# The renderer bundle ships node modules' code, so the gui's pnpm graph is
+# noticed alongside the Go one; the emitter fails the run on unreadable
+# licenses rather than shipping unknown-licensed code.
+node "$root/scripts/third-party-notices-node.mjs" >> "$out"
+
 echo "wrote $out"
