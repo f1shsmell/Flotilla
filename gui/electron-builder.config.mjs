@@ -38,6 +38,9 @@ const config = {
     allowToChangeInstallationDirectory: true,
     shortcutName: identity.shortcutName,
     deleteAppDataOnUninstall: false,
+    // The daemon outlives the window; the installer stops the processes that
+    // belong to this install directory before touching its files.
+    include: "build/installer.nsh",
   },
 };
 
