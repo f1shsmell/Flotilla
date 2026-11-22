@@ -19,7 +19,7 @@ import { ensure } from "./daemon";
 import { reconnect, type ReconnectTask } from "./reconnect";
 import { Coalescer } from "./stream";
 import { readUiState, saveUiState, type UiState } from "./uiState";
-import { productLabel, shouldHideOnClose, trayMenuSpec } from "./tray";
+import { productLabel, shouldHideOnClose, trayClickAction, trayMenuSpec } from "./tray";
 import { TRAY_ICON, TRAY_ICON_2X } from "./tray-icon";
 import { windowSetup } from "./window";
 
@@ -503,6 +503,25 @@ function createWindow(): void {
   // A smoke run renders offscreen and asserts on the DOM, so the renderer can be
   // checked without a window on screen.
   if (process.env.FLT_GUI_SMOKE) {
+    // FLT_GUI_SMOKE_TRAY_MENU="x,y" pops the real context menu at that screen
+    // point for the evidence capture: the OS draws the menu, so no DOM or
+    // offscreen assert can reach it. The caller screenshots it and sends
+    // Escape; a 20s guard closes the process if the menu never went away.
+    const trayMenuAt = process.env.FLT_GUI_SMOKE_TRAY_MENU;
+    if (trayMenuAt) {
+      const [x, y] = trayMenuAt.split(",").map((value) => Number(value));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        console.error("smoke: FLT_GUI_SMOKE_TRAY_MENU must read x,y");
+        app.exit(1);
+        return;
+      }
+      setTimeout(() => {
+        tray?.popUpContextMenu(trayMenu(), { x, y });
+        console.log("smoke: tray menu popped");
+        setTimeout(() => app.exit(0), 6000);
+      }, 1500);
+      return;
+    }
     window.webContents.once("did-finish-load", () => {
       void import("./smoke.js").then(async (smoke) => {
         const ok = await smoke.run(window!);
@@ -617,10 +636,18 @@ function trayMenu(): Electron.Menu {
 function installTray(): void {
   tray = new Tray(trayIcon());
   tray.setToolTip(productLabel(channel));
-  tray.setContextMenu(trayMenu());
-  // On Windows the context menu opens on any click; this serves macOS, where
-  // a left click is the only gesture that reaches the app.
-  tray.on("click", showWindow);
+  // Both gestures route through trayClickAction: no context menu is bound
+  // outright, because that would turn a left click into a two-click restore.
+  // The menu is built on demand, so its checkbox always reads the registry.
+  const gesture = (button: "left" | "right"): void => {
+    if (trayClickAction(button) === "show") {
+      showWindow();
+    } else {
+      tray?.popUpContextMenu(trayMenu());
+    }
+  };
+  tray.on("click", () => gesture("left"));
+  tray.on("right-click", () => gesture("right"));
 }
 
 app.whenReady().then(() => {

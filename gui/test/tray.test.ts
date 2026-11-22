@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { Resvg } from "@resvg/resvg-js";
 
-import { productLabel, shouldHideOnClose, trayMenuSpec } from "../electron/tray";
+import { productLabel, shouldHideOnClose, trayClickAction, trayMenuSpec } from "../electron/tray";
 import { TRAY_ICON, TRAY_ICON_2X } from "../electron/tray-icon";
 
 function packagingProductName(channel: string): string {
@@ -71,6 +71,16 @@ describe("closing the window", () => {
     // swallowed by the same hide.
     expect(shouldHideOnClose(false)).toBe(true);
     expect(shouldHideOnClose(true)).toBe(false);
+  });
+});
+
+describe("the tray's click gestures", () => {
+  it("restores the window on a left click and holds the menu for the right", () => {
+    // The Windows convention this app's users live in: one click to get back
+    // to the fleet, the menu behind the right button. Binding the context
+    // menu outright would swallow every left click into two-click restores.
+    expect(trayClickAction("left")).toBe("show");
+    expect(trayClickAction("right")).toBe("menu");
   });
 });
 
