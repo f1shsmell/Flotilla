@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   addPermission,
@@ -434,6 +434,46 @@ describe("session log", () => {
     // already in the log is one the window has.
     state = applyUpdate(state, { seq: 1, kind: "thought", text: "old" });
     expect(state.entries).toHaveLength(1);
+  });
+
+  it("records a hole in the sequence instead of accepting it silently", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let state = newSession("s", "acp");
+      state = applyUpdate(state, { seq: 5, kind: "message", text: "before the hole" });
+      state = applyUpdate(state, { seq: 8, kind: "user", text: "after it" });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const said = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(said).toContain("6");
+      expect(said).toContain("8");
+      // A hole is a fact about the log, not a reason to drop what arrived.
+      expect(state.entries.map((entry) => entry.text)).toEqual([
+        "before the hole",
+        "after it",
+      ]);
+      expect(state.lastSeq).toBe(8);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records nothing when the sequence has no hole", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let state = newSession("s", "acp");
+      // The first record of an attach starts mid-log, so a seq past 1 is not
+      // a hole; contiguity from there is.
+      state = applyHistory(state, {
+        updates: [{ seq: 40, kind: "message", text: "mid-turn" }],
+      });
+      state = applyUpdate(state, { seq: 41, kind: "message", text: "still going" });
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(state.lastSeq).toBe(41);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("keeps folding updates that carry no sequence", () => {
