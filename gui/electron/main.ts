@@ -8,6 +8,12 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray, type WebCo
 import { DaemonClient } from "./client";
 import { resolveChannel } from "./channel";
 import { constants, methods } from "./contract";
+import {
+  AUTOSTART_ARG,
+  autostartAvailable,
+  autostartRequest,
+  launchedAtLogin,
+} from "./autostart";
 import { STREAM_INPUT, RpcError } from "./wire";
 import { ensure } from "./daemon";
 import { reconnect, type ReconnectTask } from "./reconnect";
@@ -33,6 +39,10 @@ function manifestChannel(): string | null {
 }
 
 const channel = resolveChannel(process.env.FLT_CHANNEL, app.isPackaged, manifestChannel());
+
+// A login launch starts quietly: tray only, daemon warmed, no window. The
+// tray is the way in.
+const hiddenStart = launchedAtLogin(process.argv.slice(1));
 
 // clientId names this window on every connection it opens. The daemon answers a
 // per-window question from it — has this window already read the finished turn —
@@ -496,6 +506,11 @@ function createWindow(): void {
     window.webContents.once("did-finish-load", () => {
       void import("./smoke.js").then(async (smoke) => {
         const ok = await smoke.run(window!);
+        // FLT_GUI_SMOKE_AUTOSTART exercises the login item against the real
+        // registry: "roundtrip" enables, verifies and disables; "enable"
+        // leaves it on for the caller's reg query, and owes a cleanup run.
+        const mode = process.env.FLT_GUI_SMOKE_AUTOSTART;
+        const autostartOk = mode === undefined || autostartWalk(mode === "enable");
         // FLT_GUI_SMOKE_SHOT saves the window as it ended: the UI review reads
         // a real render, not a description of one.
         const shot = process.env.FLT_GUI_SMOKE_SHOT;
@@ -513,7 +528,7 @@ function createWindow(): void {
             return;
           }
         }
-        app.exit(ok ? 0 : 1);
+        app.exit(ok && autostartOk ? 0 : 1);
       });
     });
   }
@@ -549,36 +564,88 @@ function showWindow(): void {
   window.focus();
 }
 
-function installTray(): void {
-  const product = productLabel(channel);
-  tray = new Tray(trayIcon());
-  tray.setToolTip(product);
-  // The spec is data (tray.ts), so the menu's visible shape is pinned by a
-  // test; this mapping only attaches the handlers.
-  tray.setContextMenu(
-    Menu.buildFromTemplate(
-      trayMenuSpec(channel).map((item) => ({
-        label: item.label,
-        click: () => {
-          if (item.action === "open") {
-            showWindow();
-          }
-          if (item.action === "quit") {
-            app.quit();
-          }
-        },
-      })),
-    ),
+// The OS registry is the login item's state: read it, never mirror it.
+function readOpenAtLogin(): boolean {
+  return app
+    .getLoginItemSettings({ path: process.execPath, args: [AUTOSTART_ARG] })
+    .openAtLogin;
+}
+
+// The login item's real write/read round trip. A dev run writes Electron's
+// default item name and the walk always ends disabled; a packaged run proves
+// the channel-named entry a login item would actually launch.
+function autostartWalk(leaveEnabled: boolean): boolean {
+  app.setLoginItemSettings(autostartRequest(process.execPath, true));
+  const on = readOpenAtLogin();
+  console.log(`smoke: autostart enabled -> ${on}`);
+  if (leaveEnabled) {
+    return on;
+  }
+  app.setLoginItemSettings(autostartRequest(process.execPath, false));
+  const off = readOpenAtLogin();
+  console.log(`smoke: autostart disabled -> ${off}`);
+  return on && !off;
+}
+
+// The menu is rebuilt from the registry after a toggle, so the checkbox reads
+// the OS state rather than trusting the click.
+function trayMenu(): Electron.Menu {
+  return Menu.buildFromTemplate(
+    trayMenuSpec(channel, {
+      autostartAvailable: autostartAvailable(app.isPackaged),
+      openAtLogin: readOpenAtLogin(),
+    }).map((item) => ({
+      label: item.label,
+      type: item.action === "autostart" ? ("checkbox" as const) : ("normal" as const),
+      checked: item.checked,
+      click: () => {
+        if (item.action === "open") {
+          showWindow();
+        }
+        if (item.action === "quit") {
+          app.quit();
+        }
+        if (item.action === "autostart") {
+          app.setLoginItemSettings(autostartRequest(process.execPath, !readOpenAtLogin()));
+          tray?.setContextMenu(trayMenu());
+        }
+      },
+    })),
   );
+}
+
+function installTray(): void {
+  tray = new Tray(trayIcon());
+  tray.setToolTip(productLabel(channel));
+  tray.setContextMenu(trayMenu());
   // On Windows the context menu opens on any click; this serves macOS, where
   // a left click is the only gesture that reaches the app.
   tray.on("click", showWindow);
 }
 
 app.whenReady().then(() => {
+  // A hidden start creates no window, and every smoke walk drives one: the
+  // combination would wait out the deadline silently, so it refuses here.
+  if (process.env.FLT_GUI_SMOKE && hiddenStart) {
+    console.error("smoke: a hidden start has no window to drive");
+    app.exit(1);
+    return;
+  }
   register();
   installTray();
-  createWindow();
+  if (!hiddenStart) {
+    createWindow();
+  } else {
+    // A login launch exists to have the fleet ready: start the daemon now so
+    // the first window opens onto a live control plane. Failure is logged,
+    // not fatal — the fleet poll respawns the daemon when a window comes.
+    ensure({ channel, client: clientId })
+      .then((client) => {
+        control = client;
+        console.log("autostart: daemon ready");
+      })
+      .catch((error) => console.error("autostart: daemon warm failed:", error));
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

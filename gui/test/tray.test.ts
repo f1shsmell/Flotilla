@@ -49,6 +49,20 @@ describe("the tray menu", () => {
   it("stays distinct between the two channels", () => {
     expect(trayMenuSpec("stable")[0].label).toBe("Open Flotilla");
   });
+
+  it("offers the login item only where the install may write it", () => {
+    const without = trayMenuSpec("stable", { autostartAvailable: false, openAtLogin: false });
+    expect(without.map((item) => item.action)).toEqual(["open", "quit"]);
+    const with_ = trayMenuSpec("stable", { autostartAvailable: true, openAtLogin: false });
+    expect(with_.map((item) => item.action)).toEqual(["open", "autostart", "quit"]);
+    expect(with_[1].label).toBe("Start at login");
+    expect(with_[1].checked).toBe(false);
+  });
+
+  it("reflects the OS state in the login item's checkbox", () => {
+    const on = trayMenuSpec("preview", { autostartAvailable: true, openAtLogin: true });
+    expect(on[1].checked).toBe(true);
+  });
 });
 
 describe("closing the window", () => {
@@ -69,8 +83,14 @@ describe("the generated tray icon", () => {
     return new Resvg(svg, { fitTo: { mode: "width", value: size } }).render().asPng().toString("base64");
   }
 
-  it("is the brand mark at 1x and 2x, regenerated with the kit", () => {
-    expect(TRAY_ICON).toBe(render(16));
-    expect(TRAY_ICON_2X).toBe(render(32));
-  });
+  // The two renders are CPU-bound native work: fast locally, but a cold CI
+  // runner measured 7.2s, so the budget is stated instead of the default 5s.
+  it(
+    "is the brand mark at 1x and 2x, regenerated with the kit",
+    { timeout: 30000 },
+    () => {
+      expect(TRAY_ICON).toBe(render(16));
+      expect(TRAY_ICON_2X).toBe(render(32));
+    },
+  );
 });
