@@ -83,8 +83,14 @@ describe("the generated tray icon", () => {
     return new Resvg(svg, { fitTo: { mode: "width", value: size } }).render().asPng().toString("base64");
   }
 
-  it("is the brand mark at 1x and 2x, regenerated with the kit", () => {
-    expect(TRAY_ICON).toBe(render(16));
-    expect(TRAY_ICON_2X).toBe(render(32));
-  });
+  // The two renders are CPU-bound native work: fast locally, but a cold CI
+  // runner measured 7.2s, so the budget is stated instead of the default 5s.
+  it(
+    "is the brand mark at 1x and 2x, regenerated with the kit",
+    { timeout: 30000 },
+    () => {
+      expect(TRAY_ICON).toBe(render(16));
+      expect(TRAY_ICON_2X).toBe(render(32));
+    },
+  );
 });
