@@ -69,8 +69,16 @@ describe("closing the window", () => {
   it("hides to the tray while the app lives, and really closes on quit", () => {
     // A user clicking X must not stop the fleet; the tray's Quit must not be
     // swallowed by the same hide.
-    expect(shouldHideOnClose(false)).toBe(true);
-    expect(shouldHideOnClose(true)).toBe(false);
+    expect(shouldHideOnClose(false, true)).toBe(true);
+    expect(shouldHideOnClose(true, true)).toBe(false);
+  });
+
+  it("really closes when there is no tray to come back through", () => {
+    // A desktop that refused the tray icon leaves hide-on-close with no way
+    // back: the window would vanish while the process keeps running. Close
+    // then ends the window honestly, and the daemon carries the sessions.
+    expect(shouldHideOnClose(false, false)).toBe(false);
+    expect(shouldHideOnClose(true, false)).toBe(false);
   });
 });
 
