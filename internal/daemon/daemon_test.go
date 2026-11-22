@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -482,5 +483,29 @@ func TestSpawnErrorCarriesTheHostStderr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), spawnHelperStderr) {
 		t.Fatalf("error %q does not carry the host's stderr", err)
+	}
+}
+
+// TestSpawnNamesTheStaleInstall pins the error a daemon gives when its install
+// directory was removed under it: the message tells the user to restart, not
+// just that a path went missing.
+func TestSpawnNamesTheStaleInstall(t *testing.T) {
+	spawn := ExecSpawner(discardLogger())
+	_, err := spawn(context.Background(), SpawnRequest{
+		Binary:   filepath.Join(t.TempDir(), "gone", "flt-session-host.exe"),
+		Session:  "sess-stale",
+		Mode:     session.ModePTY,
+		Command:  "unused",
+		Args:     []string{"-test.run=TestNoSuchTestRuns"},
+		Channel:  "test",
+		StateDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("a spawn from a missing binary was reported as started")
+	}
+	for _, phrase := range []string{"uninstalled or its files were removed", "restart the app"} {
+		if !strings.Contains(err.Error(), phrase) {
+			t.Fatalf("error %q does not say %q", err, phrase)
+		}
 	}
 }

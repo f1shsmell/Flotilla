@@ -65,6 +65,16 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		if req.Binary == "" {
 			return ipc.Address{}, errors.New("spawn: no session-host binary configured")
 		}
+		if _, err := os.Stat(req.Binary); err != nil {
+			// A daemon outlives the app that spawned it, and an uninstall or a
+			// manual cleanup can take the install directory with it while this
+			// process keeps serving the channel. Say what to do, not what
+			// happened.
+			return ipc.Address{}, fmt.Errorf(
+				"spawn: the session host binary is gone from %q — the app was uninstalled or its files were removed while the daemon kept running; restart the app so a fresh daemon serves this channel",
+				req.Binary,
+			)
+		}
 
 		args, err := spawnArgs(req)
 		if err != nil {
