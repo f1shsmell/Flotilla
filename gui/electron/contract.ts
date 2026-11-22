@@ -323,6 +323,7 @@ export const wireTypes = {
     "host_seq": { go: "HostSeq", type: "uint64", optional: true },
     "kind": { go: "Kind", type: "string" },
     "seq": { go: "Seq", type: "uint64", optional: true },
+    "session_id": { go: "SessionID", type: "string", optional: true },
     "text": { go: "Text", type: "string", optional: true },
     "tool_call_id": { go: "ToolCallID", type: "string", optional: true },
     "tool_status": { go: "ToolStatus", type: "string", optional: true },

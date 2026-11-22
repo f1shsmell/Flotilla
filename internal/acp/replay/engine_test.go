@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,6 +59,14 @@ func (c *collector) ReleaseTerminal(context.Context, sdk.ReleaseTerminalRequest)
 
 func (c *collector) WaitForTerminalExit(context.Context, sdk.WaitForTerminalExitRequest) (sdk.WaitForTerminalExitResponse, error) {
 	return sdk.WaitForTerminalExitResponse{}, nil
+}
+
+func (c *collector) CreateElicitation(context.Context, sdk.CreateElicitationRequest) (sdk.CreateElicitationResponse, error) {
+	return sdk.CreateElicitationResponse{}, errors.New("elicitations are not part of this fake")
+}
+
+func (c *collector) CompleteElicitation(context.Context, sdk.CompleteElicitationNotification) error {
+	return nil
 }
 
 // dial wires an agent to a client over two pipes, so the test speaks the real
@@ -246,11 +255,9 @@ func TestReplaySendsTheToolCallTwice(t *testing.T) {
 }
 
 // derefStatus reads a tool status the SDK may leave unset.
-func derefStatus(s *sdk.ToolCallStatus) string {
-	if s == nil {
-		return ""
-	}
-	return string(*s)
+func derefStatus(s sdk.Patch[sdk.ToolCallStatus]) string {
+	v, _ := s.Value()
+	return string(v)
 }
 
 // TestReplayRepeatsTheLastTurn pins the demo rule: somebody typing a third time

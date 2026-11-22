@@ -110,8 +110,8 @@ func TestReadTextFileSlicesLines(t *testing.T) {
 	c := NewClient(Config{Workspace: root})
 	resp, err := c.ReadTextFile(context.Background(), sdk.ReadTextFileRequest{
 		Path:  path,
-		Line:  sdk.Ptr(2),
-		Limit: sdk.Ptr(2),
+		Line:  sdk.Ptr[int64](2),
+		Limit: sdk.Ptr[int64](2),
 	})
 	if err != nil {
 		t.Fatalf("ReadTextFile: %v", err)
@@ -187,8 +187,8 @@ func permissionParams(kind sdk.ToolKind) sdk.RequestPermissionRequest {
 		SessionId: "sess",
 		ToolCall: sdk.ToolCallUpdate{
 			ToolCallId: "call-1",
-			Title:      sdk.Ptr("do the thing"),
-			Kind:       sdk.Ptr(kind),
+			Title:      sdk.PatchSet("do the thing"),
+			Kind:       sdk.PatchSet(kind),
 		},
 		Options: []sdk.PermissionOption{
 			{Kind: sdk.PermissionOptionKindAllowOnce, Name: "Allow", OptionId: "allow"},
@@ -403,6 +403,61 @@ func TestSessionUpdateIsFlattened(t *testing.T) {
 		if len(u.Raw) == 0 || !json.Valid(u.Raw) {
 			t.Fatalf("update %d kept no usable raw payload", i)
 		}
+	}
+}
+
+// A child session sends ordinary updates under its own sessionId. The id is the
+// only attribution this protocol version carries, so an update that reaches the
+// host without it cannot be placed in the right child's history.
+func TestSessionUpdateCarriesItsSessionId(t *testing.T) {
+	var got []Update
+	c := NewClient(Config{
+		Workspace: t.TempDir(),
+		OnUpdate:  func(u Update) { got = append(got, u) },
+	})
+	ctx := context.Background()
+
+	notifications := []sdk.SessionNotification{
+		{SessionId: "sess_parent", Update: sdk.UpdateAgentMessageText("from the parent")},
+		{SessionId: "sess_child_1", Update: sdk.UpdateAgentMessageText("from the child")},
+	}
+	for _, n := range notifications {
+		if err := c.SessionUpdate(ctx, n); err != nil {
+			t.Fatalf("SessionUpdate: %v", err)
+		}
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("received %d updates, want 2", len(got))
+	}
+	if got[0].SessionID != "sess_parent" {
+		t.Fatalf("parent update session = %q, want sess_parent", got[0].SessionID)
+	}
+	if got[1].SessionID != "sess_child_1" {
+		t.Fatalf("child update session = %q, want sess_child_1", got[1].SessionID)
+	}
+}
+
+// TestASubagentUpdateIsNotReadAsASessionInfoUpdate is the guard the SDK asked
+// for. A payload whose sessionUpdate no decoder of this build knows must not
+// land in a variant that happens to share a member name: an agent announcing a
+// child session would otherwise be recorded as renaming the parent, with no
+// error anywhere.
+func TestASubagentUpdateIsNotReadAsASessionInfoUpdate(t *testing.T) {
+	payload := []byte(`{"sessionUpdate":"subagent_update","sessionId":"sess_child_1","title":"Test investigator","description":"Investigates."}`)
+
+	var u sdk.SessionUpdate
+	if err := json.Unmarshal(payload, &u); err != nil {
+		t.Fatalf("decode a subagent update: %v", err)
+	}
+	if u.SessionInfoUpdate != nil {
+		t.Fatalf("a subagent update was read as a session info update: %+v", u.SessionInfoUpdate)
+	}
+	if u.SubagentUpdate == nil {
+		t.Fatalf("a subagent update was not read as one: %+v", u)
+	}
+	if string(u.SubagentUpdate.SessionId) != "sess_child_1" {
+		t.Fatalf("subagent update session = %q, want sess_child_1", u.SubagentUpdate.SessionId)
 	}
 }
 

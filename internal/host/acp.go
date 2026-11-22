@@ -170,6 +170,7 @@ func (h *Host) forwardUpdate(u acp.Update) {
 		ToolCallID: u.ToolCallID,
 		ToolTitle:  u.ToolTitle,
 		ToolStatus: u.ToolStatus,
+		SessionID:  u.SessionID,
 	}
 
 	for _, part := range chunkUpdate(msg, updateTextBudget) {
