@@ -11,6 +11,7 @@ electron/client.ts   one authenticated connection: handshake, calls, notificatio
 electron/daemon.ts   connect, or start the daemon and retry
 electron/home.ts     FLT_HOME and the channel's paths, mirroring internal/home
 electron/main.ts     window, IPC handlers, one connection per open session
+electron/channel.ts  the channel a window runs on: env, packaged identity, stable
 electron/tray.ts     the tray's labels, menu shape and the close-means-hide decision
 electron/autostart.ts the login item: who may write it, what it launches, how a launch knows
 electron/tray-icon.ts generated tray PNGs; rerun scripts/make-icons.mjs on a kit update
