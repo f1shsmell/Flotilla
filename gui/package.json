@@ -10,10 +10,11 @@
     "test": "vitest run",
     "start": "electron .",
     "bundle:binaries": "node scripts/bundle-binaries.mjs",
-    "dist": "pnpm build && pnpm bundle:binaries && node scripts/dist.mjs stable",
-    "dist:preview": "pnpm build && pnpm bundle:binaries && node scripts/dist.mjs preview"
+    "dist": "pnpm build && pnpm bundle:binaries && node scripts/make-icons.mjs && node scripts/dist.mjs stable",
+    "dist:preview": "pnpm build && pnpm bundle:binaries && node scripts/make-icons.mjs && node scripts/dist.mjs preview"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
