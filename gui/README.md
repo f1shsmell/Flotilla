@@ -74,6 +74,7 @@ true before a signed one ships.
 | `FLT_GUI_SMOKE` | render offscreen, drive the UI, print the DOM and exit |
 | `FLT_GUI_SMOKE_CLOSE` | close the window and assert it hid to the tray with the app alive; runs alone |
 | `FLT_GUI_SMOKE_AUTOSTART` | exercise the real login item: `roundtrip` enables, verifies and disables; `enable` leaves it on for a reg query and owes a cleanup run |
+| `FLT_GUI_SMOKE_TRAY_MENU` | pop the real tray context menu at `x,y` for an evidence capture; the caller screenshots it and sends Escape |
 | `FLT_GUI_SMOKE_OPEN` | session id to click before asserting |
 | `FLT_GUI_SMOKE_PROMPT` | prompt to type and send |
 | `FLT_GUI_SMOKE_EXPECT` | text that must appear before the smoke passes |

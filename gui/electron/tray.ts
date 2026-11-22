@@ -38,3 +38,13 @@ export function trayMenuSpec(channel: string, options?: TrayOptions): MenuItemSp
 export function shouldHideOnClose(quitting: boolean): boolean {
   return !quitting;
 }
+
+export type TrayClickAction = "show" | "menu";
+
+// Windows convention: one click gets the user back to the fleet, the context
+// menu belongs to the right button. Electron only delivers a click event once
+// no context menu is bound outright, so main.ts wires both gestures through
+// this mapping instead of tray.setContextMenu.
+export function trayClickAction(button: "left" | "right"): TrayClickAction {
+  return button === "left" ? "show" : "menu";
+}
