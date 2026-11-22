@@ -170,3 +170,43 @@ describe("the session chrome reads as a product", () => {
     expect(pending).toMatch(/composer-shield/);
   });
 });
+describe("the composer dials carry their names and honest state", () => {
+  it("shows each dial's name as visible text, not only a tooltip", () => {
+    const html = render(state({ controls: [modelControl()] }));
+    expect(html).toContain('class="surface-control-name">Model<');
+  });
+
+  it("keeps two dials that share a value distinguishable", () => {
+    const html = render(
+      state({
+        controls: [
+          modelControl(),
+          { id: "voice", name: "Voice style", kind: "select", current: "sonnet", choices: modelControl().choices },
+        ],
+      }),
+    );
+    expect(html).toContain(">Voice style<");
+    expect(html).toContain(">Model<");
+  });
+
+  it("keeps a current the agent did not list visible and marked", () => {
+    const html = render(
+      state({
+        controls: [{ id: "theme", name: "Theme", kind: "select", current: "light", choices: [{ value: "dark", name: "Dark" }] }],
+      }),
+    );
+    expect(html).toContain('value="light" disabled');
+    expect(html).toContain("(current)");
+  });
+
+  it("renders a control with no alternatives as a read-only chip", () => {
+    const html = render(
+      state({
+        controls: [{ id: "theme", name: "Theme", kind: "select", current: "light", choices: [] }],
+      }),
+    );
+    expect(html).toContain("surface-control-static");
+    expect(html).toContain("Theme: light");
+    expect(html).not.toContain("<select");
+  });
+});

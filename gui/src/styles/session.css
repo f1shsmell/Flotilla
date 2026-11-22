@@ -76,7 +76,26 @@
 .surface-control {
   display: flex;
   align-items: center;
+  gap: 4px;
   min-width: 0;
+}
+
+/* The dial's name is visible text: two dials can show the same value, and a
+   bare current value tells the user nothing about what they are changing. */
+.surface-control-name {
+  font-size: var(--fs-small);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* A control the agent offers no alternatives for: visible, honest, inert. */
+.surface-control-static {
+  font-size: var(--fs-small);
+  color: var(--dim);
+  padding: 3px var(--sp-2);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
 }
 
 .surface-control select {
