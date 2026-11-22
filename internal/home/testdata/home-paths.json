@@ -1,0 +1,16 @@
+{
+  "comment": "Shared golden for the home-path contract between internal/home (Go) and gui/electron/home.ts (TypeScript). Each row pins what both sides must agree on: which platform value selects which branch, the state-root suffix per channel, and that FLT_HOME overrides everything. base names the source the row's fallback reads (LOCALAPPDATA / HOME / XDG_STATE_HOME / FLT_HOME); each side resolves that source natively and asserts its result ends with the suffix. The Go test asserts the rows matching its GOOS; the TS test asserts every row with process.platform stubbed.",
+  "cases": [
+    { "platform": "win32", "channel": "stable", "env": null, "base": "LOCALAPPDATA", "suffix": "Flotilla" },
+    { "platform": "win32", "channel": "preview", "env": null, "base": "LOCALAPPDATA", "suffix": "FlotillaPreview" },
+    { "platform": "win32", "channel": "stable", "env": "set", "base": "FLT_HOME", "suffix": "" },
+    { "platform": "win32", "channel": "preview", "env": "set", "base": "FLT_HOME", "suffix": "" },
+    { "platform": "darwin", "channel": "stable", "env": null, "base": "HOME", "suffix": "Library/Application Support/Flotilla" },
+    { "platform": "darwin", "channel": "preview", "env": null, "base": "HOME", "suffix": "Library/Application Support/FlotillaPreview" },
+    { "platform": "darwin", "channel": "stable", "env": "set", "base": "FLT_HOME", "suffix": "" },
+    { "platform": "linux", "channel": "stable", "env": null, "base": "XDG_STATE_HOME", "suffix": "Flotilla" },
+    { "platform": "linux", "channel": "preview", "env": null, "base": "XDG_STATE_HOME", "suffix": "FlotillaPreview" },
+    { "platform": "linux", "channel": "stable", "env": null, "base": "HOME", "suffix": ".local/state/Flotilla" },
+    { "platform": "linux", "channel": "stable", "env": "set", "base": "FLT_HOME", "suffix": "" }
+  ]
+}
