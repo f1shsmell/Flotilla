@@ -30,14 +30,17 @@ pnpm start    # electron ., which loads dist/, so build first
 ## Building an installer
 
 ```bash
-pnpm dist     # tsc + vite, then the Go binaries, then electron-builder (NSIS)
+pnpm dist          # tsc + vite, Go binaries, icon, electron-builder (NSIS), stable
+pnpm dist:preview  # the same, packaged as Flotilla Preview beside the stable install
 ```
 
-`scripts/bundle-binaries.mjs` builds `flt-daemon` and `flt-session-host` into
-`resources/bin`, which electron-builder copies beside the app; the daemon looks
-for its session host in its own directory, so the two travel together. An
-installed window starts the daemon from `resources/bin` and only falls back to
-`PATH` when that is missing.
+`scripts/make-icons.mjs` rasterizes `src/assets/brand-mark.svg` into
+`build/icon.ico`; a brand-kit update replaces the SVG and the next dist run
+regenerates the icon. `scripts/bundle-binaries.mjs` builds `flt-daemon` and
+`flt-session-host` into `resources/bin`, which electron-builder copies beside
+the app; the daemon looks for its session host in its own directory, so the two
+travel together. An installed window starts the daemon from `resources/bin` and
+only falls back to `PATH` when that is missing.
 
 `dependencies` is empty on purpose: the renderer's packages are bundled by Vite
 into `dist/renderer`, so shipping them again in the asar would only make the

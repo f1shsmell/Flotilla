@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { packagingConfig } from "../scripts/packaging-config.mjs";
@@ -32,5 +34,15 @@ describe("packaging identity", () => {
 
   it("refuses a channel it does not know", () => {
     expect(() => packagingConfig("beta")).toThrow("unknown packaging channel: beta");
+  });
+
+  it("ships the application icon the builder picks up", () => {
+    // electron-builder takes build/icon.ico without configuration; a missing
+    // icon silently ships the default Electron one instead.
+    const icon = readFileSync(fileURLToPath(new URL("../build/icon.ico", import.meta.url)));
+    expect(icon.length).toBeGreaterThan(1024);
+    // ICO: reserved zero, type 1, then the size table.
+    expect(icon.readUInt16LE(2)).toBe(1);
+    expect(icon.readUInt16LE(4)).toBeGreaterThanOrEqual(2);
   });
 });
