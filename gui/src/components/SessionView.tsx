@@ -32,7 +32,11 @@ interface Props {
 
 // ControlSelect renders one agent setting. A boolean has no choices on the
 // wire — on and off are the renderer's words — and grouped choices rebuild
-// their sections from the labels the daemon kept.
+// their sections from the labels the daemon kept. The control's name is
+// visible text: two dials can show the same value, and a bare "Balanced" tells
+// the user nothing. A current the agent did not list stays visible as a
+// disabled entry rather than vanishing into something the select cannot show,
+// and a control that offers no choices at all renders as a read-only chip.
 function ControlSelect({
   control,
   onSet,
@@ -48,6 +52,18 @@ function ControlSelect({
         ]
       : (control.choices ?? []);
 
+  if (control.kind !== "boolean" && choices.length === 0) {
+    return (
+      <span
+        className="surface-control surface-control-static"
+        title={`${control.name}: ${control.current} (the agent offers no alternatives)`}
+      >
+        {control.name}: {control.current}
+      </span>
+    );
+  }
+
+  const listed = choices.some((choice) => choice.value === control.current);
   const loose = choices.filter((choice) => !choice.group);
   const groups: { name: string; choices: Choice[] }[] = [];
   for (const choice of choices) {
@@ -71,12 +87,19 @@ function ControlSelect({
 
   return (
     <label className={`surface-control kind-${control.kind}`}>
+      
+      <span className="surface-control-name">{control.name}</span>
       <select
         aria-label={control.name}
         title={`${control.name}: ${currentName}`}
         value={control.current}
         onChange={(event) => onSet(control.id, event.target.value)}
       >
+        {!listed && control.current !== "" ? (
+          <option value={control.current} disabled>
+            {currentName} (current)
+          </option>
+        ) : null}
         {loose.map((choice) => (
           <option key={choice.value} value={choice.value}>
             {choice.name || choice.value}

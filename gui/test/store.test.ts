@@ -757,6 +757,27 @@ describe("surface controls", () => {
     expect(controls[0].choices?.[0].group).toBe("Fast");
   });
 
+  it("orders the controls by id no matter what order the agent announced", () => {
+    // An agent re-announces its options after every mode change, sometimes in
+    // a different order: the composer bar would reshuffle under the cursor.
+    // The id is the one key that stays put.
+    const announce = (order: string[]) =>
+      parseControls(
+        order.map((id) => ({
+          id,
+          name: `Name ${id}`,
+          kind: "select",
+          current: "x",
+          choices: [{ value: "x", name: "X" }],
+        })),
+      );
+
+    const first = announce(["voice", "alpha", "mode", "budget"]);
+    const second = announce(["budget", "mode", "voice", "alpha"]);
+    expect(first.map((control) => control.id)).toEqual(["alpha", "budget", "mode", "voice"]);
+    expect(second.map((control) => control.id)).toEqual(first.map((control) => control.id));
+  });
+
   it("does not trust a malformed list", () => {
     expect(parseControls(null)).toEqual([]);
     expect(parseControls("nope")).toEqual([]);

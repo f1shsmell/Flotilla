@@ -239,10 +239,12 @@ export interface Control {
 }
 
 // parseControls reads the projected list without trusting it: a field the
-// daemon did not send becomes a visible default rather than undefined.
+// daemon did not send becomes a visible default rather than undefined. The
+// controls sort by id because the agent re-announces its list in whatever
+// order it likes — the composer bar must not reshuffle under the cursor.
 export function parseControls(raw: unknown): Control[] {
   const list = Array.isArray(raw) ? raw : [];
-  return list.map((entry) => {
+  const controls = list.map((entry) => {
     const control = (entry ?? {}) as Record<string, unknown>;
     const choices = Array.isArray(control.choices) ? control.choices : [];
     return {
@@ -250,8 +252,8 @@ export function parseControls(raw: unknown): Control[] {
       name: asString(control.name),
       kind: asString(control.kind),
       current: asString(control.current),
-      choices: choices.map((item) => {
-        const choice = (item ?? {}) as Record<string, unknown>;
+      choices: choices.map((raw_choice) => {
+        const choice = (raw_choice ?? {}) as Record<string, unknown>;
         return {
           value: asString(choice.value),
           name: asString(choice.name),
@@ -260,6 +262,7 @@ export function parseControls(raw: unknown): Control[] {
       }),
     };
   });
+  return controls.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // withControls folds one surface event into the session. The event carries the

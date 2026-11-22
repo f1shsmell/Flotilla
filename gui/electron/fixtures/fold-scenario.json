@@ -1,6 +1,8 @@
 {
   "name": "fold-demo",
-  "capabilities": { "resume": true },
+  "capabilities": {
+    "resume": true
+  },
   "surface": [
     {
       "id": "mode",
@@ -8,9 +10,18 @@
       "kind": "mode",
       "current": "default",
       "choices": [
-        { "value": "default", "name": "Ask first" },
-        { "value": "acceptEdits", "name": "Accept edits" },
-        { "value": "plan", "name": "Plan only" }
+        {
+          "value": "default",
+          "name": "Ask first"
+        },
+        {
+          "value": "acceptEdits",
+          "name": "Accept edits"
+        },
+        {
+          "value": "plan",
+          "name": "Plan only"
+        }
       ]
     },
     {
@@ -19,8 +30,14 @@
       "kind": "select",
       "current": "sonnet",
       "choices": [
-        { "value": "sonnet", "name": "Sonnet" },
-        { "value": "opus", "name": "Opus" }
+        {
+          "value": "sonnet",
+          "name": "Sonnet"
+        },
+        {
+          "value": "opus",
+          "name": "Opus"
+        }
       ]
     },
     {
@@ -29,22 +46,92 @@
       "kind": "select",
       "current": "low",
       "choices": [
-        { "value": "low", "name": "Low" },
-        { "value": "high", "name": "High" }
+        {
+          "value": "low",
+          "name": "Low"
+        },
+        {
+          "value": "high",
+          "name": "High"
+        }
       ]
     },
-    { "id": "fast", "name": "Fast answers", "kind": "boolean", "current": "false" }
+    {
+      "id": "fast",
+      "name": "Fast answers",
+      "kind": "boolean",
+      "current": "false"
+    },
+    {
+      "id": "voice",
+      "name": "Voice style",
+      "kind": "select",
+      "current": "balanced",
+      "choices": [
+        {
+          "value": "balanced",
+          "name": "Balanced"
+        },
+        {
+          "value": "expressive",
+          "name": "Expressive"
+        }
+      ]
+    },
+    {
+      "id": "priority",
+      "name": "Priority",
+      "kind": "select",
+      "current": "balanced",
+      "choices": [
+        {
+          "value": "balanced",
+          "name": "Balanced"
+        },
+        {
+          "value": "focused",
+          "name": "Focused"
+        }
+      ]
+    }
   ],
   "turns": [
     {
       "updates": [
-        { "kind": "thought", "text": "Planning three calls before answering." },
-        { "kind": "tool", "tool_call_id": "f1", "tool_title": "Read file" },
-        { "kind": "tool", "tool_call_id": "f1", "tool_status": "completed" },
-        { "kind": "tool", "tool_call_id": "f2", "tool_title": "Edit file" },
-        { "kind": "tool", "tool_call_id": "f2", "tool_status": "completed" },
-        { "kind": "tool", "tool_call_id": "f3", "tool_title": "Run tests" },
-        { "kind": "tool", "tool_call_id": "f3", "tool_status": "completed" },
+        {
+          "kind": "thought",
+          "text": "Planning three calls before answering."
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f1",
+          "tool_title": "Read file"
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f1",
+          "tool_status": "completed"
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f2",
+          "tool_title": "Edit file"
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f2",
+          "tool_status": "completed"
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f3",
+          "tool_title": "Run tests"
+        },
+        {
+          "kind": "tool",
+          "tool_call_id": "f3",
+          "tool_status": "completed"
+        },
         {
           "kind": "message",
           "text": "Folded run proved: three tool calls collapsed into one row."
