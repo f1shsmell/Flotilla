@@ -275,7 +275,8 @@ func (c *Catalog) Set(id string, change Change) (Entry, error) {
 
 // Builtins lists the presets this build ships, in the order the picker shows
 // them. The list is a convenience, not a capability claim: what an agent can do
-// is measured by `flt probe` and recorded in docs/support-matrix.md.
+// is measured by `flt probe` and recorded in the support matrix, which lives
+// outside this tree.
 func Builtins() []Preset {
 	return []Preset{
 		{

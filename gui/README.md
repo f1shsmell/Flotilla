@@ -135,6 +135,6 @@ FLT_HOME=/tmp/flt-home FLT_CHANNEL=demo FLT_DAEMON_BIN=/tmp/flt-daemon.exe \
 - If `electron .` complains that `app` is undefined, the shell has
   `ELECTRON_RUN_AS_NODE=1` set (IDEs built on Electron export it). Run with
   `env -u ELECTRON_RUN_AS_NODE`.
-- `pnpm install` may skip the Electron binary download; if `dist/` is missing
-  under `node_modules/.pnpm/electron*/node_modules/electron/`, run
-  `node node_modules/.pnpm/electron*/node_modules/electron/install.js`.
+- `pnpm install` may skip the Electron binary download; if the package's own
+  build output is missing under `node_modules/.pnpm/electron*/node_modules/electron/`,
+  run `node node_modules/.pnpm/electron*/node_modules/electron/install.js`.
