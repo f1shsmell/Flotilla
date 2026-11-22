@@ -100,6 +100,7 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), launch.Command, launch.Args...)
 	cmd.Dir = cfg.Workspace
 	cmd.Env = launch.Env
+	detachAgent(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
