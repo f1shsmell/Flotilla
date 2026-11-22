@@ -10,7 +10,8 @@
     "test": "vitest run",
     "start": "electron .",
     "bundle:binaries": "node scripts/bundle-binaries.mjs",
-    "dist": "pnpm build && pnpm bundle:binaries && electron-builder --win --publish never"
+    "dist": "pnpm build && pnpm bundle:binaries && node scripts/dist.mjs stable",
+    "dist:preview": "pnpm build && pnpm bundle:binaries && node scripts/dist.mjs preview"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
@@ -27,43 +28,6 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
-  },
-  "build": {
-    "appId": "dev.flotilla.app",
-    "productName": "Flotilla",
-    "copyright": "MIT",
-    "directories": {
-      "output": "release"
-    },
-    "publish": null,
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/bin",
-        "to": "bin"
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "Flotilla-${version}-${arch}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Flotilla",
-      "deleteAppDataOnUninstall": false
-    }
   },
   "author": {
     "name": "f1shsmell"
