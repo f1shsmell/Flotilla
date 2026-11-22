@@ -6,10 +6,11 @@ const identity = packagingConfig(channel);
 const config = {
   appId: identity.appId,
   productName: identity.productName,
-  // The runtime reads its channel from the packaged manifest: an installed app
-  // launches with no env (double-click, login item) and must still land on its
-  // own pipe and home.
-  extraMetadata: { fltChannel: channel },
+  // The runtime reads its identity from the packaged manifest: an installed
+  // app launches with no env (double-click, login item) and must still land
+  // on its own pipe, home and userData. app.getName() reads this manifest's
+  // productName, which is what splits the two channels' userData apart.
+  extraMetadata: { fltChannel: channel, productName: identity.productName },
   copyright: "MIT",
   directories: {
     output: "release",
