@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -25,6 +26,17 @@ const waitFor = 20 * time.Second
 // restarts is the acceptance number from the milestone plan: ten daemon deaths
 // must not cost a session.
 const restarts = 10
+
+// TestMain answers the spawn tests' dying-host helper before any flag
+// parsing: the re-executed child carries the real host's flags it cannot
+// parse, so a flag-based switch would die of the flags, not the scenario.
+func TestMain(m *testing.M) {
+	if os.Getenv(spawnHelperEnv) != "" {
+		fmt.Fprintln(os.Stderr, spawnHelperStderr)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -433,5 +445,42 @@ func TestSpawnFailsWhenTheHostDiesFirst(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exited before it published") {
 		t.Fatalf("error %q does not say the host died", err)
+	}
+}
+
+// spawnHelperStderr is what the re-executed helper writes before dying: a
+// stand-in for an agent binary that says why it cannot start.
+const spawnHelperStderr = "claude auth status failed: native binary missing"
+
+// spawnHelperEnv turns this binary into the dying host: TestMain answers it
+// before any flag parsing, because the child carries the real host's flags it
+// cannot parse.
+const spawnHelperEnv = "DAEMON_SPAWN_HELPER_STDERR"
+
+// TestSpawnErrorCarriesTheHostStderr pins the death report: a host that dies
+// before publishing carries its own stderr tail in the error, because the
+// daemon's stderr is invisible when the GUI spawned it.
+func TestSpawnErrorCarriesTheHostStderr(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate the test binary: %v", err)
+	}
+	t.Setenv(spawnHelperEnv, "1")
+
+	spawn := ExecSpawner(discardLogger())
+	_, err = spawn(context.Background(), SpawnRequest{
+		Binary:   exe,
+		Session:  "sess-stderr",
+		Mode:     session.ModePTY,
+		Command:  "unused",
+		Args:     []string{"-test.run=TestNoSuchTestRuns"},
+		Channel:  "test",
+		StateDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("a host that exits before publishing was reported as started")
+	}
+	if !strings.Contains(err.Error(), spawnHelperStderr) {
+		t.Fatalf("error %q does not carry the host's stderr", err)
 	}
 }
