@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray, type WebContents } from "electron";
 
 import { DaemonClient } from "./client";
+import { resolveChannel } from "./channel";
 import { constants, methods } from "./contract";
 import { STREAM_INPUT, RpcError } from "./wire";
 import { ensure } from "./daemon";
@@ -16,7 +17,22 @@ import { productLabel, shouldHideOnClose, trayMenuSpec } from "./tray";
 import { TRAY_ICON, TRAY_ICON_2X } from "./tray-icon";
 import { windowSetup } from "./window";
 
-const channel = process.env.FLT_CHANNEL ?? "stable";
+// An installed copy launches without env (double-click, login item), so the
+// builder bakes the channel into the packaged manifest; dev and smoke runs
+// name their own through FLT_CHANNEL.
+function manifestChannel(): string | null {
+  if (!app.isPackaged) {
+    return null;
+  }
+  try {
+    const meta = require(path.join(app.getAppPath(), "package.json")) as { fltChannel?: string };
+    return typeof meta.fltChannel === "string" ? meta.fltChannel : null;
+  } catch {
+    return null;
+  }
+}
+
+const channel = resolveChannel(process.env.FLT_CHANNEL, app.isPackaged, manifestChannel());
 
 // clientId names this window on every connection it opens. The daemon answers a
 // per-window question from it — has this window already read the finished turn —

@@ -1,10 +1,15 @@
 import { packagingConfig } from "./scripts/packaging-config.mjs";
 
-const identity = packagingConfig(process.env.FLT_CHANNEL ?? "stable");
+const channel = process.env.FLT_CHANNEL ?? "stable";
+const identity = packagingConfig(channel);
 
 const config = {
   appId: identity.appId,
   productName: identity.productName,
+  // The runtime reads its channel from the packaged manifest: an installed app
+  // launches with no env (double-click, login item) and must still land on its
+  // own pipe and home.
+  extraMetadata: { fltChannel: channel },
   copyright: "MIT",
   directories: {
     output: "release",
