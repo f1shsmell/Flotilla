@@ -20,6 +20,20 @@ export function fleetSummary(status: Status | null): FleetSummary {
   };
 }
 
+// windowTitle names the window per channel: the installed preview must read
+// differently from stable in the taskbar and in alt-tab, where neither the
+// header badge nor the tray label travels. An unknown channel still says
+// Flotilla.
+export function windowTitle(channel: string | null): string {
+  if (channel === null || channel === "" || channel === "stable") {
+    return "Flotilla";
+  }
+  if (channel === "preview") {
+    return "Flotilla Preview";
+  }
+  return `Flotilla ${channel}`;
+}
+
 // dirLabel is the last segment of a working directory, Windows or POSIX: the
 // card names the project, the full path stays in the tooltip.
 export function dirLabel(dir: string): string {

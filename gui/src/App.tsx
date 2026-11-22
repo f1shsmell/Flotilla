@@ -8,7 +8,7 @@ import { IconBack, IconPlus, IconRefresh, IconSliders } from "./components/Icons
 import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionView } from "./components/SessionView";
 import { StatusBar } from "./components/StatusBar";
-import { mainEmpty } from "./fleetView";
+import { mainEmpty, windowTitle } from "./fleetView";
 import {
   addPermission,
   answerPermission,
@@ -236,6 +236,13 @@ export function App(): React.ReactElement {
     const timer = setInterval(() => void refresh(), 2000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  // The title names the channel the way the badge does: two installed
+  // channels must be told apart in the taskbar, where nothing else travels.
+  const channel = fleet?.channel ?? null;
+  useEffect(() => {
+    document.title = windowTitle(channel);
+  }, [channel]);
 
   // The catalogue is read once and then after every switch the user flips. It
   // is not polled: an adapter file lands on the next daemon start, and an

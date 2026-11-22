@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dirLabel, fleetSummary, mainEmpty } from "../src/fleetView";
+import { dirLabel, fleetSummary, mainEmpty, windowTitle } from "../src/fleetView";
 import type { Status, StatusEntry } from "../src/store";
 
 function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true): StatusEntry {
@@ -66,5 +66,21 @@ describe("mainEmpty", () => {
 
   it("asks the user to pick once the fleet has sessions", () => {
     expect(mainEmpty(status([entry("a", "idle")]))).toBe("pick");
+  });
+});
+
+describe("windowTitle", () => {
+  it("keeps stable and the unknown at plain Flotilla", () => {
+    expect(windowTitle(null)).toBe("Flotilla");
+    expect(windowTitle("")).toBe("Flotilla");
+    expect(windowTitle("stable")).toBe("Flotilla");
+  });
+
+  it("names the preview the way its installer does", () => {
+    expect(windowTitle("preview")).toBe("Flotilla Preview");
+  });
+
+  it("carries a dev channel so two smoke windows stay apart", () => {
+    expect(windowTitle("tray-shot")).toBe("Flotilla tray-shot");
   });
 });
