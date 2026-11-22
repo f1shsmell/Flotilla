@@ -253,6 +253,12 @@ func (d *Daemon) attachClient(ctx context.Context, peer *ipc.Conn, params json.R
 
 	// The agent's own log is the daemon's, not the host's: this is what shows a
 	// window the work that happened before it opened, and it survives the host.
+	//
+	// The answer is the authoritative tail of that log, and a client may treat
+	// it as such: what it holds is appended in the order it is numbered, and
+	// what it does not hold the client does not hold either — the stored log
+	// trims its oldest half, so a long-lived client can receive a sequence past
+	// the one it last saw and must record that hole rather than hide it.
 	history, more, err := d.readHistory(req.ID, session.HistoryRequest{})
 	if err != nil {
 		// A transcript that cannot be read is worth a warning, not a refusal:

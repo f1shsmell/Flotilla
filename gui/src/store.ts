@@ -542,9 +542,12 @@ export function newSession(id: string, mode: string): SessionState {
   };
 }
 
-// applyHistory folds the updates the daemon kept for a client that has just
-// attached. They are the log the session already had, so they go in before any
-// live update and in the order the daemon numbered them.
+// applyHistory folds the attach answer into the log. The answer is the
+// authoritative tail of the session's stored log: the caller folds it into a
+// fresh state, so an entry the answer does not hold is an entry the view does
+// not hold, and one it does hold is appended in the order the daemon numbered.
+// `more` admits the tail is cut mid-log rather than pretending the session
+// started where this page starts.
 //
 // An update arrives twice on a reattach: once in this history and once as live
 // traffic if it was produced while the attach was in flight. The sequence is
@@ -566,12 +569,23 @@ export function applyHistory(state: SessionState, raw: unknown): SessionState {
 //
 // An update the log already holds is dropped rather than folded again: a
 // reattach replays the recent past, and appending it would show the same
-// paragraph twice with its text doubled.
+// paragraph twice with its text doubled. An unseen one is appended in order.
+//
+// A sequence past the one expected names a hole in what this log holds — the
+// stored log trims its oldest half and moves the window under a long-lived
+// client. Dropping the update would hide the gap; recording a warning about it
+// is the most the projector may do, so the fact is logged and the view
+// continues from what did arrive.
 export function applyUpdate(state: SessionState, raw: unknown): SessionState {
   const value = (raw ?? {}) as Record<string, unknown>;
   const seq = typeof value.seq === "number" ? value.seq : 0;
   if (seq > 0 && seq <= state.lastSeq) {
     return state;
+  }
+  if (seq > 0 && state.lastSeq > 0 && seq > state.lastSeq + 1) {
+    console.warn(
+      `update sequence has a hole: expected ${state.lastSeq + 1}, got ${seq}`,
+    );
   }
 
   const folded = foldUpdate(state, value);
