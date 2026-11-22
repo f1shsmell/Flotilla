@@ -667,3 +667,18 @@ func between(text, start, end string) (string, bool) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// TestTheClaudePresetPointsTheBridgeAtTheWorkingCLI pins why claude-agent-acp
+// can start at all: its bundled sdk wants a native binary the machine may not
+// have installed under the sdk, and the preset declares CLAUDE_CODE_EXECUTABLE
+// so the host resolves the working CLI on PATH at spawn.
+func TestTheClaudePresetPointsTheBridgeAtTheWorkingCLI(t *testing.T) {
+	entry := entryFor(t, newCatalog(t).List(), "claude")
+	value, declared := entry.Adapter.Env["CLAUDE_CODE_EXECUTABLE"]
+	if !declared {
+		t.Fatal("the claude preset declares no CLAUDE_CODE_EXECUTABLE")
+	}
+	if value != "claude" {
+		t.Fatalf("CLAUDE_CODE_EXECUTABLE = %q, want the bare CLI name the host resolves", value)
+	}
+}

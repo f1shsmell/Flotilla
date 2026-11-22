@@ -306,12 +306,17 @@ func Builtins() []Preset {
 			Description: "opencode over ACP.",
 		},
 		{
-			ID:          "claude",
-			Name:        "Claude Code",
-			Command:     "claude-agent-acp",
-			Mode:        session.ModeACP,
-			Needs:       "a logged-in Claude Code CLI",
-			Description: "Claude Code through the claude-agent-acp bridge.",
+			ID:      "claude",
+			Name:    "Claude Code",
+			Command: "claude-agent-acp",
+			Mode:    session.ModeACP,
+			Needs:   "a logged-in Claude Code CLI",
+			Description: "Claude Code through the claude-agent-acp bridge. The bridge's sdk wants " +
+				"its own native binary; CLAUDE_CODE_EXECUTABLE points it at the working CLI, " +
+				"resolved on PATH at spawn.",
+			Adapter: adapters.Adapter{
+				Env: map[string]string{"CLAUDE_CODE_EXECUTABLE": "claude"},
+			},
 		},
 		{
 			ID:          "gemini",

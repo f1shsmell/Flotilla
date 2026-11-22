@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -69,9 +72,37 @@ func (h *Host) acpLaunch(resumeID string) acp.Launch {
 		Command:  h.cfg.Command,
 		Args:     h.cfg.Args,
 		Dir:      h.cfg.Dir,
-		Env:      h.cfg.Env,
+		Env:      agentEnv(h.cfg.Env, h.cfg.Adapter.Env),
 		ResumeID: resumeID,
 	}
+}
+
+// lookPath is the resolver agentEnv uses for bare executable names; a variable
+// so tests can pin the resolution without a real PATH.
+var lookPath = exec.LookPath
+
+// agentEnv lays the adapter's declared variables over the host's environment.
+// A value that names an executable on PATH resolves to its absolute path: an
+// adapter cannot know where a machine keeps its binaries, and a consumer that
+// does not search PATH would fail on a bare name. A nil environment inherits
+// this process's, which is what the child would have read anyway.
+func agentEnv(environ []string, declared map[string]string) []string {
+	if len(declared) == 0 {
+		return environ
+	}
+	env := environ
+	if env == nil {
+		env = os.Environ()
+	}
+	for key, value := range declared {
+		if !strings.ContainsAny(value, `\/`) {
+			if resolved, err := lookPath(value); err == nil {
+				value = resolved
+			}
+		}
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 // acpConfig is the client behaviour every launch of this host's agent gets.
