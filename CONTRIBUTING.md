@@ -21,7 +21,10 @@ agent sessions live in [FLOTILLA.md](FLOTILLA.md).
 | `cmd/flt-session-host` | Per-session handle holder: ConPTY / ACP stdio, survives daemon restart |
 | `gui/` | Electron + React + TS client; never spawns agents |
 | `$FLT_HOME/config/adapters/` | JSON adapter definitions (data, not code); under the state root, not the tree |
-| `docs/` | Engineering docs |
+
+Design notes, product positioning, the verified support matrix and acceptance
+evidence are not published with the code. They live in the maintainer's
+workspace beside the repository, in a design folder and an evidence folder.
 
 Dependency direction: `gui → daemon → session-host`. Contract types live in one
 Go package; TS types are generated from it (tygo/go2ts) or held by a wire-parity

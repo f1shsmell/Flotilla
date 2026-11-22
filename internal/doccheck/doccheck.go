@@ -29,6 +29,18 @@ type PathRef struct {
 // the tree itself.
 var ref = regexp.MustCompile("`([A-Za-z0-9_.-]+)/`")
 
+// skipped names the trees that hold other people's documentation: dependency
+// caches and build output. They are not ours to police, and walking them would
+// make the check slow and its failures meaningless.
+var skipped = map[string]bool{
+	"node_modules": true,
+	"dist":         true,
+	"release":      true,
+	"out":          true,
+	"vendor":       true,
+	".git":         true,
+}
+
 // Check walks the Markdown at the repository root and under docs/, and returns
 // every reference to a top-level directory the tree does not contain. The
 // result is sorted so a failure is stable between runs.
@@ -73,9 +85,10 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// markdown is every Markdown file at the repository root and under docs/. A
-// package's own README is excluded: it describes code the package's tests
-// already pin.
+// markdown is every Markdown file at the repository root and one level below
+// it, skipping the trees that are not ours. Subdirectories are walked rather
+// than named, so a doc directory that comes or goes needs no edit here. A
+// package's own README stays in scope by design: it also names directories.
 func markdown(root string) ([]string, error) {
 	var files []string
 
@@ -84,18 +97,27 @@ func markdown(root string) ([]string, error) {
 		return nil, fmt.Errorf("read the repository root: %w", err)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".md") {
 			files = append(files, filepath.Join(root, entry.Name()))
 		}
 	}
 
-	entries, err = os.ReadDir(filepath.Join(root, "docs"))
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read docs: %w", err)
-	}
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			files = append(files, filepath.Join(root, "docs", entry.Name()))
+		if !entry.IsDir() || skipped[entry.Name()] {
+			continue
+		}
+		nested, err := os.ReadDir(filepath.Join(root, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+		}
+		for _, file := range nested {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".md") {
+				continue
+			}
+			files = append(files, filepath.Join(root, entry.Name(), file.Name()))
 		}
 	}
 

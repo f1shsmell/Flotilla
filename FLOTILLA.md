@@ -36,13 +36,16 @@ protocol).
 ## Conventions
 
 - Monorepo: one Go module with `cmd/{flt,flt-daemon,flt-session-host}` and
-  `internal/`, plus `gui/` (Electron + React + TS) and `docs/`. Dependency
+  `internal/`, plus `gui/` (Electron + React + TS). Dependency
   direction: `gui → daemon → session-host`; adapters are data loaded by the
   host engine from `$FLT_HOME/config/adapters`, so a definition travels with the
   state root rather than with the source tree. Contract types (IPC messages,
   adapter schema) live in one Go package; TS types are generated from it
   (tygo/go2ts) or held by a wire-parity gate — a type two sides mirror by hand
   is a parity bug waiting to happen.
+- Design notes and evidence stay out of this tree. Positioning, the support
+  matrix, acceptance evidence and design drafts are the maintainer's working
+  material; publishing them would commit to claims the code has not earned.
 - Libraries: PTY via `charmbracelet/x/xpty` (fallback `aymanbagabas/go-pty`);
   ACP client via `coder/acp-go-sdk`; SQLite via `modernc.org/sqlite` (pure Go,
   keeps cross-compilation). creack/pty has no Windows backend; do not add it.

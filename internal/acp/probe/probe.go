@@ -61,8 +61,8 @@ type Agent struct {
 // Known lists the ACP agents this build has a name for, projected from
 // agent.Builtins() so the picker and `flt probe` cannot drift apart. The list is
 // a convenience, not a capability claim: what a host can do depends on the
-// agent's own dialect, which the probe measures and docs/support-matrix.md
-// records.
+// agent's own dialect, which `flt probe` measures and the support matrix
+// records under the maintainer's evidence directory (outside this tree).
 func Known() []Agent {
 	presets := agent.Builtins()
 
