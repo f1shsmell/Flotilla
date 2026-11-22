@@ -45,7 +45,7 @@ func TestAgentEnvResolvesBareExecutableNames(t *testing.T) {
 
 func TestAgentEnvKeepsValuesThatAreNotBareNames(t *testing.T) {
 	saved := lookPath
-	lookPath = func(name string) (string, error) {
+	lookPath = func(_ string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	t.Cleanup(func() { lookPath = saved })
