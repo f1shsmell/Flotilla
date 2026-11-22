@@ -28,17 +28,17 @@ describe("the channel a window runs on", () => {
   });
 });
 
-describe("the builder bakes the channel into the packaged manifest", () => {
-  async function manifestFor(channel: string): Promise<string | undefined> {
+describe("the builder bakes the identity into the packaged manifest", () => {
+  async function manifestFor(channel: string): Promise<{ fltChannel?: string; productName?: string }> {
     const saved = process.env.FLT_CHANNEL;
     process.env.FLT_CHANNEL = channel;
     try {
       // A fresh module registry re-reads FLT_CHANNEL at config time.
       vi.resetModules();
       const config = (await import("../electron-builder.config.mjs")) as {
-        default: { extraMetadata?: { fltChannel?: string } };
+        default: { extraMetadata?: { fltChannel?: string; productName?: string } };
       };
-      return config.default.extraMetadata?.fltChannel;
+      return config.default.extraMetadata ?? {};
     } finally {
       if (saved === undefined) {
         delete process.env.FLT_CHANNEL;
@@ -49,7 +49,17 @@ describe("the builder bakes the channel into the packaged manifest", () => {
   }
 
   it("names preview and stable exactly", async () => {
-    expect(await manifestFor("preview")).toBe("preview");
-    expect(await manifestFor("stable")).toBe("stable");
+    expect((await manifestFor("preview")).fltChannel).toBe("preview");
+    expect((await manifestFor("stable")).fltChannel).toBe("stable");
+  });
+
+  it("carries the product name so the channels' userData splits apart", async () => {
+    // app.getName() reads the packaged manifest: without a productName both
+    // channels resolve userData to %APPDATA%/flotilla-gui and overwrite each
+    // other's ui-state.json — the same collapse #59 fixed one layer down.
+    const stable = await manifestFor("stable");
+    const preview = await manifestFor("preview");
+    expect(stable.productName).toBe("Flotilla");
+    expect(preview.productName).toBe("Flotilla Preview");
   });
 });
