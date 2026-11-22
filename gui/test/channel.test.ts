@@ -13,6 +13,13 @@ describe("the channel a window runs on", () => {
     expect(resolveChannel("pack-smoke", false, null)).toBe("pack-smoke");
   });
 
+  it("treats an empty FLT_CHANNEL as unset", () => {
+    // Launchers set variables to empty strings; a channel named "" would
+    // render pipes no daemon listens on.
+    expect(resolveChannel("", true, "preview")).toBe("preview");
+    expect(resolveChannel("", false, null)).toBe("stable");
+  });
+
   it("reads an installed copy's channel from its packaging identity", () => {
     // A double-clicked (or login-launched) preview exe carries no env. Without
     // the identity it ran as stable: the preview install dialed the stable
