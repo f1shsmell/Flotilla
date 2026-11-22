@@ -12,6 +12,7 @@ electron/daemon.ts   connect, or start the daemon and retry
 electron/home.ts     FLT_HOME and the channel's paths, mirroring internal/home
 electron/main.ts     window, IPC handlers, one connection per open session
 electron/tray.ts     the tray's labels, menu shape and the close-means-hide decision
+electron/autostart.ts the login item: who may write it, what it launches, how a launch knows
 electron/tray-icon.ts generated tray PNGs; rerun scripts/make-icons.mjs on a kit update
 electron/window.ts   the BrowserWindow settings: the security switches, offscreen smoke
 electron/smoke.ts    offscreen run that drives the real UI (FLT_GUI_SMOKE)
@@ -72,6 +73,7 @@ true before a signed one ships.
 | `FLT_DAEMON_BIN` | daemon to start when none is listening; default `flt-daemon` on `PATH` |
 | `FLT_GUI_SMOKE` | render offscreen, drive the UI, print the DOM and exit |
 | `FLT_GUI_SMOKE_CLOSE` | close the window and assert it hid to the tray with the app alive; runs alone |
+| `FLT_GUI_SMOKE_AUTOSTART` | exercise the real login item: `roundtrip` enables, verifies and disables; `enable` leaves it on for a reg query and owes a cleanup run |
 | `FLT_GUI_SMOKE_OPEN` | session id to click before asserting |
 | `FLT_GUI_SMOKE_PROMPT` | prompt to type and send |
 | `FLT_GUI_SMOKE_EXPECT` | text that must appear before the smoke passes |

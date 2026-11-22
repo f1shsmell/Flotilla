@@ -6,19 +6,30 @@
 
 export interface MenuItemSpec {
   label: string;
-  action: "open" | "quit";
+  action: "open" | "quit" | "autostart";
+  // The login item is a checkbox; the state comes from the OS registry.
+  checked?: boolean;
+}
+
+export interface TrayOptions {
+  // Whether this install may write a login item (packaged builds only).
+  autostartAvailable: boolean;
+  // What the OS currently says about launching at login.
+  openAtLogin: boolean;
 }
 
 export function productLabel(channel: string): string {
   return channel === "preview" ? "Flotilla Preview" : "Flotilla";
 }
 
-export function trayMenuSpec(channel: string): MenuItemSpec[] {
+export function trayMenuSpec(channel: string, options?: TrayOptions): MenuItemSpec[] {
   const product = productLabel(channel);
-  return [
-    { label: `Open ${product}`, action: "open" },
-    { label: `Quit ${product}`, action: "quit" },
-  ];
+  const items: MenuItemSpec[] = [{ label: `Open ${product}`, action: "open" }];
+  if (options?.autostartAvailable) {
+    items.push({ label: "Start at login", action: "autostart", checked: options.openAtLogin });
+  }
+  items.push({ label: `Quit ${product}`, action: "quit" });
+  return items;
 }
 
 // A user's click on X ends the window, not the fleet: the sessions keep
