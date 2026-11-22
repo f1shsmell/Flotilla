@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/adapters"
@@ -75,8 +76,12 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		// its deadline, and the child gets its own process group so an interrupt
 		// on the daemon's console never reaches it.
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), req.Binary, args...)
+		// The host's stderr is captured for the death report: the GUI spawns
+		// this daemon with its own stderr ignored, so a host that dies saying
+		// why would otherwise die saying nothing anyone can read.
+		var stderr strings.Builder
 		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		cmd.Stderr = &stderr
 		setDetached(cmd)
 
 		if err := cmd.Start(); err != nil {
@@ -91,6 +96,17 @@ func ExecSpawner(log *slog.Logger) Spawner {
 		go func() { exited <- cmd.Wait() }()
 
 		if err := waitForRecord(ctx, session.NewRegistry(req.StateDir), req.Session, exited); err != nil {
+			// Wait has returned by the time exited fires, so the captured
+			// stderr is complete. The tail is the host's own reason: an agent
+			// binary that is missing a native binary says so here.
+			if strings.Contains(err.Error(), "exited before it published") {
+				tail := stderr.String()
+				tail = strings.TrimRight(tail, "\r\n")
+				if len(tail) > 600 {
+					tail = "…" + tail[len(tail)-600:]
+				}
+				return ipc.Address{}, fmt.Errorf("%w (it wrote: %s)", err, tail)
+			}
 			return ipc.Address{}, err
 		}
 		return ipc.Address{Channel: string(req.Session), Name: "host"}, nil
@@ -157,7 +173,7 @@ func waitForRecord(ctx context.Context, reg session.Registry, id session.ID, exi
 		case <-ctx.Done():
 			return fmt.Errorf("wait for session %q to publish: %w", id, ctx.Err())
 		case err := <-exited:
-			return fmt.Errorf("session %q exited before it published: %w (its stderr is the daemon's)", id, err)
+			return fmt.Errorf("session %q exited before it published: %w", id, err)
 		case <-time.After(recordPollInterval):
 		}
 	}
