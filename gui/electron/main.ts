@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 
 import { randomUUID } from "node:crypto";
 
-import { app, BrowserWindow, ipcMain, shell, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray, type WebContents } from "electron";
 
 import { DaemonClient } from "./client";
 import { constants, methods } from "./contract";
@@ -12,6 +12,8 @@ import { ensure } from "./daemon";
 import { reconnect, type ReconnectTask } from "./reconnect";
 import { Coalescer } from "./stream";
 import { readUiState, saveUiState, type UiState } from "./uiState";
+import { productLabel, shouldHideOnClose, trayMenuSpec } from "./tray";
+import { TRAY_ICON, TRAY_ICON_2X } from "./tray-icon";
 import { windowSetup } from "./window";
 
 const channel = process.env.FLT_CHANNEL ?? "stable";
@@ -57,6 +59,12 @@ const wanted = new Set<string>();
 
 let control: DaemonClient | null = null;
 let window: BrowserWindow | null = null;
+// Held for the app's lifetime: an unreferenced Tray object can be collected,
+// and its icon disappears from the notification area with it.
+let tray: Tray | null = null;
+// quitting separates the window's close button from the app's own exit: the
+// close button hides to the tray, an app.quit() must really close.
+let quitting = false;
 
 function send(target: WebContents, event: unknown): void {
   if (!target.isDestroyed()) {
@@ -429,10 +437,16 @@ function createWindow(): void {
 
   // Size is remembered on close rather than on every resize event: a drag emits
   // hundreds of them, and only the size the user settled on matters.
-  window.on("close", () => {
+  window.on("close", (event) => {
     const bounds = window?.getNormalBounds();
     if (bounds) {
       saveUiState(userData(), { window: { width: bounds.width, height: bounds.height } });
+    }
+    // The tray owns the way back: a hidden window keeps its links streaming,
+    // so reopening loses nothing, and the app keeps watching the daemon.
+    if (shouldHideOnClose(quitting)) {
+      event.preventDefault();
+      window!.hide();
     }
   });
 
@@ -498,15 +512,69 @@ function createWindow(): void {
   });
 }
 
+// trayIcon builds the notification-area image from the generated brand-mark
+// PNGs. nativeImage does not read the installer's .ico, and the 2x layer keeps
+// the mark from blurring on scaled displays.
+function trayIcon(): Electron.NativeImage {
+  const image = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON, "base64"));
+  image.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(TRAY_ICON_2X, "base64") });
+  return image;
+}
+
+function showWindow(): void {
+  if (!window || window.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+}
+
+function installTray(): void {
+  const product = productLabel(channel);
+  tray = new Tray(trayIcon());
+  tray.setToolTip(product);
+  // The spec is data (tray.ts), so the menu's visible shape is pinned by a
+  // test; this mapping only attaches the handlers.
+  tray.setContextMenu(
+    Menu.buildFromTemplate(
+      trayMenuSpec(channel).map((item) => ({
+        label: item.label,
+        click: () => {
+          if (item.action === "open") {
+            showWindow();
+          }
+          if (item.action === "quit") {
+            app.quit();
+          }
+        },
+      })),
+    ),
+  );
+  // On Windows the context menu opens on any click; this serves macOS, where
+  // a left click is the only gesture that reaches the app.
+  tray.on("click", showWindow);
+}
+
 app.whenReady().then(() => {
   register();
+  installTray();
   createWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else {
+      showWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  quitting = true;
 });
 
 app.on("window-all-closed", () => {

@@ -243,6 +243,27 @@ export async function run(target: BrowserWindow): Promise<boolean> {
     rejectEchoNeedle(prompt, expect);
     // A terminal echoes typed input too, so the same guard covers its needle.
     rejectEchoNeedle(prompt, expectTerminal);
+
+    // FLT_GUI_SMOKE_CLOSE walks the close button's meaning: the window must
+    // hide (the tray owns the way back) while the app keeps living. It runs
+    // alone because a hidden window can no longer serve the other walks. A
+    // user closes a window they can see, so the walk waits for first paint:
+    // closing before ready-to-show would race the show that follows it.
+    if (process.env.FLT_GUI_SMOKE_CLOSE) {
+      while (!target.isVisible() && Date.now() < deadline) {
+        await step();
+      }
+      target.close();
+      await step(500);
+      if (target.isDestroyed()) {
+        throw new Error("closing the window destroyed it; close must hide to the tray");
+      }
+      if (target.isVisible()) {
+        throw new Error("closing the window left it visible; close must hide to the tray");
+      }
+      console.log("smoke: ok (close hides to the tray, the app stays alive)");
+      return true;
+    }
     if (ime !== "" && expectTerminal === "") {
       throw new Error(
         "the IME walk needs FLT_GUI_SMOKE_TERMINAL: without a needle the empty wait passes whether or not the committed text reached the screen",
