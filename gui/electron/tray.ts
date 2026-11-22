@@ -34,9 +34,11 @@ export function trayMenuSpec(channel: string, options?: TrayOptions): MenuItemSp
 
 // A user's click on X ends the window, not the fleet: the sessions keep
 // running in their hosts and the daemon keeps running detached. Only a quit
-// the app itself initiated may actually close the window.
-export function shouldHideOnClose(quitting: boolean): boolean {
-  return !quitting;
+// the app itself initiated may actually close the window — and the tray must
+// exist to be the way back: on a desktop that refused the icon, a hidden
+// window would be unreachable, so close then really closes.
+export function shouldHideOnClose(quitting: boolean, trayPresent: boolean): boolean {
+  return !quitting && trayPresent;
 }
 
 export type TrayClickAction = "show" | "menu";

@@ -470,7 +470,7 @@ function createWindow(): void {
     }
     // The tray owns the way back: a hidden window keeps its links streaming,
     // so reopening loses nothing, and the app keeps watching the daemon.
-    if (shouldHideOnClose(quitting)) {
+    if (shouldHideOnClose(quitting, tray !== null)) {
       event.preventDefault();
       window!.hide();
     }
@@ -634,20 +634,29 @@ function trayMenu(): Electron.Menu {
 }
 
 function installTray(): void {
-  tray = new Tray(trayIcon());
-  tray.setToolTip(productLabel(channel));
-  // Both gestures route through trayClickAction: no context menu is bound
-  // outright, because that would turn a left click into a two-click restore.
-  // The menu is built on demand, so its checkbox always reads the registry.
-  const gesture = (button: "left" | "right"): void => {
-    if (trayClickAction(button) === "show") {
-      showWindow();
-    } else {
-      tray?.popUpContextMenu(trayMenu());
-    }
-  };
-  tray.on("click", () => gesture("left"));
-  tray.on("right-click", () => gesture("right"));
+  try {
+    const icon = new Tray(trayIcon());
+    icon.setToolTip(productLabel(channel));
+    // Both gestures route through trayClickAction: no context menu is bound
+    // outright, because that would turn a left click into a two-click restore.
+    // The menu is built on demand, so its checkbox always reads the registry.
+    const gesture = (button: "left" | "right"): void => {
+      if (trayClickAction(button) === "show") {
+        showWindow();
+      } else {
+        icon.popUpContextMenu(trayMenu());
+      }
+    };
+    icon.on("click", () => gesture("left"));
+    icon.on("right-click", () => gesture("right"));
+    // Assigned last: a desktop that refused the icon leaves tray null, and
+    // the close handler then ends the window honestly instead of hiding it
+    // behind a way back that does not exist.
+    tray = icon;
+  } catch (error) {
+    console.error("tray: the notification area refused the icon:", error);
+    tray = null;
+  }
 }
 
 app.whenReady().then(() => {
