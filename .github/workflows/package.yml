@@ -124,10 +124,17 @@ jobs:
           # node prints one line per note; PowerShell captures that as an array,
           # and `gh --notes` needs one string.
           $notes = (node scripts/release-notes.mjs $version) -join "`n"
-          $args = @("release", "create", $tag, "--title", $tag, "--notes", $notes)
+          # Only this build's installer: the output directory can hold earlier
+          # ones on a machine that has packaged before, and attaching those to a
+          # release would ship artefacts the tag never built.
+          $installers = @(Get-ChildItem "gui/release/*$version*.exe" |
+            Where-Object { $_.Name -notmatch '__uninstaller' } |
+            ForEach-Object { $_.FullName })
+          if ($installers.Count -eq 0) { throw "no installer for $version in gui/release" }
+          $ghArgs = @("release", "create", $tag, "--title", $tag, "--notes", $notes)
           if ("${{ steps.channel.outputs.prerelease }}" -eq "true") {
-            $args += "--prerelease"
+            $ghArgs += "--prerelease"
           }
-          $args += (Get-ChildItem gui/release/*.exe | ForEach-Object { $_.FullName })
-          $args += "$RUNNER_TEMP/notices.md"
-          gh @args
+          $ghArgs += $installers
+          $ghArgs += "$RUNNER_TEMP/notices.md"
+          gh @ghArgs
