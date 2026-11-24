@@ -54,3 +54,60 @@ export function dirLabel(dir: string): string {
 export function mainEmpty(status: Status | null): "quiet" | "pick" {
   return status !== null && status.sessions.length > 0 ? "pick" : "quiet";
 }
+
+// modeLabel names a session's protocol in the window's words. "acp" and "pty"
+// are what crosses the wire; a person reads "Chat" and "Terminal", the same
+// words the mode switch and the view buttons already use. One concept, one
+// word, everywhere.
+export function modeLabel(mode: string): string {
+  if (mode === "pty") {
+    return "Terminal";
+  }
+  if (mode === "acp") {
+    return "Chat";
+  }
+  return mode === "" ? "Unknown" : mode;
+}
+
+// stopLabel names why a turn ended. The agent reports these in the protocol's
+// spelling; an unknown reason is shown as it came, because inventing a friendlier
+// one would be a claim about what happened.
+const stopLabels: Record<string, string> = {
+  end_turn: "finished",
+  cancelled: "cancelled",
+  refused: "refused",
+  max_tokens: "hit the token limit",
+  max_turn_requests: "hit the request limit",
+};
+
+export function stopLabel(reason: string): string {
+  return stopLabels[reason] ?? reason;
+}
+
+// scopeLabel names what a diff compares. The wire says "unstaged", "branch" and
+// "turn"; a person reads what the comparison is, in the words the review uses.
+const scopeLabels: Record<string, string> = {
+  unstaged: "Uncommitted changes",
+  branch: "The whole branch",
+  turn: "Since I started",
+};
+
+export function scopeLabel(scope: string): string {
+  return scopeLabels[scope] ?? scope;
+}
+
+// fileStatusLabel names what happened to one file. git reports these in its own
+// vocabulary; an unknown status is shown as it came rather than dropped.
+const fileStatusLabels: Record<string, string> = {
+  modified: "modified",
+  added: "added",
+  deleted: "deleted",
+  renamed: "renamed",
+  copied: "copied",
+  untracked: "new",
+  typechange: "type changed",
+};
+
+export function fileStatusLabel(status: string): string {
+  return fileStatusLabels[status] ?? status;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dirLabel, fleetSummary, mainEmpty, windowTitle } from "../src/fleetView";
+import { dirLabel, fleetSummary, mainEmpty, modeLabel, stopLabel, windowTitle } from "../src/fleetView";
 import type { Status, StatusEntry } from "../src/store";
 
 function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true): StatusEntry {
@@ -82,5 +82,34 @@ describe("windowTitle", () => {
 
   it("carries a dev channel so two smoke windows stay apart", () => {
     expect(windowTitle("tray-shot")).toBe("Flotilla tray-shot");
+  });
+});
+
+describe("modeLabel", () => {
+  it("names a protocol in the window's word", () => {
+    // One concept, one word: the picker, the fleet chip and the session header
+    // all say "Chat" or "Terminal", never "acp" or "pty".
+    expect(modeLabel("acp")).toBe("Chat");
+    expect(modeLabel("pty")).toBe("Terminal");
+  });
+
+  it("says unknown rather than showing nothing", () => {
+    expect(modeLabel("")).toBe("Unknown");
+  });
+
+  it("passes an unrecognised mode through instead of guessing", () => {
+    expect(modeLabel("weird")).toBe("weird");
+  });
+});
+
+describe("stopLabel", () => {
+  it("translates the protocol's reason into a sentence", () => {
+    expect(stopLabel("end_turn")).toBe("finished");
+    expect(stopLabel("cancelled")).toBe("cancelled");
+    expect(stopLabel("max_tokens")).toBe("hit the token limit");
+  });
+
+  it("shows an unknown reason as it came, rather than inventing one", () => {
+    expect(stopLabel("something_new")).toBe("something_new");
   });
 });
