@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -22,13 +23,13 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "flt-session-host:", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("flt-session-host", flag.ContinueOnError)
 
 	var (
@@ -57,7 +58,9 @@ func run(args []string) error {
 	}
 
 	if *showVer {
-		_, _ = fmt.Fprintln(flagOutput, version.String())
+		// stdout, not the flag set's own output: a caller captures the version
+		// through a pipe, and usage text on stderr must not get in the way.
+		_, _ = fmt.Fprintln(out, version.String())
 		return nil
 	}
 	if *sessionID == "" {
