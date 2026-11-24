@@ -1,13 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // archiveTail is how much of a finished run's log an archive read returns. The
@@ -42,7 +43,10 @@ func (d *Daemon) liveIDs() map[session.ID]struct{} {
 // happened, and hiding it because a side file is corrupt would be a worse
 // answer than one with empty fields.
 func (d *Daemon) archivedEntries() []session.ArchivedEntry {
-	metas, err := d.transcripts.List()
+	if d.state == nil {
+		return nil
+	}
+	metas, err := d.state.TranscriptList(context.Background())
 	if err != nil {
 		d.cfg.Log.Warn("cannot list finished sessions", "err", err.Error())
 		return nil
@@ -95,16 +99,22 @@ func (d *Daemon) archive(params json.RawMessage) (any, error) {
 	// Whether this build recorded anything is the existence test, not which
 	// fields the record happens to carry: a session that only ever got an end
 	// stamp is still a session that ran.
-	recorded := true
-	meta, err := d.transcripts.ReadMeta(string(req.ID))
-	switch {
-	case errors.Is(err, transcript.ErrNoMeta):
-		// A log written before this build kept metadata: the id is all there
-		// is, and the reader says so rather than filling the gaps.
-		meta = transcript.Meta{ID: string(req.ID)}
+	recorded := d.state != nil
+	meta := store.TranscriptMeta{ID: string(req.ID)}
+	if d.state != nil {
+		stored, err := d.state.ReadTranscriptMeta(context.Background(), string(req.ID))
+		switch {
+		case errors.Is(err, store.ErrNoMeta):
+			// A log written before this build kept metadata: the id is all
+			// there is, and the reader says so rather than filling the gaps.
+			recorded = false
+		case err != nil:
+			return nil, fmt.Errorf("%s on session %q: %w", session.MethodArchive, req.ID, err)
+		default:
+			meta = stored
+		}
+	} else {
 		recorded = false
-	case err != nil:
-		return nil, fmt.Errorf("%s on session %q: %w", session.MethodArchive, req.ID, err)
 	}
 
 	updates, more, err := d.readHistory(req.ID, session.HistoryRequest{Tail: archiveTail})
@@ -134,7 +144,10 @@ func (d *Daemon) archive(params json.RawMessage) (any, error) {
 // rather than raised: the session is already running, and losing its label is
 // not a reason to kill it.
 func (d *Daemon) recordStart(id session.ID, mode session.Mode, command, dir string) {
-	if err := d.transcripts.WriteMeta(transcript.Meta{
+	if d.state == nil {
+		return
+	}
+	if err := d.state.WriteTranscriptMeta(context.Background(), store.TranscriptMeta{
 		ID:      string(id),
 		Mode:    string(mode),
 		Command: command,
@@ -154,13 +167,16 @@ func (d *Daemon) recordStart(id session.ID, mode session.Mode, command, dir stri
 // daemon was watching keeps a zero end, because inventing one would claim the
 // run stopped when the daemon happened to look.
 func (d *Daemon) recordEnd(id session.ID) {
-	meta, err := d.transcripts.ReadMeta(string(id))
+	if d.state == nil {
+		return
+	}
+	meta, err := d.state.ReadTranscriptMeta(context.Background(), string(id))
 	if err != nil {
-		if !errors.Is(err, transcript.ErrNoMeta) {
+		if !errors.Is(err, store.ErrNoMeta) {
 			d.cfg.Log.Warn("cannot read a session's metadata to end it", "session", id, "err", err.Error())
 			return
 		}
-		meta = transcript.Meta{ID: string(id)}
+		meta = store.TranscriptMeta{ID: string(id)}
 	}
 	if !meta.Ended.IsZero() {
 		// The first end is the observed one; a second call is bookkeeping that
@@ -169,7 +185,7 @@ func (d *Daemon) recordEnd(id session.ID) {
 	}
 
 	meta.Ended = time.Now()
-	if err := d.transcripts.WriteMeta(meta); err != nil {
+	if err := d.state.WriteTranscriptMeta(context.Background(), meta); err != nil {
 		d.cfg.Log.Warn("cannot record a session's end", "session", id, "err", err.Error())
 	}
 }

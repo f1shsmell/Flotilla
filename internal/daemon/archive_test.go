@@ -9,37 +9,50 @@ import (
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // seedFinishedSession writes what a run leaves behind: a log and the metadata
 // that says what it was. It is the on-disk state a daemon finds after a restart,
 // which is the whole point of the archive — nothing here is in memory.
 //
-// The directory is the one the daemon reads, StateDir/transcripts: seeding the
-// state root itself would pass a test that never exercised the real path.
-func seedFinishedSession(t *testing.T, dir, id string, meta transcript.Meta, texts ...string) {
+// The database is the one the daemon reads, StateDir/state.db: seeding anything
+// else would pass a test that never exercised the real path.
+func seedFinishedSession(t *testing.T, dir, id string, meta store.TranscriptMeta, texts ...string) {
 	t.Helper()
 
-	store := transcript.NewStore(filepath.Join(dir, "transcripts"))
+	s := openSeedStore(t, dir)
 
 	for i, text := range texts {
 		payload, err := json.Marshal(session.UpdateMessage{Kind: "message", Text: text})
 		if err != nil {
 			t.Fatalf("encode an update: %v", err)
 		}
-		if _, err := store.Append(id, uint64(i+1), payload); err != nil {
+		if _, err := s.AppendTranscript(context.Background(), id, uint64(i+1), payload); err != nil {
 			t.Fatalf("store an update for %q: %v", id, err)
 		}
 	}
-	if err := store.WriteMeta(meta); err != nil {
+	if err := s.WriteTranscriptMeta(context.Background(), meta); err != nil {
 		t.Fatalf("write metadata for %q: %v", id, err)
 	}
 	// Closed before the daemon opens it: the archive is read by a process that
-	// did not write these files, which is the case being tested.
-	if err := store.Close(); err != nil {
+	// did not write these rows, which is the case being tested.
+	if err := s.Close(); err != nil {
 		t.Fatalf("close the seeded store: %v", err)
 	}
+}
+
+// openSeedStore opens the state database a daemon in this test would open. The
+// caller closes it before starting the daemon, so the test exercises the same
+// file across a process boundary rather than a shared handle.
+func openSeedStore(t *testing.T, dir string) *store.Store {
+	t.Helper()
+
+	s, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatalf("open the seeded store: %v", err)
+	}
+	return s
 }
 
 // archivedOf reads one session out of a status report.
@@ -64,7 +77,7 @@ func TestARestartListsTheSessionsItNoLongerServes(t *testing.T) {
 
 	started := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	ended := started.Add(12 * time.Minute)
-	seedFinishedSession(t, dir, "sess-finished", transcript.Meta{
+	seedFinishedSession(t, dir, "sess-finished", store.TranscriptMeta{
 		ID:      "sess-finished",
 		Mode:    "acp",
 		Command: "claude-agent-acp",
@@ -102,7 +115,7 @@ func TestAnArchivedSessionReadsBackItsLog(t *testing.T) {
 	dir := t.TempDir()
 	const token = "shared"
 
-	seedFinishedSession(t, dir, "sess-log", transcript.Meta{ID: "sess-log", Mode: "acp"},
+	seedFinishedSession(t, dir, "sess-log", store.TranscriptMeta{ID: "sess-log", Mode: "acp"},
 		"first", "second")
 
 	runDaemon(t, dir, token)
@@ -156,15 +169,15 @@ func TestASessionWithNoMetadataIsStillListed(t *testing.T) {
 	dir := t.TempDir()
 	const token = "shared"
 
-	store := transcript.NewStore(filepath.Join(dir, "transcripts"))
+	seed := openSeedStore(t, dir)
 	payload, err := json.Marshal(session.UpdateMessage{Kind: "message", Text: "old work"})
 	if err != nil {
 		t.Fatalf("encode an update: %v", err)
 	}
-	if _, err := store.Append("sess-old", 1, payload); err != nil {
+	if _, err := seed.AppendTranscript(context.Background(), "sess-old", 1, payload); err != nil {
 		t.Fatalf("store an update: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err := seed.Close(); err != nil {
 		t.Fatalf("close the store: %v", err)
 	}
 
@@ -256,17 +269,17 @@ func TestTheArchiveStopsAtItsBound(t *testing.T) {
 	const token = "shared"
 
 	base := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
-	store := transcript.NewStore(filepath.Join(dir, "transcripts"))
+	seed := openSeedStore(t, dir)
 	for i := 0; i < archiveLimit+5; i++ {
 		id := fmt.Sprintf("sess-%03d", i)
-		if err := store.WriteMeta(transcript.Meta{
+		if err := seed.WriteTranscriptMeta(context.Background(), store.TranscriptMeta{
 			ID:    id,
 			Ended: base.Add(time.Duration(i) * time.Minute),
 		}); err != nil {
 			t.Fatalf("write metadata for %q: %v", id, err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := seed.Close(); err != nil {
 		t.Fatalf("close the seeded store: %v", err)
 	}
 

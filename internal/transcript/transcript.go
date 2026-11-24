@@ -1,11 +1,11 @@
-// Package transcript keeps one session's agent updates on disk, so a window
-// that opens later still shows what the agent did.
+// Package transcript is the pre-database layout of one session's agent updates:
+// a JSONL file per session beside a metadata file.
 //
-// The host holds a bounded memory buffer for the gap between clients, which is
-// enough to survive a window closing. It is not enough to survive the host: a
-// long turn is the reason to hand work to an agent at all, and its record has
-// to outlive the process that produced it. The daemon is the only process that
-// sees every update exactly once, so this is its store.
+// The daemon no longer writes here. Its state lives in internal/store's
+// database, and this package is kept for one job: the migration reads the files
+// a build before that database left behind, and its tests generate those files
+// with the code that used to write them rather than with a hand-copied guess at
+// the format. Nothing in the running product imports this package.
 package transcript
 
 import (

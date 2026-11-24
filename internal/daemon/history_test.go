@@ -10,7 +10,7 @@ import (
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // allowTools answers the agent's permission questions, so a turn in a
@@ -167,12 +167,15 @@ func TestTheLogOutlivesTheDaemon(t *testing.T) {
 		t.Fatal("the daemon stored no updates for a turn that produced some")
 	}
 
-	// A restart is a new store object over the same directory, which is exactly
+	// A restart is a new store over the same database file, which is exactly
 	// what the next daemon process does.
-	reopened := transcript.NewStore(filepath.Join(dir, "transcripts"))
+	reopened, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatalf("reopen the state database: %v", err)
+	}
 	t.Cleanup(func() { _ = reopened.Close() })
 
-	page, err := reopened.Page("sess-survives", transcript.Window{})
+	page, err := reopened.TranscriptPage(context.Background(), "sess-survives", store.TranscriptWindow{})
 	if err != nil {
 		t.Fatalf("read the transcript after a restart: %v", err)
 	}
@@ -244,26 +247,31 @@ func TestAStoppedSessionKeepsItsLog(t *testing.T) {
 	stateDir := t.TempDir()
 
 	d := New(Config{Channel: "test", Token: "shared", StateDir: stateDir, Log: discardLogger()}, nil)
-	// Detach, not just transcripts.Close: the seen writer schedules a write on
-	// d.end below, and its temp file must be gone before TempDir is removed.
+	// Detach, not just closing the database: the seen writer schedules a write
+	// on d.end below, and it has to finish before TempDir is removed.
 	t.Cleanup(d.Detach)
 
-	if _, err := d.transcripts.Append("sess-gone", 1, json.RawMessage(`{"kind":"message","text":"done"}`)); err != nil {
+	if _, err := d.state.AppendTranscript(context.Background(), "sess-gone", 1,
+		json.RawMessage(`{"kind":"message","text":"done"}`)); err != nil {
 		t.Fatalf("store an update: %v", err)
 	}
 
 	d.end("sess-gone", true)
 
-	// Releasing one session must not take the store with it: the daemon keeps
+	// Ending one session must not take the database with it: the daemon keeps
 	// serving the rest of the fleet.
-	if _, err := d.transcripts.Append("probe", 1, json.RawMessage(`{"kind":"message","text":"x"}`)); err != nil {
-		t.Fatalf("the store is unusable after releasing one session: %v", err)
+	if _, err := d.state.AppendTranscript(context.Background(), "probe", 1,
+		json.RawMessage(`{"kind":"message","text":"x"}`)); err != nil {
+		t.Fatalf("the store is unusable after ending one session: %v", err)
 	}
 
-	reopened := transcript.NewStore(filepath.Join(stateDir, "transcripts"))
+	reopened, err := store.Open(filepath.Join(stateDir, "state.db"))
+	if err != nil {
+		t.Fatalf("reopen the state database: %v", err)
+	}
 	t.Cleanup(func() { _ = reopened.Close() })
 
-	page, err := reopened.Page("sess-gone", transcript.Window{})
+	page, err := reopened.TranscriptPage(context.Background(), "sess-gone", store.TranscriptWindow{})
 	if err != nil {
 		t.Fatalf("read the stopped session's log: %v", err)
 	}
@@ -383,7 +391,7 @@ func TestTheHistoryIsBoundedForOneFrame(t *testing.T) {
 	// Every update gets its own host number: the same one twice would be a
 	// replay, which the store refuses on purpose.
 	for i := uint64(1); i <= 2000; i++ {
-		if _, err := d.transcripts.Append("sess-big", i, body); err != nil {
+		if _, err := d.state.AppendTranscript(context.Background(), "sess-big", i, body); err != nil {
 			t.Fatalf("store an update: %v", err)
 		}
 	}

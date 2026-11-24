@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -10,27 +11,30 @@ import (
 
 	"github.com/f1shsmell/flotilla/internal/acp/replay"
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // storeTranscript writes a session's log under a fresh FLT_HOME and returns that
-// home. The command reads the same path a daemon writes, so the test exercises
-// the real location rather than a stand-in.
+// home. The command reads the same database a daemon writes, so the test
+// exercises the real location rather than a stand-in.
 func storeTranscript(t *testing.T, id string, updates ...session.UpdateMessage) string {
 	t.Helper()
 
 	homeDir := t.TempDir()
 	t.Setenv("FLT_HOME", homeDir)
 
-	store := transcript.NewStore(filepath.Join(homeDir, "sessions", "transcripts"))
-	t.Cleanup(func() { _ = store.Close() })
+	state, err := store.Open(filepath.Join(homeDir, "sessions", "state.db"))
+	if err != nil {
+		t.Fatalf("open the state database: %v", err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
 
 	for i, update := range updates {
 		payload, err := json.Marshal(update)
 		if err != nil {
 			t.Fatalf("marshal update %d: %v", i, err)
 		}
-		if _, err := store.Append(id, uint64(i+1), payload); err != nil {
+		if _, err := state.AppendTranscript(context.Background(), id, uint64(i+1), payload); err != nil {
 			t.Fatalf("store update %d: %v", i, err)
 		}
 	}
