@@ -136,7 +136,8 @@ describe("the archive view", () => {
     expect(html).not.toContain("Prompt the agent");
     expect(html).not.toContain("Stop");
     expect(html).not.toContain("Cancel turn");
-    expect(html).toContain("Back to the fleet");
+    // One word for "leave this panel", the same one the settings page uses.
+    expect(html).toMatch(/>Back<\/button>/);
   });
 
   it("says the agent will not resume", () => {

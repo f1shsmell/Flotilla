@@ -206,6 +206,14 @@ export async function run(target: BrowserWindow): Promise<boolean> {
   const prompt = process.env.FLT_GUI_SMOKE_PROMPT ?? "";
   const compose = process.env.FLT_GUI_SMOKE_COMPOSE ?? "";
   const expand = process.env.FLT_GUI_SMOKE_EXPAND ?? "";
+  // FLT_GUI_SMOKE_STOP_ARM clicks a session card's Stop and asserts the two
+  // consequences that matter: the question appears, and the card did not move
+  // or grow. Escape must take it back without ending anything.
+  const stopArm = process.env.FLT_GUI_SMOKE_STOP_ARM ?? "";
+  // FLT_GUI_SMOKE_FRAMES measures the frame rate of a streamed turn: the log
+  // grows while it runs, and the number it prints is the answer to "does the
+  // motion we added cost frames". A number is owed here, not an impression.
+  const frames = process.env.FLT_GUI_SMOKE_FRAMES === "1";
   // FLT_GUI_SMOKE_SET_CONTROL writes one setting as "Name=value" and waits for
   // the agent's own update to land it back in the select: the round trip a
   // live agent's composer bar performs, not a local DOM edit.
@@ -332,6 +340,14 @@ export async function run(target: BrowserWindow): Promise<boolean> {
           setter.call(element, value);
           element.dispatchEvent(new Event("input", { bubbles: true }));
         };
+        // The worktree fields are folded behind a link: the form shows the
+        // common path first. A run that fills either field has to open the
+        // section, exactly as a person would.
+        if (fields.repo !== undefined || fields.branch !== undefined) {
+          const opener = [...document.querySelectorAll(".new-session button")]
+            .find((button) => button.textContent.includes("new worktree"));
+          if (opener) { opener.click(); }
+        }
         const inputs = [...document.querySelectorAll(".new-session input")];
         const set = (placeholder, value) => {
           if (value === undefined || value === null) { return; }
@@ -494,7 +510,46 @@ export async function run(target: BrowserWindow): Promise<boolean> {
     }
 
     if (prompt !== "") {
+      if (frames) {
+        // The window is offscreen, so it is never composited and rAF never
+        // fires. What can still be measured — and what actually answers "did
+        // the motion cost anything" — is the main thread: transform/opacity
+        // animations run on the compositor, so a long task here would mean the
+        // work landed on the thread that renders the log instead.
+        await target.webContents.executeJavaScript(`(() => {
+          window.__fltLongTasks = [];
+          window.__fltObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              window.__fltLongTasks.push(entry.duration);
+            }
+          });
+          window.__fltObserver.observe({ entryTypes: ["longtask"] });
+        })()`);
+      }
       await sendPrompt(target, prompt);
+    }
+
+    if (frames) {
+      // Long tasks over 50ms are the browser's own definition of "this blocked
+      // the thread a person was watching". The stream is the worst case: the
+      // log grows while it runs.
+      const report = (await target.webContents.executeJavaScript(`(() => {
+        window.__fltObserver?.disconnect();
+        const tasks = window.__fltLongTasks ?? [];
+        const total = tasks.reduce((sum, value) => sum + value, 0);
+        return { count: tasks.length, total, max: tasks.length ? Math.max(...tasks) : 0 };
+      })()`)) as { count: number; total: number; max: number };
+
+      console.log(
+        `smoke: long tasks ${report.count}; total ${report.total.toFixed(1)}ms; max ${report.max.toFixed(1)}ms`,
+      );
+      // The budget: a streamed turn must not block the main thread for a
+      // noticeable stretch. One 60ms task is tolerable; several hundred
+      // milliseconds of blocking means the log is being re-rendered per chunk
+      // instead of per frame.
+      if (report.total > 250) {
+        throw new Error(`the turn blocked the main thread for ${report.total.toFixed(0)}ms`);
+      }
     }
 
     if (expand !== "") {
@@ -554,6 +609,69 @@ export async function run(target: BrowserWindow): Promise<boolean> {
         deadline,
       );
       console.log("smoke: ok (expanded tool run)");
+    }
+
+    if (stopArm !== "") {
+      // The armed stop must not move the card: it is painted over the quiet
+      // control's place. Both the card's box and the row's are read before and
+      // after, and Escape has to take the question back without ending the
+      // session — a confirm that ends the session when cancelled is worse than
+      // no confirm at all.
+      const before = (await target.webContents.executeJavaScript(`(() => {
+        const card = document.querySelector(".session-card-wrap");
+        const row = document.querySelector(".session-row");
+        if (!card || !row) { throw new Error("no session card to arm"); }
+        const c = card.getBoundingClientRect();
+        const r = row.getBoundingClientRect();
+        return { card: [c.width, c.height], row: [r.width, r.height] };
+      })()`)) as { card: number[]; row: number[] };
+
+      await target.webContents.executeJavaScript(`(() => {
+        const stop = document.querySelector(".session-stop");
+        if (!stop) { throw new Error("no Stop button on the card"); }
+        stop.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".session-stop.armed")`,
+        "the armed Stop question to appear",
+        deadline,
+      );
+
+      const after = (await target.webContents.executeJavaScript(`(() => {
+        const card = document.querySelector(".session-card-wrap");
+        const row = document.querySelector(".session-row");
+        const c = card.getBoundingClientRect();
+        const r = row.getBoundingClientRect();
+        return { card: [c.width, c.height], row: [r.width, r.height] };
+      })()`)) as { card: number[]; row: number[] };
+
+      for (const key of ["card", "row"] as const) {
+        if (after[key][0] !== before[key][0] || after[key][1] !== before[key][1]) {
+          throw new Error(
+            `the ${key} moved when Stop armed: ${JSON.stringify(before[key])} -> ${JSON.stringify(after[key])}`,
+          );
+        }
+      }
+
+      await target.webContents.executeJavaScript(`(() => {
+        const keep = document.querySelector(".session-stop-cancel");
+        if (!keep) { throw new Error("no Keep button beside the armed Stop"); }
+        keep.click();
+      })()`);
+      await waitForCondition(
+        target,
+        `!document.querySelector(".session-stop.armed") && !document.querySelector(".session-stop-confirm")`,
+        "Keep to take the question back",
+        deadline,
+      );
+      await waitForCondition(
+        target,
+        `!!document.querySelector(".session-row") && !!document.querySelector(".session-stop")`,
+        "the session to still be there after Keep",
+        deadline,
+      );
+      console.log("smoke: ok (stop arms without moving the card)");
     }
 
     if (setControl !== "") {
