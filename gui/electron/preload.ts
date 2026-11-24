@@ -18,8 +18,24 @@ contextBridge.exposeInMainWorld("flotilla", {
   archive: (sessionId: string) => ipcRenderer.invoke("flotilla:archive", sessionId),
   prompt: (sessionId: string, text: string) =>
     ipcRenderer.invoke("flotilla:prompt", sessionId, text),
+  steer: (sessionId: string, text: string) =>
+    ipcRenderer.invoke("flotilla:steer", sessionId, text),
   seen: (sessionId: string) => ipcRenderer.invoke("flotilla:seen", sessionId),
+  protect: (sessionId: string, on: boolean) =>
+    ipcRenderer.invoke("flotilla:protect", sessionId, on),
   cancel: (sessionId: string) => ipcRenderer.invoke("flotilla:cancel", sessionId),
+  queue: (sessionId: string) => ipcRenderer.invoke("flotilla:queue", sessionId),
+  queueAdd: (sessionId: string, text: string) =>
+    ipcRenderer.invoke("flotilla:queue:add", sessionId, text),
+  queueEdit: (sessionId: string, id: string, text: string) =>
+    ipcRenderer.invoke("flotilla:queue:edit", sessionId, id, text),
+  queueRemove: (sessionId: string, id: string) =>
+    ipcRenderer.invoke("flotilla:queue:remove", sessionId, id),
+  queueMove: (sessionId: string, id: string, to: number) =>
+    ipcRenderer.invoke("flotilla:queue:move", sessionId, id, to),
+  checkpoints: (sessionId: string) => ipcRenderer.invoke("flotilla:checkpoints", sessionId),
+  restoreCheckpoint: (sessionId: string, turn: number) =>
+    ipcRenderer.invoke("flotilla:checkpoints:restore", sessionId, turn),
   surfaceSet: (sessionId: string, id: string, value: string) =>
     ipcRenderer.invoke("flotilla:surface:set", sessionId, id, value),
   answer: (sessionId: string, questionId: string, optionId: string) =>

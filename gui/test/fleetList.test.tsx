@@ -13,6 +13,8 @@ const sessions: StatusEntry[] = [
     dir: "C:\\Dev\\Flotilla",
     lifecycle: "blocked",
     reachable: true,
+    protected: false,
+    steer: false,
   },
   {
     id: "sess-b",
@@ -22,6 +24,8 @@ const sessions: StatusEntry[] = [
     dir: "",
     lifecycle: "done",
     reachable: false,
+    protected: false,
+    steer: false,
   },
 ];
 

@@ -20,7 +20,8 @@
 
   .fleet,
   .session,
-  .agent-settings-overlay {
+  .agent-settings-overlay,
+  .inbox-overlay {
     padding: var(--sp-4);
   }
 

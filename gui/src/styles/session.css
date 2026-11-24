@@ -22,7 +22,8 @@
    It covers the view, so it eases in from just above the surface it hides —
    the small lift says "this came over what you were reading", not "this is a
    new page". */
-.agent-settings-overlay {
+.agent-settings-overlay,
+.inbox-overlay {
   position: absolute;
   inset: 0;
   /* Painting must not depend on DOM order: the overlay is a sibling of the
@@ -515,5 +516,107 @@
 
 .composer-hint {
   margin-left: auto;
+  font-size: var(--fs-tiny);
+}
+
+/* The queue strip sits above the composer, in delivery order: the first row is
+   the next turn, and every row can be reworded, moved or dropped. */
+.session-queue {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.queue-head {
+  color: var(--muted);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+}
+
+.queue-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-small);
+}
+
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-error {
+  color: var(--warn);
+  font-size: var(--fs-tiny);
+}
+
+.queue-actions {
+  display: inline-flex;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.queue-edit {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+}
+
+.session-subagents {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.subagents-head {
+  color: var(--muted);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+}
+
+.subagent-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.subagent-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-small);
+}
+
+.subagent-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-state {
+  color: var(--muted);
   font-size: var(--fs-tiny);
 }

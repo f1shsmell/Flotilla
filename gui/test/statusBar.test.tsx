@@ -5,7 +5,17 @@ import { StatusBar } from "../src/components/StatusBar";
 import type { Status, StatusEntry } from "../src/store";
 
 function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true): StatusEntry {
-  return { id, mode: "pty", host_pid: 1, command: "cmd.exe", dir: "", lifecycle, reachable };
+  return {
+    id,
+    mode: "pty",
+    host_pid: 1,
+    command: "cmd.exe",
+    dir: "",
+    lifecycle,
+    reachable,
+    protected: false,
+    steer: false,
+  };
 }
 
 function status(sessions: StatusEntry[]): Status {

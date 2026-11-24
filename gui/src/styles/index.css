@@ -12,6 +12,7 @@
 
 @import "./fleet.css" layer(design);
 @import "./settings.css" layer(design);
+@import "./inbox.css" layer(design);
 @import "./session.css" layer(design);
 @import "./terminal.css" layer(design);
 @import "./diff.css" layer(design);

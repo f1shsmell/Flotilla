@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { constants } from "../electron/contract";
 import {
   addPermission,
   answerPermission,
@@ -11,7 +12,9 @@ import {
   commentPrompt,
   commentsOn,
   parseAgents,
+  parseCheckpoints,
   parseControls,
+  parseMessageQueue,
   parsePatch,
   parseStatus,
   splitArgs,
@@ -44,12 +47,20 @@ describe("parseStatus", () => {
           command: "reasonix",
           dir: "C:\\work",
           reachable: true,
+          protected: true,
+          steer: true,
         },
       ],
     });
 
     expect(status.pid).toBe(42);
-    expect(status.sessions[0]).toMatchObject({ id: "sess-1", mode: "acp", reachable: true });
+    expect(status.sessions[0]).toMatchObject({
+      id: "sess-1",
+      mode: "acp",
+      reachable: true,
+      protected: true,
+      steer: true,
+    });
     expect(summarise(status)).toEqual({ total: 1, reachable: 1 });
   });
 
@@ -66,6 +77,8 @@ describe("parseStatus", () => {
       // idle would claim it is ready for input.
       lifecycle: "unknown",
       reachable: false,
+      protected: false,
+      steer: false,
     });
     expect(status.failures).toEqual([]);
   });
@@ -159,6 +172,50 @@ describe("parseStatus", () => {
     expect(status.tasks.map((task) => task.id)).toEqual(["task-3"]);
   });
 
+  it("reads the inbox apart from the fleet and drops rows it cannot open", () => {
+    const status = parseStatus({
+      inbox: [
+        {
+          id: "sess-a",
+          kind: constants.daemon.InboxInput,
+          title: "edit config.json",
+          command: "claude-agent-acp",
+          dir: "C:\\work",
+        },
+        { id: "sess-b", kind: constants.daemon.InboxUnread },
+        { id: "", kind: constants.daemon.InboxUnread },
+        { id: "sess-c", kind: "finished" },
+      ],
+    });
+
+    expect(status.inbox).toEqual([
+      {
+        id: "sess-a",
+        kind: constants.daemon.InboxInput,
+        title: "edit config.json",
+        command: "claude-agent-acp",
+        dir: "C:\\work",
+      },
+      // A kind this build does not know is not guessed onto a heading: the
+      // entry is dropped, and the session stays reachable from the fleet.
+      { id: "sess-b", kind: constants.daemon.InboxUnread, title: "", command: "", dir: "" },
+    ]);
+  });
+
+  it("keeps the kinds the contract generates", () => {
+    const status = parseStatus({
+      inbox: [
+        { id: "sess-a", kind: constants.daemon.InboxInput },
+        { id: "sess-b", kind: constants.daemon.InboxUnread },
+      ],
+    });
+
+    expect(status.inbox?.map((entry) => entry.kind)).toEqual([
+      constants.daemon.InboxInput,
+      constants.daemon.InboxUnread,
+    ]);
+  });
+
   it("survives a shape it did not expect", () => {
     expect(parseStatus(null)).toEqual({
       channel: "",
@@ -167,8 +224,63 @@ describe("parseStatus", () => {
       sessions: [],
       archived: [],
       tasks: [],
+      inbox: [],
       failures: [],
     });
+  });
+});
+
+describe("parseMessageQueue", () => {
+  it("keeps the daemon's order, text and delivery failure", () => {
+    expect(
+      parseMessageQueue({
+        messages: [
+          { id: "q1", text: "first" },
+          { id: "q2", text: "second", error: "host_unreachable" },
+        ],
+      }),
+    ).toEqual([
+      { id: "q1", text: "first", error: "" },
+      { id: "q2", text: "second", error: "host_unreachable" },
+    ]);
+  });
+
+  it("drops a row that could not be edited or removed", () => {
+    expect(parseMessageQueue({ messages: [{ text: "no id" }, { id: "q1", text: "kept" }] })).toEqual([
+      { id: "q1", text: "kept", error: "" },
+    ]);
+  });
+
+  it("reads an absent queue as empty", () => {
+    expect(parseMessageQueue(undefined)).toEqual([]);
+    expect(parseMessageQueue({ messages: "not a list" })).toEqual([]);
+  });
+});
+
+describe("parseCheckpoints", () => {
+  it("keeps the daemon's turns and commits", () => {
+    expect(
+      parseCheckpoints({
+        checkpoints: [
+          { turn: 1, commit: "abc123", at: "2026-01-01T10:00:00Z" },
+          { turn: 2, commit: "def456", at: "2026-01-01T10:05:00Z" },
+        ],
+      }),
+    ).toEqual([
+      { turn: 1, commit: "abc123", at: "2026-01-01T10:00:00Z" },
+      { turn: 2, commit: "def456", at: "2026-01-01T10:05:00Z" },
+    ]);
+  });
+
+  it("drops a row that could not be restored", () => {
+    expect(
+      parseCheckpoints({ checkpoints: [{ commit: "abc" }, { turn: 3, commit: "def" }] }),
+    ).toEqual([{ turn: 3, commit: "def", at: "" }]);
+  });
+
+  it("reads an absent list as empty", () => {
+    expect(parseCheckpoints(undefined)).toEqual([]);
+    expect(parseCheckpoints({ checkpoints: "not a list" })).toEqual([]);
   });
 });
 
@@ -611,6 +723,85 @@ describe("session log", () => {
   });
 });
 
+describe("subagent registrations", () => {
+  it("registers a child with its title and work state, off the conversation", () => {
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "s",
+      subagent_id: "child-1",
+      subagent_title: "Test investigator",
+      subagent_description: "Investigates.",
+      subagent_state: "running",
+    });
+
+    expect(state.subagents).toEqual([
+      {
+        id: "child-1",
+        parentId: "s",
+        title: "Test investigator",
+        description: "Investigates.",
+        state: "running",
+      },
+    ]);
+    // A registration is metadata about the child, not a line it said.
+    expect(state.entries).toHaveLength(0);
+  });
+
+  it("moves a child's state without dropping what it already said", () => {
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "s",
+      subagent_id: "child-1",
+      subagent_title: "Helper",
+      subagent_state: "running",
+    });
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "s",
+      subagent_id: "child-1",
+      subagent_state: "idle",
+    });
+
+    expect(state.subagents).toHaveLength(1);
+    expect(state.subagents[0].title).toBe("Helper");
+    expect(state.subagents[0].state).toBe("idle");
+  });
+
+  it("keeps a grandchild under the subagent that announced it", () => {
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "s",
+      subagent_id: "child-1",
+      subagent_title: "Helper",
+    });
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "child-1",
+      subagent_id: "grand-1",
+      subagent_title: "Helper's helper",
+    });
+
+    expect(state.subagents.map((child) => [child.id, child.parentId])).toEqual([
+      ["child-1", "s"],
+      ["grand-1", "child-1"],
+    ]);
+  });
+
+  it("drops a registration with no child to name", () => {
+    let state = newSession("s", "acp");
+    state = applyUpdate(state, {
+      kind: "subagent",
+      session_id: "s",
+      subagent_title: "No id",
+    });
+
+    expect(state.subagents).toEqual([]);
+  });
+});
+
 describe("fleet lifecycle", () => {
   function fleet(): Status {
     return {
@@ -629,6 +820,8 @@ describe("fleet lifecycle", () => {
           dir: "/w",
           lifecycle: "idle",
           reachable: true,
+          protected: false,
+          steer: false,
         },
         {
           id: "b",
@@ -638,6 +831,8 @@ describe("fleet lifecycle", () => {
           dir: "/w",
           lifecycle: "idle",
           reachable: true,
+          protected: false,
+          steer: false,
         },
       ],
     };

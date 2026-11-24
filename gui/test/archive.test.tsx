@@ -25,6 +25,8 @@ const live: StatusEntry = {
   dir: "C:\\Dev\\Flotilla",
   lifecycle: "working",
   reachable: true,
+  protected: false,
+  steer: false,
 };
 
 function list(sessions: StatusEntry[], archived: ArchivedEntry[]): string {

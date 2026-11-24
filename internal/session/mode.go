@@ -237,6 +237,10 @@ type PromptRequest struct {
 type PromptResponse struct {
 	// StopReason is the agent's own word: "end_turn", "cancelled" and so on.
 	StopReason string `json:"stop_reason"`
+	// Answer is the agent's message text for the turn; a terminal session has none.
+	Answer string `json:"answer,omitempty"`
+	// AnswerTruncated says the answer was cut to fit one frame.
+	AnswerTruncated bool `json:"answer_truncated,omitempty"`
 }
 
 // PermissionQuestion asks the client to decide one tool call.
@@ -300,6 +304,11 @@ type HistoryResponse struct {
 // updates alone leaves out the message every turn is an answer to.
 const KindUser = "user"
 
+// KindMessage is the agent's own answer text. It is the only kind a caller that
+// reads a turn's answer collects; thought and tool updates describe the work
+// rather than answering.
+const KindMessage = "message"
+
 // UpdateMessage is one agent update as the daemon and the GUI receive it.
 type UpdateMessage struct {
 	// Seq places the update in the session's log. The host leaves it zero; the
@@ -311,7 +320,8 @@ type UpdateMessage struct {
 	// to recognise an update its log already holds; without one, a restart would
 	// store and show the same work twice.
 	HostSeq uint64 `json:"host_seq,omitempty"`
-	// Kind is "message", "thought", "tool", "plan", "user" or "other".
+	// Kind is "message", "thought", "tool", "plan", "subagent", "user" or
+	// "other".
 	Kind string `json:"kind"`
 	// Text is the message or thought text.
 	Text string `json:"text,omitempty"`
@@ -319,6 +329,13 @@ type UpdateMessage struct {
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolTitle  string `json:"tool_title,omitempty"`
 	ToolStatus string `json:"tool_status,omitempty"`
+	// SubagentID names the child session a "subagent" update is about. Title,
+	// description and state are that child's properties; each update carries
+	// only the ones it changes, so a later state patch leaves the title out.
+	SubagentID          string `json:"subagent_id,omitempty"`
+	SubagentTitle       string `json:"subagent_title,omitempty"`
+	SubagentDescription string `json:"subagent_description,omitempty"`
+	SubagentState       string `json:"subagent_state,omitempty"`
 	// Continued marks a piece of an update that was split to fit one frame. A
 	// client joins it to the line before instead of starting a new one: the kind
 	// and the text alone cannot tell one message in pieces from a second message

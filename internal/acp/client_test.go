@@ -461,6 +461,55 @@ func TestASubagentUpdateIsNotReadAsASessionInfoUpdate(t *testing.T) {
 	}
 }
 
+// TestFlattenReadsASubagentRegistration pins the projection of the unstable
+// subagent update into the shape the host forwards: the child's id, the title
+// and description it announced, and the work state that follows in later
+// patches of the same child.
+func TestFlattenReadsASubagentRegistration(t *testing.T) {
+	payload := []byte(`{"sessionUpdate":"subagent_update","sessionId":"sess_child_1","title":"Test investigator","description":"Investigates.","state":{"state":"running"}}`)
+
+	var u sdk.SessionUpdate
+	if err := json.Unmarshal(payload, &u); err != nil {
+		t.Fatalf("decode a subagent update: %v", err)
+	}
+
+	got := flatten(u, "sess_parent")
+	if got.Kind != kindSubagent {
+		t.Fatalf("kind = %q, want %q", got.Kind, kindSubagent)
+	}
+	if got.SessionID != "sess_parent" {
+		t.Fatalf("session = %q, want the announcing session", got.SessionID)
+	}
+	if got.SubagentID != "sess_child_1" {
+		t.Fatalf("child = %q, want sess_child_1", got.SubagentID)
+	}
+	if got.SubagentTitle != "Test investigator" || got.SubagentDescription != "Investigates." {
+		t.Fatalf("registration reads %+v", got)
+	}
+	if got.SubagentState != "running" {
+		t.Fatalf("state = %q, want running", got.SubagentState)
+	}
+}
+
+// TestFlattenReadsAnIdlePatch keeps the state machine honest: a later update
+// that only says the child went idle carries no title, and the flattening must
+// not invent one.
+func TestFlattenReadsAnIdlePatch(t *testing.T) {
+	// The shape is what codex-acp 2.12 sends for a child that ended; the stop
+	// reason is part of the idle state and is not a fifth state.
+	payload := []byte(`{"sessionUpdate":"subagent_update","sessionId":"sess_child_1","state":{"state":"idle","stopReason":"end_turn"}}`)
+
+	var u sdk.SessionUpdate
+	if err := json.Unmarshal(payload, &u); err != nil {
+		t.Fatalf("decode a subagent update: %v", err)
+	}
+
+	got := flatten(u, "sess_parent")
+	if got.SubagentState != "idle" || got.SubagentTitle != "" {
+		t.Fatalf("state patch reads %+v", got)
+	}
+}
+
 func TestPolicyStrings(t *testing.T) {
 	want := map[Policy]string{
 		Supervised:   "supervised",

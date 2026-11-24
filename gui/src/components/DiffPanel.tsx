@@ -7,7 +7,9 @@ import { fileStatusLabel, scopeLabel } from "../fleetView";
 import {
   commentPrompt,
   commentsOn,
+  parseCheckpoints,
   parsePatch,
+  type Checkpoint,
   type Comment,
   type DiffFile,
   type DiffLine,
@@ -24,6 +26,72 @@ interface Composing {
   side: string;
 }
 
+interface CheckpointStripProps {
+  checkpoints: Checkpoint[];
+  // confirming is the turn whose restore button was pressed, or null.
+  confirming: number | null;
+  // busy is true while a restore runs, so a second click cannot start another.
+  busy: boolean;
+  onAsk: (turn: number) => void;
+  onCancel: () => void;
+  onRestore: (turn: number) => void;
+}
+
+// CheckpointStrip lists the session's finished turns newest first. A rollback
+// rewrites the working tree and drops what came after the turn, so it asks once
+// before it discards work.
+export function CheckpointStrip({
+  checkpoints,
+  confirming,
+  busy,
+  onAsk,
+  onCancel,
+  onRestore,
+}: CheckpointStripProps): React.ReactElement | null {
+  if (checkpoints.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="checkpoints" aria-label="Checkpoints">
+      <span className="checkpoints-head">Checkpoints</span>
+      <ol className="checkpoint-list">
+        {[...checkpoints].reverse().map((checkpoint) => (
+          <li className="checkpoint-row" key={checkpoint.turn}>
+            <span className="checkpoint-label">
+              Turn {checkpoint.turn} · {checkpoint.commit.slice(0, 7)}
+            </span>
+            {confirming === checkpoint.turn ? (
+              <>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => onRestore(checkpoint.turn)}
+                >
+                  Restore and discard changes
+                </button>
+                <button type="button" disabled={busy} onClick={onCancel}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Restore turn ${checkpoint.turn}`}
+                disabled={busy}
+                onClick={() => onAsk(checkpoint.turn)}
+              >
+                Restore
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 export function DiffPanel({ sessionId }: Props): React.ReactElement {
   const [scope, setScope] = useState<(typeof scopes)[number]>("unstaged");
   const [files, setFiles] = useState<DiffFile[] | null>(null);
@@ -33,6 +101,9 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+  const [confirming, setConfirming] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
   const loadNotes = useCallback(async () => {
     try {
@@ -66,6 +137,20 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes]);
+
+  const loadCheckpoints = useCallback(async () => {
+    try {
+      setCheckpoints(parseCheckpoints(await window.flotilla.checkpoints(sessionId)));
+    } catch {
+      // A session outside a repository has no snapshots, and the diff's own
+      // error already says why there is nothing to compare.
+      setCheckpoints([]);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    void loadCheckpoints();
+  }, [loadCheckpoints]);
 
   const openFile = async (path: string): Promise<void> => {
     setError(null);
@@ -113,6 +198,22 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
     }
   };
 
+  const restore = async (turn: number): Promise<void> => {
+    setError(null);
+    setConfirming(null);
+    setRestoring(true);
+    try {
+      await window.flotilla.restoreCheckpoint(sessionId, turn);
+      await load(scope);
+      await loadNotes();
+      await loadCheckpoints();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   const copyPrompt = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(commentPrompt(notes));
@@ -135,7 +236,12 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
             </option>
           ))}
         </select>
-        <RefreshButton onRefresh={() => load(scope)} />
+        <RefreshButton
+          onRefresh={() => {
+            void load(scope);
+            void loadCheckpoints();
+          }}
+        />
         <span className="muted">
           {files === null ? "" : `${files.length} file${files.length === 1 ? "" : "s"}`}
           {notes.length > 0 ? ` · ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}
@@ -146,6 +252,15 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
           </button>
         ) : null}
       </div>
+
+      <CheckpointStrip
+        checkpoints={checkpoints}
+        confirming={confirming}
+        busy={restoring}
+        onAsk={setConfirming}
+        onCancel={() => setConfirming(null)}
+        onRestore={(turn) => void restore(turn)}
+      />
 
       {/* The writes sit under the diff they describe: what is on screen is what
           a commit would record, so the message can be written while reading it. */}

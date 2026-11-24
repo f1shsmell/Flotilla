@@ -40,21 +40,38 @@ var errWrongMode = ipc.Class(errors.New("host: wrong session mode"), ipc.CodeWro
 // errBadSize reports a resize that names no terminal size.
 var errBadSize = ipc.Class(errors.New("host: a terminal needs positive columns and rows"), ipc.CodeBadRequest)
 
+// pendingQuestion is one ask a client has not answered, kept so a client that
+// attaches later is handed the card it missed. sent names the connection the
+// ask went to, which is what keeps a reattach from sending it twice.
+type pendingQuestion struct {
+	answer chan acp.PermissionAnswer
+	ask    session.PermissionQuestion
+	sent   *ipc.Conn
+}
+
 // acpSession is the ACP half of a host: the agent conversation plus the pending
 // permission questions the client has not answered yet.
 type acpSession struct {
 	sess *acp.Session
 
 	mu      sync.Mutex
-	pending map[string]chan acp.PermissionAnswer
+	pending map[string]*pendingQuestion
 	nextID  int
-	buffer  []session.UpdateMessage
+	// gen increments on relaunch, so a waiter from the old agent cannot report
+	// state for the new one.
+	gen    uint64
+	buffer []session.UpdateMessage
 	// nextSeq numbers every update this host produces. A host hands its buffer
 	// to a daemon that reconnects, and this is the number that lets that daemon
 	// tell a replay of work it already stored from new work.
 	nextSeq uint64
 	// resumes are the relaunch times the crash cap counts, oldest first.
 	resumes []time.Time
+	// answer collects the turn's message text so the prompt reply carries it.
+	answer    strings.Builder
+	answering bool
+	// answerCut records that the turn said more than one reply frame carries.
+	answerCut bool
 }
 
 // acpAgent reads the current agent session under the lock a relaunch takes:
@@ -69,12 +86,40 @@ func (h *Host) acpAgent() *acp.Session {
 // when an id is given.
 func (h *Host) acpLaunch(resumeID string) acp.Launch {
 	return acp.Launch{
-		Command:  h.cfg.Command,
-		Args:     h.cfg.Args,
-		Dir:      h.cfg.Dir,
-		Env:      agentEnv(h.cfg.Env, h.cfg.Adapter.Env),
-		ResumeID: resumeID,
+		Command:    h.cfg.Command,
+		Args:       h.cfg.Args,
+		Dir:        h.cfg.Dir,
+		Env:        withEnv(agentEnv(h.baseEnv(), h.cfg.Adapter.Env), h.scopeEnv()),
+		ResumeID:   resumeID,
+		MCPServers: h.mcpServers(),
 	}
+}
+
+// mcpServers is the fleet tool server every ACP session of this host gets. The
+// env entries pin it to this session and this state root, because an agent need
+// not pass its own environment to a server it starts.
+func (h *Host) mcpServers() []sdk.McpServer {
+	if h.cfg.MCPCommand == "" {
+		return nil
+	}
+
+	env := []sdk.EnvVariable{
+		{Name: "FLT_SESSION_ID", Value: string(h.cfg.ID)},
+		{Name: "FLT_POLICY", Value: h.cfg.Policy.String()},
+	}
+	if h.cfg.Channel != "" {
+		env = append(env, sdk.EnvVariable{Name: "FLT_CHANNEL", Value: h.cfg.Channel})
+	}
+	if root := os.Getenv("FLT_HOME"); root != "" {
+		env = append(env, sdk.EnvVariable{Name: "FLT_HOME", Value: root})
+	}
+
+	return []sdk.McpServer{{Stdio: &sdk.McpServerStdio{
+		Name:    "flotilla",
+		Command: h.cfg.MCPCommand,
+		Args:    []string{"mcp", "serve"},
+		Env:     env,
+	}}}
 }
 
 // lookPath is the resolver agentEnv uses for bare executable names; a variable
@@ -127,7 +172,7 @@ func (h *Host) startACP(ctx context.Context) error {
 
 	h.acp = &acpSession{
 		sess:    sess,
-		pending: make(map[string]chan acp.PermissionAnswer),
+		pending: make(map[string]*pendingQuestion),
 		// A session id can be reused after its first host is gone, and the
 		// transcript is kept. Numbering from one again would make the new
 		// run's first update look like a replay of the old run's.
@@ -180,11 +225,49 @@ func (h *Host) resumeACP(ctx context.Context, id sdk.SessionId) error {
 	h.acp.sess = sess
 	// The old questions belonged to the dead connection; their waiters already
 	// unwound with it, and a stale answer must not reach the new agent.
-	h.acp.pending = make(map[string]chan acp.PermissionAnswer)
+	h.acp.pending = make(map[string]*pendingQuestion)
+	h.acp.gen++
 	h.acp.mu.Unlock()
 
 	h.surfaceChanged(acp.SurfaceChange{})
 	return nil
+}
+
+// answerBudget bounds the answer one prompt reply carries. The reply is a
+// single control frame capped at ipc.MaxFrameSize, and JSON escaping can cost
+// several bytes per byte, so the answer leaves ample room for the envelope.
+const answerBudget = updateTextBudget
+
+// appendCapped appends text while it fits budget, cutting on a rune boundary.
+// It reports whether the whole text fit; false means the turn said more.
+func appendCapped(b *strings.Builder, text string, budget int) bool {
+	room := budget - b.Len()
+	if room <= 0 {
+		return false
+	}
+	if len(text) <= room {
+		b.WriteString(text)
+		return true
+	}
+
+	cut := room
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	b.WriteString(text[:cut])
+	return false
+}
+
+// isTurnSession reports whether an update belongs to this host's own
+// conversation rather than a child session the agent announced. The ACP client
+// stamps every update with the id it arrived under, so the comparison is
+// against the id the agent assigned this session.
+func (h *Host) isTurnSession(id string) bool {
+	if id == "" {
+		return true
+	}
+	sess := h.acpAgent()
+	return sess != nil && id == string(sess.ID())
 }
 
 // forwardUpdate pushes one agent update to the attached client. With no client
@@ -195,13 +278,33 @@ func (h *Host) resumeACP(ctx context.Context, id sdk.SessionId) error {
 // Every piece carries the number this host gave it, because a daemon that
 // reconnects is handed the buffer again and must recognise what it already has.
 func (h *Host) forwardUpdate(u acp.Update) {
+	h.touch()
+	if u.Kind == acp.UpdateSubagent && u.SubagentID != "" && u.SubagentState != "" {
+		h.mu.Lock()
+		h.family[u.SubagentID] = u.SubagentState
+		h.mu.Unlock()
+	}
+	// The turn's own messages are also the turn's answer. A message from a
+	// child session the agent announced is not this turn speaking.
+	if u.Kind == session.KindMessage && h.isTurnSession(u.SessionID) {
+		h.acp.mu.Lock()
+		if h.acp.answering && !appendCapped(&h.acp.answer, u.Text, answerBudget) {
+			h.acp.answerCut = true
+		}
+		h.acp.mu.Unlock()
+	}
+
 	msg := session.UpdateMessage{
-		Kind:       u.Kind,
-		Text:       u.Text,
-		ToolCallID: u.ToolCallID,
-		ToolTitle:  u.ToolTitle,
-		ToolStatus: u.ToolStatus,
-		SessionID:  u.SessionID,
+		Kind:                u.Kind,
+		Text:                u.Text,
+		ToolCallID:          u.ToolCallID,
+		ToolTitle:           u.ToolTitle,
+		ToolStatus:          u.ToolStatus,
+		SessionID:           u.SessionID,
+		SubagentID:          u.SubagentID,
+		SubagentTitle:       u.SubagentTitle,
+		SubagentDescription: u.SubagentDescription,
+		SubagentState:       u.SubagentState,
 	}
 
 	for _, part := range chunkUpdate(msg, updateTextBudget) {
@@ -288,19 +391,6 @@ func chunkUpdate(msg session.UpdateMessage, budget int) []session.UpdateMessage 
 // that disconnects becomes a refusal; an unanswered question waits forever
 // unless the host was given an explicit PermissionWait.
 func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.PermissionAnswer, error) {
-	h.acp.mu.Lock()
-	h.acp.nextID++
-	id := fmt.Sprintf("perm-%d", h.acp.nextID)
-	answer := make(chan acp.PermissionAnswer, 1)
-	h.acp.pending[id] = answer
-	h.acp.mu.Unlock()
-
-	defer func() {
-		h.acp.mu.Lock()
-		delete(h.acp.pending, id)
-		h.acp.mu.Unlock()
-	}()
-
 	options := make([]session.PermissionOption, 0, len(req.Options))
 	for _, opt := range req.Options {
 		// The agent's own label travels with the choice: it is the only party
@@ -317,22 +407,55 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 	conn := h.conn
 	h.mu.Unlock()
 
+	// Nobody is listening: the agent hears a refusal at once instead of waiting
+	// on a card no window can see.
 	if conn == nil {
 		return acp.PermissionAnswer{}, nil
 	}
+
+	h.acp.mu.Lock()
+	h.acp.nextID++
+	id := fmt.Sprintf("perm-%d", h.acp.nextID)
+	pq := &pendingQuestion{
+		answer: make(chan acp.PermissionAnswer, 1),
+		ask: session.PermissionQuestion{
+			ID:      id,
+			Title:   req.Title,
+			Kind:    req.Kind,
+			Options: options,
+		},
+		sent: conn,
+	}
+	h.acp.pending[id] = pq
+	gen := h.acp.gen
+	h.acp.mu.Unlock()
+
+	// Every exit removes this ask; only the exits that let the agent move on
+	// report working, and then only when no other card is still waiting. An
+	// agent can ask twice for parallel tool calls, and one answer is not the
+	// turn resuming while the second question waits.
+	resume := false
+	defer func() {
+		if h.questionDone(gen, id) && resume {
+			h.setState(session.StateWorking)
+		}
+	}()
 
 	// The agent is waiting on the user. This is the exact case `blocked` names:
 	// an approval or question UI the session cannot get past on its own. Unlike
 	// a PTY session, ACP tells us rather than leaving us to recognise a dialog.
 	h.setState(session.StateBlocked)
 
-	if err := conn.Notify(session.MethodPermission, session.PermissionQuestion{
-		ID:      id,
-		Title:   req.Title,
-		Kind:    req.Kind,
-		Options: options,
-	}); err != nil {
-		return acp.PermissionAnswer{}, nil
+	if err := conn.Notify(session.MethodPermission, pq.ask); err != nil {
+		// A client that attached meanwhile was handed the ask by the replay, so
+		// this failure is not a refusal: the card is visible and still waits.
+		h.acp.mu.Lock()
+		delivered := pq.sent != conn
+		h.acp.mu.Unlock()
+		if !delivered {
+			resume = true
+			return acp.PermissionAnswer{}, nil
+		}
 	}
 
 	timer := h.cfg.permissionTimer()
@@ -345,14 +468,14 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 	}
 
 	select {
-	case a := <-answer:
+	case a := <-pq.answer:
 		// The connection may have died with the answer in flight: a cancelled
 		// context means the turn is gone, and working would claim it resumed.
 		if ctx.Err() != nil {
 			return acp.PermissionAnswer{}, nil
 		}
 		// Answered: the turn resumes, so the session is working again.
-		h.setState(session.StateWorking)
+		resume = true
 		return a, nil
 	case <-ctx.Done():
 		return acp.PermissionAnswer{}, nil
@@ -363,11 +486,25 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 		}
 		// The refusal reaches the agent and the turn moves on, so the session
 		// is no longer waiting on anyone.
-		h.setState(session.StateWorking)
+		resume = true
 		return acp.PermissionAnswer{}, nil
 	case <-h.donec:
 		return acp.PermissionAnswer{}, nil
 	}
+}
+
+// questionDone removes one ask and reports whether any question still waits. A
+// waiter from an agent that was relaunched reports false without touching the
+// new agent's questions.
+func (h *Host) questionDone(gen uint64, id string) bool {
+	h.acp.mu.Lock()
+	defer h.acp.mu.Unlock()
+
+	if h.acp.gen != gen {
+		return false
+	}
+	delete(h.acp.pending, id)
+	return len(h.acp.pending) == 0
 }
 
 // permissionTimer arms the configured wait, or returns nil for forever. A nil
@@ -388,15 +525,41 @@ func (h *Host) answerPermission(reply session.PermissionReply) {
 	}
 
 	h.acp.mu.Lock()
-	ch, ok := h.acp.pending[reply.ID]
+	pq, ok := h.acp.pending[reply.ID]
 	h.acp.mu.Unlock()
 
 	if !ok {
 		return
 	}
 	select {
-	case ch <- acp.PermissionAnswer{OptionID: reply.OptionID}:
+	case pq.answer <- acp.PermissionAnswer{OptionID: reply.OptionID}:
 	default:
+	}
+}
+
+// replayQuestions hands a client that just attached every card still waiting.
+// The agent asked before this connection existed, and its turn stays blocked
+// until one of them is answered.
+func (h *Host) replayQuestions(conn *ipc.Conn) {
+	if h.acp == nil {
+		return
+	}
+
+	h.acp.mu.Lock()
+	asks := make([]session.PermissionQuestion, 0, len(h.acp.pending))
+	for _, pq := range h.acp.pending {
+		if pq.sent == conn {
+			continue
+		}
+		pq.sent = conn
+		asks = append(asks, pq.ask)
+	}
+	h.acp.mu.Unlock()
+
+	for _, ask := range asks {
+		if err := conn.Notify(session.MethodPermission, ask); err != nil {
+			return
+		}
 	}
 }
 
@@ -435,7 +598,24 @@ func (h *Host) promptACP(ctx context.Context, req session.PromptRequest) (sessio
 	// synchronous and returns when the agent stops.
 	h.setState(session.StateWorking)
 
+	// The ACP connection handles every update it received before a response
+	// before the call returns, so the collector is complete when Prompt does.
+	h.acp.mu.Lock()
+	h.acp.answer.Reset()
+	h.acp.answerCut = false
+	h.acp.answering = true
+	h.acp.mu.Unlock()
+
 	resp, err := h.acpAgent().Prompt(ctx, sdk.TextBlock(req.Text))
+
+	h.acp.mu.Lock()
+	answer := h.acp.answer.String()
+	truncated := h.acp.answerCut
+	h.acp.answering = false
+	h.acp.answer.Reset()
+	h.acp.answerCut = false
+	h.acp.mu.Unlock()
+
 	if err != nil {
 		// A failed turn is not "done": the work did not happen, and a caller
 		// that reads done would think there is something to look at. Unknown
@@ -447,7 +627,11 @@ func (h *Host) promptACP(ctx context.Context, req session.PromptRequest) (sessio
 	// The agent stopped. Whether the user has seen the result is the client's
 	// question, so the host reports done and the client marks it seen.
 	h.setState(session.StateDone)
-	return session.PromptResponse{StopReason: string(resp.StopReason)}, nil
+	return session.PromptResponse{
+		StopReason:      string(resp.StopReason),
+		Answer:          answer,
+		AnswerTruncated: truncated,
+	}, nil
 }
 
 // cancelACP stops the running turn.

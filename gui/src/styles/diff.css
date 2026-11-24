@@ -23,6 +23,44 @@
   padding: 3px var(--sp-3);
 }
 
+/* The rollback points above the writes: one row per finished turn, newest
+   first, each with the one button that rewrites the working tree. */
+.checkpoints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.checkpoints-head {
+  color: var(--muted);
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.checkpoint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checkpoint-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.checkpoint-label {
+  font-family: var(--mono);
+  font-size: var(--fs-tiny);
+}
+
 /* The commit/push/PR row. It wraps because the window can be narrow, and a
    control that scrolls out of reach is a control the user cannot find. */
 .git-actions {

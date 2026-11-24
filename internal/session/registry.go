@@ -47,6 +47,8 @@ type Info struct {
 	// that attaches gets it in one round trip instead of racing a separate
 	// query against a state change.
 	State State `json:"state"`
+	// Steer is whether the agent takes a message into the running turn.
+	Steer bool `json:"steer"`
 }
 
 // Record is what a host publishes about itself. It holds no secrets: the
@@ -61,6 +63,8 @@ type Record struct {
 	PID int `json:"pid"`
 	// Started is when the host took the session.
 	Started time.Time `json:"started"`
+	// Parent is the session that started this one; empty for a person's session.
+	Parent ID `json:"parent,omitempty"`
 }
 
 // ErrNoRecord reports a session whose host is not registered on this machine.

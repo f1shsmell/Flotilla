@@ -11,8 +11,17 @@ interface FlotillaBridge {
   open(sessionId: string): Promise<unknown>;
   archive(sessionId: string): Promise<unknown>;
   prompt(sessionId: string, text: string): Promise<unknown>;
+  steer(sessionId: string, text: string): Promise<unknown>;
   seen(sessionId: string): Promise<unknown>;
+  protect(sessionId: string, on: boolean): Promise<unknown>;
   cancel(sessionId: string): Promise<unknown>;
+  queue(sessionId: string): Promise<unknown>;
+  queueAdd(sessionId: string, text: string): Promise<unknown>;
+  queueEdit(sessionId: string, id: string, text: string): Promise<unknown>;
+  queueRemove(sessionId: string, id: string): Promise<unknown>;
+  queueMove(sessionId: string, id: string, to: number): Promise<unknown>;
+  checkpoints(sessionId: string): Promise<unknown>;
+  restoreCheckpoint(sessionId: string, turn: number): Promise<unknown>;
   surfaceSet(sessionId: string, id: string, value: string): Promise<unknown>;
   answer(sessionId: string, questionId: string, optionId: string): Promise<unknown>;
   input(sessionId: string, text: string): Promise<unknown>;

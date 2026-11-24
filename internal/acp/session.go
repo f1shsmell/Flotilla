@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ type Launch struct {
 	Dir string
 	// Env is the agent's environment. Nil inherits this process's.
 	Env []string
+	// MCPServers are tool servers the agent should start for this session.
+	MCPServers []sdk.McpServer
 	// ResumeID reopens a saved conversation; empty creates a new one.
 	ResumeID string
 }
@@ -159,6 +162,10 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		ProtocolVersion: sdk.ProtocolVersionNumber,
 		ClientCapabilities: sdk.ClientCapabilities{
 			Fs: sdk.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
+			// An agent announces child sessions only to a client that
+			// advertised them. The ACP field is unstable: drop this line when the
+			// SDK removes it, and keep the updates when it stabilizes.
+			Subagents: &sdk.SubagentCapabilities{},
 		},
 		ClientInfo: &sdk.Implementation{Name: "flotilla", Version: version.String()},
 	})
@@ -174,12 +181,12 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 	s.init = initResp
 
 	if launch.ResumeID != "" {
-		return s.resume(ctx, launch.ResumeID, cfg.Workspace)
+		return s.resume(ctx, launch.ResumeID, cfg.Workspace, launch.MCPServers)
 	}
 
 	created, err := s.conn.NewSession(ctx, sdk.NewSessionRequest{
 		Cwd:        cfg.Workspace,
-		McpServers: []sdk.McpServer{},
+		McpServers: nonNilServers(launch.MCPServers),
 	})
 	if err != nil {
 		_ = s.Close()
@@ -195,10 +202,20 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 	return s, nil
 }
 
+// nonNilServers sends an empty list rather than a null for a session that was
+// given no tool servers: the protocol spells it as a list, and an agent that
+// reads null as "inherit mine" is not one this build can reason about.
+func nonNilServers(servers []sdk.McpServer) []sdk.McpServer {
+	if servers == nil {
+		return []sdk.McpServer{}
+	}
+	return servers
+}
+
 // resume reopens a saved conversation on a freshly launched agent. The resume
 // answer carries the same surface a new session would, so it is folded into
 // created exactly like one: every reader of the opening answer keeps working.
-func (s *Session) resume(ctx context.Context, id, workspace string) (*Session, error) {
+func (s *Session) resume(ctx context.Context, id, workspace string, servers []sdk.McpServer) (*Session, error) {
 	if !s.SupportsResume() {
 		_ = s.Close()
 		return nil, fmt.Errorf("resume session %q: %w", id, ErrUnsupported)
@@ -206,7 +223,7 @@ func (s *Session) resume(ctx context.Context, id, workspace string) (*Session, e
 	resumed, err := s.conn.ResumeSession(ctx, sdk.ResumeSessionRequest{
 		SessionId:  sdk.SessionId(id),
 		Cwd:        workspace,
-		McpServers: []sdk.McpServer{},
+		McpServers: nonNilServers(servers),
 	})
 	if err != nil {
 		_ = s.Close()
@@ -357,6 +374,51 @@ func (s *Session) Prompt(ctx context.Context, blocks ...sdk.ContentBlock) (sdk.P
 		return sdk.PromptResponse{}, fmt.Errorf("prompt the agent: %w", err)
 	}
 	return resp, nil
+}
+
+// steerMethod is the extension method the steering adapters implement. It is
+// advertised at initialize, not assumed: an agent that did not is not asked.
+const steerMethod = "_session/steering"
+
+// SteerSupported reports whether the agent advertised steering. An agent that
+// did not can only take a message as the next prompt.
+func (s *Session) SteerSupported() bool {
+	var v struct {
+		Supported bool `json:"supported"`
+	}
+	return s.init.Meta.Get("steering", &v) == nil && v.Supported
+}
+
+// steerIdlePromptRequired opts into the adapters' host-owned idle fallback: a
+// steer that finds no running turn answers "promptRequired" instead of starting
+// a turn of the adapter's own that the host could not track.
+var steerIdlePromptRequired = sdk.Meta{"steering": json.RawMessage(`{"idleBehavior":"promptRequired"}`)}
+
+// Steer injects one message into the running turn and reports whether the turn
+// took it. A false answer means the adapter did not apply the message — no turn
+// was running, or the attempt failed — and the caller queues it instead.
+func (s *Session) Steer(ctx context.Context, text string) (bool, error) {
+	raw, err := s.conn.CallExtension(ctx, steerMethod, struct {
+		SessionID sdk.SessionId      `json:"sessionId"`
+		Prompt    []sdk.ContentBlock `json:"prompt"`
+		Meta      sdk.Meta           `json:"_meta,omitempty"`
+	}{
+		SessionID: s.agentID,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock(text)},
+		Meta:      steerIdlePromptRequired,
+	})
+	if err != nil {
+		return false, fmt.Errorf("steer the running turn: %w", err)
+	}
+	var resp struct {
+		Outcome string `json:"outcome"`
+	}
+	_ = json.Unmarshal(raw, &resp)
+	switch resp.Outcome {
+	case "promptRequired", "failed":
+		return false, nil
+	}
+	return true, nil
 }
 
 // Cancel asks the agent to stop the current turn.

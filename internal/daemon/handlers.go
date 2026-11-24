@@ -54,6 +54,8 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 		return d.stopSession(ctx, params)
 	case MethodSessionArchive:
 		return d.archive(params)
+	case session.MethodProtect:
+		return d.protectSession(params)
 	case session.MethodAttach:
 		return d.attachClient(ctx, peer, params)
 	default:
@@ -187,7 +189,30 @@ func (d *Daemon) fleetStatus(client string, diagnostics bool) Status {
 			Dir:       att.Info.Dir,
 			State:     state,
 			Reachable: reachable,
+			Protected: d.protected[att.Record.ID],
+			Steer:     reachable && att.Info.Steer,
+			// From the record, so a daemon that starts later still sees it.
+			Parent: att.Record.Parent,
 		})
+
+		// The inbox is derived from the same per-client lifecycle, so the two
+		// cannot disagree about whether a session is waiting or unread.
+		entry := InboxEntry{
+			ID:      att.Record.ID,
+			Command: att.Info.Command,
+			Dir:     att.Info.Dir,
+		}
+		switch state {
+		case session.StateBlocked:
+			entry.Kind = InboxInput
+			if q, ok := d.relay.question(att.Record.ID); ok {
+				entry.Title = q.Title
+			}
+			st.Inbox = append(st.Inbox, entry)
+		case session.StateDone:
+			entry.Kind = InboxUnread
+			st.Inbox = append(st.Inbox, entry)
+		}
 	}
 
 	if diagnostics {
@@ -280,6 +305,8 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 		Adapter:        adapter,
 		Channel:        d.cfg.Channel,
 		StateDir:       d.cfg.StateDir,
+		MCPCommand:     fleetBinary(d.cfg.HostBinary),
+		Parent:         req.Parent,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("spawn session %q: %w%s", req.ID, err, kept)
@@ -351,6 +378,17 @@ func worktreeFor(ctx context.Context, req StartRequest) (dir string, included, s
 // lookup returns the attachment for id. The value is a copy, not a pointer into
 // the fleet: a caller reads it long after the lock is released, and the host's
 // own state changes underneath it.
+// attachmentLocked finds a session's attachment without copying it. The caller
+// holds d.mu.
+func (d *Daemon) attachmentLocked(id session.ID) *Attachment {
+	for i := range d.fleet.Attachments {
+		if d.fleet.Attachments[i].Record.ID == id {
+			return &d.fleet.Attachments[i]
+		}
+	}
+	return nil
+}
+
 func (d *Daemon) lookup(id session.ID) *Attachment {
 	d.mu.Lock()
 	defer d.mu.Unlock()

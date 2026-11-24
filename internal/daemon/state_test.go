@@ -185,14 +185,14 @@ func TestAnUnreachableSessionIsUnknownNotDone(t *testing.T) {
 	}
 }
 
-// TestRememberStateIgnoresASessionItDoesNotServe pins the guard on the hook: a
+// TestRecordStateIgnoresASessionItDoesNotServe pins the guard on the hook: a
 // stray state for an unknown session must not invent an attachment, because a
 // row with no host behind it is exactly the ghost the fleet view must not show.
-func TestRememberStateIgnoresASessionItDoesNotServe(t *testing.T) {
+func TestRecordStateIgnoresASessionItDoesNotServe(t *testing.T) {
 	d := New(Config{Channel: "test", Token: "shared", StateDir: t.TempDir(), Log: discardLogger()}, nil)
 	t.Cleanup(d.Detach)
 
-	d.rememberState("sess-ghost", session.StateDone)
+	d.recordState("sess-ghost", nil, session.StateDone)
 
 	if got := len(d.Fleet().Attachments); got != 0 {
 		t.Fatalf("a state for an unknown session created %d attachment(s)", got)
@@ -221,7 +221,7 @@ func TestALookupSnapshotDoesNotFollowTheFleet(t *testing.T) {
 
 	// A state that arrives after the snapshot belongs to the fleet, not to the
 	// value the caller is holding.
-	d.rememberState("sess-snapshot", session.StateDone)
+	d.recordState("sess-snapshot", nil, session.StateDone)
 
 	if got := att.Info.State; got != session.StateUnknown {
 		t.Fatalf("the snapshot followed the fleet to %q", got)
@@ -231,10 +231,10 @@ func TestALookupSnapshotDoesNotFollowTheFleet(t *testing.T) {
 	}
 }
 
-// TestRememberStateRejectsAValueOutsideTheClosedSet pins the closed set: a host
+// TestRecordStateRejectsAValueOutsideTheClosedSet pins the closed set: a host
 // that sends a word this build does not know must not have it stored, because
 // the UI would then render a state it cannot explain.
-func TestRememberStateRejectsAValueOutsideTheClosedSet(t *testing.T) {
+func TestRecordStateRejectsAValueOutsideTheClosedSet(t *testing.T) {
 	dir := t.TempDir()
 	const token = "shared"
 
@@ -245,7 +245,7 @@ func TestRememberStateRejectsAValueOutsideTheClosedSet(t *testing.T) {
 		t.Fatalf("the daemon attached to %d sessions, want 1", got)
 	}
 
-	d.rememberState("sess-closed", session.State("finished"))
+	d.recordState("sess-closed", nil, session.State("finished"))
 
 	if got := d.Fleet().Attachments[0].Info.State; got != session.StateUnknown {
 		t.Fatalf("a value outside the closed set was stored as %q", got)
@@ -286,6 +286,44 @@ func TestAFinishedTurnBecomesUnreadAgainOnTheNextTurn(t *testing.T) {
 
 	// The new turn's done is unread even for the window that read the last one.
 	waitForStateAs(t, dir, token, "window-a", "sess-repeat", session.StateDone)
+}
+
+// TestAReplayedDoneKeepsAReadTurnSeen pins the attach replay against the badge:
+// a host sends its current state to every client that attaches, and a done it
+// already reported is not a new finish. Without the distinction every daemon
+// restart turned every read turn unread again.
+func TestAReplayedDoneKeepsAReadTurnSeen(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	startAutoACPHost(t, dir, "sess-replay", token)
+	d := runDaemon(t, dir, token)
+
+	att := d.lookup("sess-replay")
+	if att == nil {
+		t.Fatal("the daemon did not attach to the session")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+	if _, err := att.Conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "say hello"}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	waitForState(t, dir, token, "sess-replay", session.StateDone)
+
+	d.relay.markSeen("sess-replay", "window-a")
+	if got := stateOf(t, d.fleetStatus("window-a", true), "sess-replay"); got != session.StateIdle {
+		t.Fatalf("a read turn reports %q, want idle", got)
+	}
+
+	// What the host sends to a daemon that reattaches: the state it already had.
+	d.recordState("sess-replay", nil, session.StateDone)
+
+	if got := stateOf(t, d.fleetStatus("window-a", true), "sess-replay"); got != session.StateIdle {
+		t.Fatalf("a replayed done turned a read turn %q, want idle", got)
+	}
+	if got := stateOf(t, d.fleetStatus("window-b", true), "sess-replay"); got != session.StateDone {
+		t.Fatalf("another window reports %q, want the unread done", got)
+	}
 }
 
 // TestSeenDoesNotClassifyAPtySession pins the honesty rule for the mode that has

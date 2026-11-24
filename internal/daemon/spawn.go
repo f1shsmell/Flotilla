@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +53,10 @@ type SpawnRequest struct {
 	Channel string
 	// StateDir holds the host records and the Unix sockets.
 	StateDir string
+	// MCPCommand is the agent's fleet tool server; empty registers none.
+	MCPCommand string
+	// Parent is the session that asked for this one; empty for a person's start.
+	Parent session.ID
 }
 
 // recordPollInterval is how often a spawn waits for the host record. It is
@@ -152,6 +157,12 @@ func spawnArgs(req SpawnRequest) ([]string, error) {
 	if req.SeqBase > 0 {
 		args = append(args, "--seq-base", fmt.Sprint(req.SeqBase))
 	}
+	if req.MCPCommand != "" {
+		args = append(args, "--mcp", req.MCPCommand)
+	}
+	if req.Parent != "" {
+		args = append(args, "--parent", string(req.Parent))
+	}
 	if !req.Adapter.Empty() {
 		// The definition travels as JSON on the command line rather than in a
 		// file: the host is one process for one session, and a file would
@@ -168,6 +179,23 @@ func spawnArgs(req SpawnRequest) ([]string, error) {
 		args = append(args, req.Args...)
 	}
 	return args, nil
+}
+
+// fleetBinary is the flt executable beside the session host, which is how a
+// release ships them. A build with nothing there registers no tools: an agent
+// then has its session id and nothing to call.
+func fleetBinary(hostBinary string) string {
+	if hostBinary == "" {
+		return ""
+	}
+	dir := filepath.Dir(hostBinary)
+	for _, name := range []string{"flt", "flt.exe"} {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // waitForRecord blocks until the host has published its record, so the daemon

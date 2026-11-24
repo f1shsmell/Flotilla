@@ -24,6 +24,35 @@ func TestRunPrintsTheBuildVersion(t *testing.T) {
 	}
 }
 
+// TestChannelFollowsTheSessionEnvironment pins the default: a command run
+// inside a session must reach the daemon that serves it, not the default one.
+func TestChannelFollowsTheSessionEnvironment(t *testing.T) {
+	t.Setenv("FLT_CHANNEL", "")
+	if got := defaultChannel(); got != version.Channel {
+		t.Fatalf("default channel = %q, want %q", got, version.Channel)
+	}
+
+	t.Setenv("FLT_CHANNEL", "preview")
+	if got := defaultChannel(); got != "preview" {
+		t.Fatalf("channel inside a session = %q, want preview", got)
+	}
+}
+
+// TestMCPRejectsWhatItDoesNotServe keeps a mistyped subcommand from opening a
+// protocol stream on stdout that will never be answered.
+func TestMCPRejectsWhatItDoesNotServe(t *testing.T) {
+	for _, args := range [][]string{{"mcp"}, {"mcp", "start"}, {"mcp", "serve", "extra"}} {
+		var out bytes.Buffer
+		err := run(args, &out)
+		if err == nil {
+			t.Fatalf("run(%q) succeeded", args)
+		}
+		if !strings.Contains(err.Error(), "mcp serve") {
+			t.Fatalf("run(%q) error = %q, want it to name mcp serve", args, err)
+		}
+	}
+}
+
 func TestRunRejectsAnUnknownCommand(t *testing.T) {
 	var out bytes.Buffer
 

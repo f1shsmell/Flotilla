@@ -55,6 +55,7 @@ func (h *Host) promptPTY(ctx context.Context, req session.PromptRequest) (sessio
 			return session.PromptResponse{}, fmt.Errorf("write to the agent: %w", err)
 		}
 	}
+	h.touch()
 
 	return session.PromptResponse{StopReason: "injected"}, nil
 }

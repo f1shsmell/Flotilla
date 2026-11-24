@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import { dirLabel, fleetSummary, mainEmpty, modeLabel, stopLabel, windowTitle } from "../src/fleetView";
+import {
+  deliveryLabel,
+  dirLabel,
+  fleetSummary,
+  mainEmpty,
+  modeLabel,
+  promptRoute,
+  stopLabel,
+  watchedFinish,
+  windowTitle,
+} from "../src/fleetView";
 import type { Status, StatusEntry } from "../src/store";
 
 function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true): StatusEntry {
-  return { id, mode: "pty", host_pid: 1, command: "cmd.exe", dir: "", lifecycle, reachable };
+  return {
+    id,
+    mode: "pty",
+    host_pid: 1,
+    command: "cmd.exe",
+    dir: "",
+    lifecycle,
+    reachable,
+    protected: false,
+    steer: false,
+  };
 }
 
 function status(sessions: StatusEntry[]): Status {
@@ -30,6 +50,22 @@ describe("fleetSummary", () => {
   it("does not call quiet work attention: only blocked and done ask for the user", () => {
     const fleet = status([entry("a", "working"), entry("b", "idle"), entry("c", "unknown")]);
     expect(fleetSummary(fleet).attention).toBe(0);
+  });
+});
+
+describe("watchedFinish", () => {
+  it("marks a done turn for the session the pane shows", () => {
+    expect(watchedFinish("sess-a", "sess-a", "done")).toBe(true);
+  });
+
+  it("leaves a finish unread when the pane shows another session", () => {
+    expect(watchedFinish("sess-a", "sess-b", "done")).toBe(false);
+    expect(watchedFinish("sess-a", null, "done")).toBe(false);
+  });
+
+  it("does not call a running or unknown turn finished", () => {
+    expect(watchedFinish("sess-a", "sess-a", "working")).toBe(false);
+    expect(watchedFinish("sess-a", "sess-a", "unknown")).toBe(false);
   });
 });
 
@@ -99,6 +135,42 @@ describe("modeLabel", () => {
 
   it("passes an unrecognised mode through instead of guessing", () => {
     expect(modeLabel("weird")).toBe("weird");
+  });
+});
+
+describe("promptRoute", () => {
+  it("queues while an agent runs or waits on an answer", () => {
+    expect(promptRoute("acp", "working")).toBe("queue");
+    expect(promptRoute("acp", "blocked")).toBe("queue");
+  });
+
+  it("steers into a running turn when the agent advertised it", () => {
+    expect(promptRoute("acp", "working", true)).toBe("steer");
+  });
+
+  it("still queues a blocked turn: a question is not a turn to steer", () => {
+    expect(promptRoute("acp", "blocked", true)).toBe("queue");
+  });
+
+  it("prompts when the agent is free", () => {
+    expect(promptRoute("acp", "done")).toBe("prompt");
+    expect(promptRoute("acp", "idle")).toBe("prompt");
+    expect(promptRoute("acp", "unknown")).toBe("prompt");
+  });
+
+  it("never queues for a terminal", () => {
+    expect(promptRoute("pty", "working")).toBe("prompt");
+  });
+});
+
+describe("deliveryLabel", () => {
+  it("names the failures the daemon reports", () => {
+    expect(deliveryLabel("host_unreachable")).toBe("the host is unreachable");
+    expect(deliveryLabel("prompt_failed")).toBe("the turn could not start");
+  });
+
+  it("shows an unknown failure as it came, rather than inventing one", () => {
+    expect(deliveryLabel("something_new")).toBe("something_new");
   });
 });
 

@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { constants } from "../electron/contract";
 import { AgentSettings } from "./components/AgentSettings";
 import { ArchiveView } from "./components/ArchiveView";
 import { BrandMark } from "./components/Brand";
 import { FleetList } from "./components/FleetList";
 import { HarborEmpty } from "./components/HarborEmpty";
-import { IconBack, IconPlus, IconSliders } from "./components/Icons";
+import { IconBack, IconInbox, IconPlus, IconSliders } from "./components/Icons";
+import { InboxView } from "./components/InboxView";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { RefreshButton } from "./components/RefreshButton";
 import { SessionView } from "./components/SessionView";
 import { StatusBar } from "./components/StatusBar";
-import { mainEmpty, windowTitle } from "./fleetView";
+import { mainEmpty, promptRoute, watchedFinish, windowTitle } from "./fleetView";
 import {
   addPermission,
   answerPermission,
@@ -22,6 +24,7 @@ import {
   loseSession,
   newSession,
   parseAgents,
+  parseMessageQueue,
   parseStatus,
   startTurn,
   withControls,
@@ -84,6 +87,9 @@ export function App(): React.ReactElement {
   // route is which main panel the window shows: the session view, or the agent
   // settings the picker sends the user to when nothing installed matches.
   const [route, setRoute] = useState<"session" | "agents">("session");
+  // inboxOpen is the cross-session list of what waits on the user. It is a
+  // layer over the session pane, like the agent settings page.
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   // archivedId is the finished run on screen. It is its own field rather than a
   // second meaning for `selected`: a live session and a log are read by
@@ -122,6 +128,12 @@ export function App(): React.ReactElement {
   // the replay, so they wait here until the terminal can take them.
   const pendingOutput = useRef<Uint8Array[]>([]);
   const selectedId = useRef<string | null>(null);
+  // sessionLive is the id whose state the pane holds on a live link: a second
+  // click on that row must not dial again and rebuild from a cached answer.
+  const sessionLive = useRef<string | null>(null);
+  // paneShowing is whether the session pane is the visible layer. The event
+  // subscription is installed once, so it reads that through a ref.
+  const paneShowing = useRef(true);
 
   const flush = useCallback(() => {
     frame.current = null;
@@ -166,6 +178,63 @@ export function App(): React.ReactElement {
   }, [flush]);
 
   useEffect(() => {
+    paneShowing.current = route === "session" && !inboxOpen && !composing;
+  }, [route, inboxOpen, composing]);
+
+  // A daemon that cannot start would be spawned again every tick, so a failure
+  // backs the poll off instead of hammering the same missing binary.
+  const retryAt = useRef(0);
+
+  const refresh = useCallback(async (force = false) => {
+    if (!force && Date.now() < retryAt.current) {
+      return;
+    }
+    try {
+      setFleet(parseStatus(await window.flotilla.fleet()));
+      setFleetError(null);
+      retryAt.current = 0;
+    } catch (error) {
+      setFleet(null);
+      setFleetError(error instanceof Error ? error.message : String(error));
+      retryAt.current = Date.now() + 10000;
+    }
+  }, []);
+
+  // The queue changes on two clocks: this window's edits and a finished turn
+  // releasing the next message. The reads are serialized, so a stale answer
+  // cannot land after a newer one and put back a row already delivered.
+  const queueTurn = useRef<Promise<unknown>>(Promise.resolve());
+  const serialQueue = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
+    const next = queueTurn.current.then(task);
+    queueTurn.current = next.catch(() => undefined);
+    return next;
+  }, []);
+
+  const applyQueue = useCallback((id: string, response: unknown) => {
+    const messages = parseMessageQueue(response);
+    setSession((current) =>
+      current && current.id === id ? { ...current, queue: messages } : current,
+    );
+  }, []);
+
+  // refreshQueue reads the messages waiting behind the running turn. Delivery
+  // starts one without a call from this window, so the queue is read again on
+  // every lifecycle change and after a rebuild, not only after an edit.
+  const refreshQueue = useCallback(
+    (id: string) => {
+      void serialQueue(async () => {
+        try {
+          applyQueue(id, await window.flotilla.queue(id));
+        } catch {
+          // A link that is gone reports itself elsewhere; the strip keeps what
+          // it last knew rather than flashing empty.
+        }
+      });
+    },
+    [applyQueue, serialQueue],
+  );
+
+  useEffect(() => {
     return window.flotilla.onEvent((payload) => {
       const event = payload as WireEvent;
 
@@ -190,7 +259,34 @@ export function App(): React.ReactElement {
       if (event.type === "state") {
         const update = (event.state ?? {}) as { state?: unknown };
         setFleet((current) => withLifecycle(current, event.session, update.state));
+        // A finished turn releases the next queued message with no call from
+        // this window, so the strip is read again on every change of the
+        // session it shows.
+        if (sessionLive.current === event.session) {
+          void refreshQueue(event.session);
+        }
+        // A turn that finishes while its session is on screen has been watched,
+        // so it is not unread for this window. Only this event knows both
+        // facts; a click sees the attach answer, which predates the turn.
+        if (paneShowing.current && watchedFinish(event.session, selectedId.current, update.state)) {
+          void window.flotilla
+            .seen(event.session)
+            .catch(() => {
+              // A host that went away cannot record seen; the row keeps its badge.
+            })
+            // The inbox and its count are projected by the daemon, so read them
+            // once the look is recorded rather than behind the next poll.
+            .finally(() => void refresh());
+          return;
+        }
+        void refresh();
         return;
+      }
+
+      // A closed link means the pane no longer holds a live session: opening it
+      // again must dial a new one instead of taking the early return.
+      if (event.type === "closed" && event.session === selectedId.current) {
+        sessionLive.current = null;
       }
 
       // A heal rebuilt the link. The view starts over from the fresh attach
@@ -205,6 +301,8 @@ export function App(): React.ReactElement {
         // the history already has them, and a stale "closed" would re-lose it.
         queue.current = queue.current.filter((queued) => queued.session !== event.session);
         setSession(attachedState(event.session, attached));
+        sessionLive.current = event.session;
+        void refreshQueue(event.session);
         if ((attached.info?.state ?? "") === "done") {
           void window.flotilla.seen(event.session).catch(() => {
             // A host that went away cannot record seen; the row keeps its badge.
@@ -216,26 +314,7 @@ export function App(): React.ReactElement {
       queue.current.push(event);
       schedule();
     });
-  }, [schedule]);
-
-  // A daemon that cannot start would be spawned again every tick, so a failure
-  // backs the poll off instead of hammering the same missing binary.
-  const retryAt = useRef(0);
-
-  const refresh = useCallback(async (force = false) => {
-    if (!force && Date.now() < retryAt.current) {
-      return;
-    }
-    try {
-      setFleet(parseStatus(await window.flotilla.fleet()));
-      setFleetError(null);
-      retryAt.current = 0;
-    } catch (error) {
-      setFleet(null);
-      setFleetError(error instanceof Error ? error.message : String(error));
-      retryAt.current = Date.now() + 10000;
-    }
-  }, []);
+  }, [schedule, refresh, refreshQueue]);
 
   useEffect(() => {
     void refresh(true);
@@ -351,13 +430,24 @@ export function App(): React.ReactElement {
   }, [view, layoutLoaded]);
 
   const open = useCallback(async (id: string) => {
-    // Opening a session is what the window shows, and a settings panel on top
-    // would hide the session the user just asked for.
+    // Opening a session is what the window shows, and a covering panel would
+    // hide the session the user just asked for.
     setRoute("session");
+    setInboxOpen(false);
     setComposing(false);
     // A live session replaces the log on screen: two views of two sessions in
     // one pane would leave the header describing neither.
     setArchivedId(null);
+
+    // The pane already holds this session on a live link. Its attach answer is
+    // cached from that dial, so opening again would rewind the log and leave
+    // the terminal's writer unregistered; clicking it is still looking at it.
+    if (sessionLive.current === id) {
+      void window.flotilla.seen(id).catch(() => {
+        // A host that went away cannot record seen; the row keeps its badge.
+      });
+      return;
+    }
 
     const previous = selectedId.current;
     if (previous !== null && previous !== id) {
@@ -366,14 +456,15 @@ export function App(): React.ReactElement {
       // longer on screen, which is what lets a terminal hold its recent output
       // for the next visit.
       void window.flotilla.detach(previous);
+      sessionLive.current = null;
+      terminalWrite.current = null;
+      // Bytes queued for the previous session belong to that session's screen,
+      // not this one's.
+      pendingOutput.current = [];
     }
 
     setSelected(id);
     selectedId.current = id;
-    terminalWrite.current = null;
-    // Bytes queued for the previous session belong to that session's screen,
-    // not this one's.
-    pendingOutput.current = [];
     setOpenError(null);
     try {
       const attached = (await window.flotilla.open(id)) as Attached;
@@ -382,6 +473,8 @@ export function App(): React.ReactElement {
       // any live update: a window that opens a turn an hour old should show how
       // the agent got there, not start at its own arrival.
       setSession(attachedState(id, attached));
+      sessionLive.current = id;
+      void refreshQueue(id);
 
       // Opening a session is looking at it, which is what separates done from
       // idle. Only a finished turn is marked: marking a working session seen
@@ -403,11 +496,12 @@ export function App(): React.ReactElement {
       if (selectedId.current === id) {
         setSession(null);
         selectedId.current = null;
+        sessionLive.current = null;
         setSelected(null);
       }
       setOpenError(error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [refreshQueue]);
 
   // Reopen the remembered session once the fleet is known. It runs once, and it
   // never takes over a session the window already opened: the user's click (or
@@ -443,6 +537,47 @@ export function App(): React.ReactElement {
         return;
       }
       const id = session.id;
+      const lifecycle =
+        fleet?.sessions.find((entry) => entry.id === id)?.lifecycle ?? "unknown";
+
+      // A running turn takes no second prompt: an agent without steering gets
+      // the message queued by the daemon instead. An agent that advertised
+      // steering takes it into the turn.
+      const steer = fleet?.sessions.find((entry) => entry.id === id)?.steer ?? false;
+      const route = promptRoute(
+        session.mode,
+        session.turn === "working" ? "working" : lifecycle,
+        steer,
+      );
+
+      if (route === "steer") {
+        try {
+          const delivery = (await window.flotilla.steer(id, text)) as {
+            route?: string;
+          };
+          if (delivery?.route === constants.session.SteerQueued) {
+            // The turn ended before the message reached it; the daemon kept it.
+            applyQueue(id, delivery);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setSession((current) => (current ? { ...current, error: message } : current));
+        }
+        return;
+      }
+
+      if (route === "queue") {
+        await serialQueue(async () => {
+          try {
+            applyQueue(id, await window.flotilla.queueAdd(id, text));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setSession((current) => (current ? { ...current, error: message } : current));
+          }
+        });
+        return;
+      }
+
       setSession((current) => (current ? startTurn(current) : current));
       try {
         const response = (await window.flotilla.prompt(id, text)) as {
@@ -456,7 +591,74 @@ export function App(): React.ReactElement {
         setSession((current) => (current ? failTurn(current, message) : current));
       }
     },
-    [session],
+    [session, fleet, serialQueue, applyQueue],
+  );
+
+  // A queue mutation answers with the whole queue, so the strip renders the
+  // daemon's order. A refusal is usually a row that started its turn: the
+  // error is shown and the queue read again, so the row stops claiming it.
+  const queueRefused = useCallback(
+    async (id: string, error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setSession((current) => (current ? { ...current, error: message } : current));
+      try {
+        applyQueue(id, await window.flotilla.queue(id));
+      } catch {
+        // The link is gone; the row keeps the last place it was given.
+      }
+    },
+    [applyQueue],
+  );
+
+  const queueEdit = useCallback(
+    (queueId: string, text: string) => {
+      if (!session) {
+        return;
+      }
+      const id = session.id;
+      void serialQueue(async () => {
+        try {
+          applyQueue(id, await window.flotilla.queueEdit(id, queueId, text));
+        } catch (error) {
+          await queueRefused(id, error);
+        }
+      });
+    },
+    [session, serialQueue, applyQueue, queueRefused],
+  );
+
+  const queueRemove = useCallback(
+    (queueId: string) => {
+      if (!session) {
+        return;
+      }
+      const id = session.id;
+      void serialQueue(async () => {
+        try {
+          applyQueue(id, await window.flotilla.queueRemove(id, queueId));
+        } catch (error) {
+          await queueRefused(id, error);
+        }
+      });
+    },
+    [session, serialQueue, applyQueue, queueRefused],
+  );
+
+  const queueMove = useCallback(
+    (queueId: string, to: number) => {
+      if (!session) {
+        return;
+      }
+      const id = session.id;
+      void serialQueue(async () => {
+        try {
+          applyQueue(id, await window.flotilla.queueMove(id, queueId, to));
+        } catch (error) {
+          await queueRefused(id, error);
+        }
+      });
+    },
+    [session, serialQueue, applyQueue, queueRefused],
   );
 
   const cancel = useCallback(async () => {
@@ -524,12 +726,14 @@ export function App(): React.ReactElement {
   // running, and this window simply stops watching it.
   const openArchived = useCallback((id: string) => {
     setRoute("session");
+    setInboxOpen(false);
     setComposing(false);
 
     const previous = selectedId.current;
     if (previous !== null) {
       void window.flotilla.detach(previous);
       selectedId.current = null;
+      sessionLive.current = null;
       terminalWrite.current = null;
       pendingOutput.current = [];
       setSelected(null);
@@ -549,6 +753,7 @@ export function App(): React.ReactElement {
     }
     if (selectedId.current === id) {
       selectedId.current = null;
+      sessionLive.current = null;
       terminalWrite.current = null;
       setSelected(null);
       setSession(null);
@@ -561,6 +766,19 @@ export function App(): React.ReactElement {
     setOpenError(null);
     await refresh(true);
   }, [refresh]);
+
+  // The daemon owns the pin, so the window asks and then reads the status it
+  // answered with rather than flipping a local flag the daemon might refuse.
+  const protect = useCallback(async (id: string, on: boolean) => {
+    try {
+      await window.flotilla.protect(id, on);
+    } catch (error) {
+      setFleetError(error instanceof Error ? error.message : String(error));
+    }
+    await refresh(true);
+  }, [refresh]);
+
+  const inboxCount = fleet?.inbox?.length ?? 0;
 
   const composerCard = (
     <div className="composer-card">
@@ -581,6 +799,7 @@ export function App(): React.ReactElement {
         embedded={composing}
         onOpenAgentSettings={() => {
           setComposing(false);
+          setInboxOpen(false);
           setRoute("agents");
         }}
       />
@@ -605,9 +824,10 @@ export function App(): React.ReactElement {
                 className="primary fleet-new"
                 aria-pressed={composing}
                 onClick={() => {
-                  // The settings overlay paints above the composer card, so
-                  // opening the card must also leave the settings page.
+                  // A covering panel paints above the composer card, so opening
+                  // the card must also leave the panels.
                   setRoute("session");
+                  setInboxOpen(false);
                   setComposing((open) => !open);
                 }}
               >
@@ -618,8 +838,21 @@ export function App(): React.ReactElement {
             <RefreshButton onRefresh={() => refresh(true)} />
             <button
               type="button"
+              aria-pressed={inboxOpen}
               onClick={() => {
                 setComposing(false);
+                setRoute("session");
+                setInboxOpen((open) => !open);
+              }}
+            >
+              <IconInbox />
+              Inbox{inboxCount > 0 ? ` · ${inboxCount}` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setComposing(false);
+                setInboxOpen(false);
                 setRoute(route === "agents" ? "session" : "agents");
               }}
             >
@@ -662,10 +895,18 @@ export function App(): React.ReactElement {
             lifecycle={
               fleet?.sessions.find((entry) => entry.id === session.id)?.lifecycle ?? "unknown"
             }
+            protected={
+              fleet?.sessions.find((entry) => entry.id === session.id)?.protected ?? false
+            }
+            steer={fleet?.sessions.find((entry) => entry.id === session.id)?.steer ?? false}
             view={view}
             onView={setView}
             onPrompt={(text) => void prompt(text)}
             onCancel={() => void cancel()}
+            onQueueEdit={(queueId, text) => void queueEdit(queueId, text)}
+            onQueueRemove={(queueId) => void queueRemove(queueId)}
+            onQueueMove={(queueId, to) => void queueMove(queueId, to)}
+            onProtect={(on) => void protect(session.id, on)}
             onSetControl={(controlId, value) => void setControl(controlId, value)}
             onAnswer={(questionId, optionId) => void answer(questionId, optionId)}
             onTerminalReady={(write) => {
@@ -726,6 +967,19 @@ export function App(): React.ReactElement {
               onToggle={toggleAgent}
               onRefresh={() => void refreshAgents()}
               onClose={() => setRoute("session")}
+            />
+          </div>
+        ) : null}
+        {inboxOpen ? (
+          <div className="inbox-overlay">
+            <InboxView
+              entries={fleet?.inbox ?? []}
+              known={fleet !== null}
+              onOpen={(id) => {
+                setInboxOpen(false);
+                void open(id);
+              }}
+              onClose={() => setInboxOpen(false)}
             />
           </div>
         ) : null}

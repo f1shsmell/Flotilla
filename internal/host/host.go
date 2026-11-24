@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,12 @@ type Config struct {
 	Dir string
 	// Env is the agent's environment. Nil inherits this process's.
 	Env []string
+	// Channel is the release channel, reaching the agent as FLT_CHANNEL.
+	Channel string
+	// MCPCommand is the agent's fleet tool server; empty registers none.
+	MCPCommand string
+	// Parent is the session that started this one; empty for a person's session.
+	Parent session.ID
 	// Cols and Rows size the initial PTY. Zero falls back to 80x24.
 	Cols int
 	Rows int
@@ -76,6 +83,49 @@ func (c Config) withDefaults() Config {
 		c.Ctx = context.Background()
 	}
 	return c
+}
+
+// baseEnv is the environment this host passes to its children: the caller's
+// own, or this process's when the caller named none.
+func (h *Host) baseEnv() []string {
+	if h.cfg.Env != nil {
+		return h.cfg.Env
+	}
+	return os.Environ()
+}
+
+// scopeEnv tells a process started inside this session which fleet session it
+// belongs to and how much autonomy that session was given. The CLI and the MCP
+// server read it; an adapter's own declarations cannot override it.
+func (h *Host) scopeEnv() []string {
+	env := []string{
+		"FLT_SESSION_ID=" + string(h.cfg.ID),
+		"FLT_POLICY=" + h.cfg.Policy.String(),
+	}
+	if h.cfg.Channel != "" {
+		env = append(env, "FLT_CHANNEL="+h.cfg.Channel)
+	}
+	return env
+}
+
+// withEnv lays vars over an environment, replacing the keys it already carries:
+// a child that inherited another session's FLT_SESSION_ID must not keep it.
+func withEnv(environ, vars []string) []string {
+	replaced := make(map[string]bool, len(vars))
+	for _, kv := range vars {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			replaced[kv[:i]] = true
+		}
+	}
+
+	out := make([]string, 0, len(environ)+len(vars))
+	for _, kv := range environ {
+		if i := strings.IndexByte(kv, '='); i > 0 && replaced[kv[:i]] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, vars...)
 }
 
 // Host is one running session: a PTY-backed agent plus the endpoint its client
@@ -128,6 +178,16 @@ type Host struct {
 	// the permission question go out, and the turn end. Anything it cannot
 	// classify is unknown, never done.
 	state session.State
+	// lastActivity is the newest moment the family showed life: an agent
+	// update from the parent or a child, terminal bytes either way, or a
+	// lifecycle change. Reclamation reads it; nothing else does.
+	lastActivity time.Time
+	// family is the last work state each registered child reported. A child
+	// still working keeps its host alive even after the parent's turn ended.
+	family map[string]string
+	// reclaiming is set when this host has agreed to close as idle. A turn
+	// arriving after it is refused: the process is already leaving.
+	reclaiming bool
 }
 
 // ptyBufferLimit bounds the terminal output held for the next client. It is a
@@ -172,12 +232,14 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 	}
 
 	h := &Host{
-		cfg:   cfg,
-		log:   log,
-		reg:   reg,
-		addr:  ipc.Address{Channel: string(cfg.ID), Name: "host"},
-		donec: make(chan struct{}),
-		exitc: make(chan error, 1),
+		cfg:          cfg,
+		log:          log,
+		reg:          reg,
+		addr:         ipc.Address{Channel: string(cfg.ID), Name: "host"},
+		donec:        make(chan struct{}),
+		exitc:        make(chan error, 1),
+		lastActivity: time.Now(),
+		family:       make(map[string]string),
 	}
 	// Only a terminal session with declared patterns gets a detector: an ACP
 	// session reports blocked itself, and an agent nobody described is not
@@ -212,7 +274,7 @@ func Start(ctx context.Context, cfg Config, reg session.Registry, log *slog.Logg
 	// stops Serve, and Close is what stops the agent afterwards.
 	cmd := exec.CommandContext(context.WithoutCancel(cfg.Ctx), cfg.Command, cfg.Args...)
 	cmd.Dir = cfg.Dir
-	cmd.Env = cfg.Env
+	cmd.Env = withEnv(h.baseEnv(), h.scopeEnv())
 
 	if err := ptmx.Start(cmd); err != nil {
 		_ = ptmx.Close()
@@ -251,6 +313,7 @@ func (h *Host) setState(next session.State) {
 		return
 	}
 	h.state = next
+	h.touchLocked()
 	conn := h.conn
 	h.mu.Unlock()
 
@@ -298,6 +361,7 @@ func (h *Host) Serve(ctx context.Context) error {
 		Endpoint: h.addr,
 		PID:      os.Getpid(),
 		Started:  time.Now(),
+		Parent:   h.cfg.Parent,
 	}); err != nil {
 		return fmt.Errorf("publish the record for session %q: %w", h.cfg.ID, err)
 	}
@@ -394,6 +458,8 @@ func (h *Host) attach(conn *ipc.Conn) {
 	// for the next change would leave a blocked session looking idle until the
 	// user answered the question that is waiting for them.
 	h.notifyState(conn)
+	// A question asked before this client arrived is still waiting on an answer.
+	h.replayQuestions(conn)
 
 	go func() {
 		<-conn.Done()
@@ -423,10 +489,19 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		if err != nil {
 			return nil, err
 		}
+		if err := h.beginTurn(); err != nil {
+			return nil, err
+		}
 		if h.pty != nil {
 			return h.promptPTY(ctx, req)
 		}
 		return h.promptACP(ctx, req)
+	case session.MethodSteer:
+		req, err := decodeParams[session.SteerRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		return h.steer(ctx, req)
 	case session.MethodCancel:
 		return struct{}{}, h.cancelACP(ctx)
 	case session.MethodResize:
@@ -467,6 +542,19 @@ func (h *Host) handleCall(ctx context.Context, _ *ipc.Conn, method string, param
 		// reply. The caller asked for the session to end and needs no answer.
 		go func() { _ = h.Close() }()
 		return struct{}{}, nil
+	case session.MethodReclaim:
+		req, err := decodeParams[session.ReclaimRequest](params)
+		if err != nil {
+			return nil, err
+		}
+		resp := h.reclaim(req)
+		if resp.Allow {
+			h.log.Info("session reclaimed as idle", "session", h.cfg.ID)
+			// The close races the reply it reports. A caller that loses the
+			// pipe to it reads the same yes.
+			go func() { _ = h.Close() }()
+		}
+		return resp, nil
 	default:
 		return nil, ipc.ErrNoHandler
 	}
@@ -490,6 +578,8 @@ func (h *Host) info() session.Info {
 		Cols:    cols,
 		Rows:    rows,
 		State:   h.CurrentState(),
+		// Steer tells a client whether a mid-turn message can reach this turn.
+		Steer: h.steerSupported(),
 	}
 }
 
@@ -525,6 +615,7 @@ func (h *Host) handleData(_ *ipc.Conn, stream uint32, payload []byte) {
 		h.log.Debug("write to the agent failed", "session", h.cfg.ID, "err", err.Error())
 		return
 	}
+	h.touch()
 
 	// The user just answered something. A blocked session that has stopped
 	// printing is not proof that the agent resumed — this build cannot observe
@@ -639,6 +730,7 @@ func (h *Host) send(stream uint32, payload []byte) {
 	buffered := stream == session.StreamOutput
 	if buffered {
 		h.bufferLocked(payload)
+		h.touchLocked()
 	}
 	queued := buffered && h.replayConn != nil
 	h.mu.Unlock()
