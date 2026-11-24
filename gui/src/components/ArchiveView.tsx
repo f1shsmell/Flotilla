@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { applyHistory, newSession, type ArchivedEntry, type SessionState } from "../store";
-import { dirLabel } from "../fleetView";
+import { dirLabel, modeLabel } from "../fleetView";
 import { LogView } from "./LogView";
 import { IconBack } from "./Icons";
 
@@ -95,7 +95,7 @@ export function ArchiveView({ entry, onBack }: Props): React.ReactElement {
             <span className="turn-pill life-ended">ended</span>
           </div>
           <p className="muted">
-            {entry.mode || "unknown mode"}
+            {entry.mode ? modeLabel(entry.mode) : "Unknown"}
             {entry.command ? ` · ${entry.command}` : ""}
             {dirLabel(entry.dir) ? ` · ${dirLabel(entry.dir)}` : ""}
           </p>
@@ -106,7 +106,7 @@ export function ArchiveView({ entry, onBack }: Props): React.ReactElement {
         <div className="session-actions">
           <button type="button" onClick={onBack}>
             <IconBack />
-            Back to the fleet
+            Back
           </button>
         </div>
       </header>

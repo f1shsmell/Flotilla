@@ -58,9 +58,19 @@ export function IconBack(): React.ReactElement {
 
 export function IconStop(): React.ReactElement {
   return (
-    <Svg>
+    // Stopping is a filled mark, not an outline: an outlined square on a light
+    // card reads as an empty checkbox. The glyph says "stop" by being solid.
+    <svg
+      className="icon"
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      stroke="none"
+      aria-hidden="true"
+    >
       <rect x={4} y={4} width={8} height={8} rx={1.5} />
-    </Svg>
+    </svg>
   );
 }
 

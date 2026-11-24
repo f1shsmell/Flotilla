@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { DiffPanel } from "./DiffPanel";
 import { LogView } from "./LogView";
+import { modeLabel, stopLabel } from "../fleetView";
 import type { Choice, Control, Lifecycle, SessionState } from "../store";
 import { IconSend, IconShield } from "./Icons";
 import { PermissionCard } from "./PermissionCard";
@@ -160,8 +161,8 @@ export function SessionView({
             <span className={`turn-pill life-${lifecycle}`}>{lifecycle}</span>
           </div>
           <p className="muted">
-            {state.mode} · {state.turn}
-            {state.stopReason ? ` · ${state.stopReason}` : ""}
+            {modeLabel(state.mode)}
+            {state.stopReason ? ` · ${stopLabel(state.stopReason)}` : ""}
           </p>
         </div>
         <div className="session-actions">
@@ -247,7 +248,9 @@ export function SessionView({
               turn's dials beside the send they qualify, not as a second
               header competing with the session's own. */}
           <div className="composer-bar">
-            <span className="chip composer-mode">{state.mode}</span>
+            {/* The mode is already in the header line above the log. Repeating
+                it here would be the same word twice on one screen, so the bar
+                starts with the controls that are actually adjustable. */}
             {state.controls.length > 0 ? (
               <div className="surface-controls">
                 {state.controls.map((control) => (

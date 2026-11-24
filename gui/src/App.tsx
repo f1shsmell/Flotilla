@@ -5,8 +5,9 @@ import { ArchiveView } from "./components/ArchiveView";
 import { BrandMark } from "./components/Brand";
 import { FleetList } from "./components/FleetList";
 import { HarborEmpty } from "./components/HarborEmpty";
-import { IconBack, IconPlus, IconRefresh, IconSliders } from "./components/Icons";
+import { IconBack, IconPlus, IconSliders } from "./components/Icons";
 import { NewSessionForm } from "./components/NewSessionForm";
+import { RefreshButton } from "./components/RefreshButton";
 import { SessionView } from "./components/SessionView";
 import { StatusBar } from "./components/StatusBar";
 import { mainEmpty, windowTitle } from "./fleetView";
@@ -614,10 +615,7 @@ export function App(): React.ReactElement {
                 New session
               </button>
             ) : null}
-            <button type="button" onClick={() => void refresh(true)}>
-              <IconRefresh />
-              Refresh
-            </button>
+            <RefreshButton onRefresh={() => refresh(true)} />
             <button
               type="button"
               onClick={() => {

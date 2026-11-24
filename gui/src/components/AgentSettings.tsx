@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import type { AgentChange, AgentEntry } from "../store";
-import { IconBack, IconRefresh } from "./Icons";
+import { IconBack } from "./Icons";
+import { RefreshButton } from "./RefreshButton";
 
 interface Props {
   agents: AgentEntry[];
@@ -64,10 +65,7 @@ export function AgentSettings({
           </p>
         </div>
         <div className="row">
-          <button type="button" onClick={onRefresh}>
-            <IconRefresh />
-            Refresh
-          </button>
+          <RefreshButton onRefresh={onRefresh} />
           <button type="button" onClick={onClose}>
             <IconBack />
             Back
@@ -138,12 +136,11 @@ export function AgentSettings({
                     />
                   ) : (
                     // A preset is one recipe: its mode decides the protocol, so
-                    // the other purpose has no switch to offer. A disabled
-                    // checkbox would render a reason a Chromium tooltip cannot
-                    // show, so the cell states it as text instead.
-                    <span className="muted agent-unsupported" title={unsupported(agent, "chat")}>
-                      —
-                    </span>
+                    // the other purpose has no switch to offer. The reason is
+                    // visible text rather than a tooltip: a Chromium tooltip is
+                    // unreachable by keyboard and invisible to touch, and this
+                    // is the answer to "why can't I turn this on".
+                    <span className="agent-unsupported">{unsupported(agent, "chat")}</span>
                   )}
                 </td>
                 <td>
@@ -155,9 +152,7 @@ export function AgentSettings({
                       onChange={(cli) => toggle(agent.id, { cli })}
                     />
                   ) : (
-                    <span className="muted agent-unsupported" title={unsupported(agent, "cli")}>
-                      —
-                    </span>
+                    <span className="agent-unsupported">{unsupported(agent, "cli")}</span>
                   )}
                 </td>
               </tr>
@@ -191,7 +186,11 @@ function Toggle({ label, checked, busy, onChange }: ToggleProps): React.ReactEle
 // unsupported says why a purpose has no switch for a preset: its mode is the
 // protocol its arguments launch, and it serves only the session kind that speaks
 // it.
+// unsupported says why a purpose has no switch for a preset: its mode is the
+// protocol its arguments launch, and it serves only the session kind that
+// speaks it. The cell is narrow, so this is the short form — the full sentence
+// belongs in a tooltip nobody can reach, which is why it is not there.
 function unsupported(agent: AgentEntry, purpose: "chat" | "cli"): string {
-  const kind = purpose === "chat" ? "chat" : "terminal";
-  return `${agent.name} runs ${agent.mode}, so it cannot serve ${kind} sessions`;
+  const other = purpose === "chat" ? "terminal" : "chat";
+  return `runs as ${agent.mode}: ${other} sessions only`;
 }
