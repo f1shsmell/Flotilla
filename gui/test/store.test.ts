@@ -17,6 +17,10 @@ import {
   splitArgs,
   startTurn,
   worktreeOf,
+  worktreeRequest,
+  defaultBranch,
+  modeForAgent,
+  defaultAgent,
   summarise,
   needsAttention,
   usableAgents,
@@ -224,6 +228,63 @@ describe("worktreeOf", () => {
   });
 });
 
+describe("worktreeRequest", () => {
+  const now = new Date(2026, 10, 24, 9, 5);
+
+  it("names a branch when only the repository was given", () => {
+    // A worktree needs a new branch, and the form already knows that: making
+    // the user type one is a question with a right answer.
+    expect(worktreeRequest("C:/repo", "", now)).toEqual({
+      request: { repo: "C:/repo", branch: "feat/20261124-0905" },
+    });
+  });
+
+  it("keeps a branch the user named", () => {
+    expect(worktreeRequest("C:/repo", "feat/mine", now)).toEqual({
+      request: { repo: "C:/repo", branch: "feat/mine" },
+    });
+  });
+
+  it("still refuses a branch with no repository", () => {
+    expect(worktreeRequest("", "feat/x", now).error).toMatch(/both/);
+  });
+
+  it("asks for nothing when neither field is filled", () => {
+    expect(worktreeRequest("", "", now)).toEqual({});
+  });
+
+  it("pads a single-digit month, day, hour and minute", () => {
+    expect(defaultBranch(new Date(2026, 0, 2, 3, 4))).toBe("feat/20260102-0304");
+  });
+});
+
+describe("modeForAgent", () => {
+  it("runs the agent in the mode its own recipe declares", () => {
+    // A preset is one complete recipe, so its mode is settled by choosing it.
+    expect(modeForAgent({ mode: "pty" })).toBe("pty");
+    expect(modeForAgent({ mode: "acp" })).toBe("acp");
+  });
+
+  it("has no opinion with no agent chosen", () => {
+    expect(modeForAgent(null)).toBeNull();
+  });
+});
+
+describe("defaultAgent", () => {
+  it("picks the only startable agent, because there is nothing to decide", () => {
+    expect(defaultAgent([{ id: "replay" }])).toBe("replay");
+  });
+
+  it("leaves several agents as a question", () => {
+    // Two candidates means the user has a preference the form cannot know.
+    expect(defaultAgent([{ id: "a" }, { id: "b" }])).toBeNull();
+  });
+
+  it("picks nothing when nothing can start", () => {
+    expect(defaultAgent([])).toBeNull();
+  });
+});
+
 describe("session log", () => {
   it("joins the chunks of one streamed message", () => {
     let state = newSession("s", "acp");
@@ -364,8 +425,8 @@ describe("session log", () => {
     });
 
     expect(state.permissions[0].options).toEqual([
-      { id: "approve", kind: "allow_once" },
-      { id: "allow-me", kind: "reject_once" },
+      { id: "approve", kind: "allow_once", name: "" },
+      { id: "allow-me", kind: "reject_once", name: "" },
     ]);
   });
 
@@ -379,8 +440,8 @@ describe("session log", () => {
     });
 
     expect(state.permissions[0].options).toEqual([
-      { id: "allow", kind: "" },
-      { id: "reject", kind: "" },
+      { id: "allow", kind: "", name: "" },
+      { id: "reject", kind: "", name: "" },
     ]);
   });
 

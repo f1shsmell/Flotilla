@@ -64,10 +64,13 @@ function render(
 }
 
 describe("the session chrome keeps the smoke contract", () => {
-  it("names the session in the header h2 and keeps the mode/turn line", () => {
+  it("names the session in the header h2 and keeps the mode line", () => {
     const html = render(state({ turn: "lost" }));
     expect(html).toContain("<h2>sess-x</h2>");
-    expect(html).toContain("· lost");
+    // The header names the protocol in a person's word, not "acp": the wire's
+    // spelling is not what a window shows.
+    expect(html).toContain("Chat");
+    expect(html).not.toContain(">acp<");
     expect(html).toContain("Cancel turn");
     expect(html).toContain("Diff");
   });
@@ -92,8 +95,10 @@ describe("the session chrome reads as a product", () => {
     // card repeats it in nav context, so both readings are wanted.
     expect(html).toContain('class="turn-pill life-blocked">blocked</span>');
     expect(html).toMatch(/life-blocked"[^>]*>blocked</);
-    // The stream's turn still reads in the header line the heal probe uses.
-    expect(html).toContain("· working");
+    // The header line no longer repeats the raw turn word next to the pill:
+    // the pill is the state's single reading, and "Chat" is the protocol.
+    expect(html).not.toContain("· working");
+    expect(html).toContain("Chat");
   });
 
   it("colours done and idle with the fleet's own palette", () => {

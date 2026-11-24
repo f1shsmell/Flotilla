@@ -18,7 +18,10 @@
 }
 
 /* The settings panel sits over the session rather than beside it: the terminal
-   stays mounted underneath, so closing the panel returns to its scrollback. */
+   stays mounted underneath, so closing the panel returns to its scrollback.
+   It covers the view, so it eases in from just above the surface it hides —
+   the small lift says "this came over what you were reading", not "this is a
+   new page". */
 .agent-settings-overlay {
   position: absolute;
   inset: 0;
@@ -30,6 +33,21 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  animation: overlay-in var(--dur-enter) var(--ease-out);
+}
+
+/* A covering surface arrives by fading up over what it covers. It never
+   scales: a panel that zooms reads as a modal dialog, and this one is a layer
+   of the same view. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .session-view {
@@ -40,6 +58,11 @@
   height: 100%;
   /* Anchors .terminal-pane-behind, which stays laid out while the diff shows. */
   position: relative;
+  /* Opening a session, an archived run or the harbor is the same kind of
+     change: this pane's contents are replaced. One entrance for all three
+     means a session and a log arrive the same way, and nothing in the window
+     switches without a transition. */
+  animation: view-in var(--dur-enter) var(--ease-out);
 }
 
 .session-header {
@@ -118,9 +141,13 @@
 
 /* The permission dial wears the harbor's amber: one glance says how much
    the agent may do unasked. */
+/* The permission dial is the one control that changes what the agent may do
+   unasked, so it is bolder than its neighbours. It is not amber: amber is the
+   blocked state's colour, and a setting is not a state — reusing it would make
+   an ordinary permission level read as a warning. */
 .surface-control.kind-mode select,
 .surface-control.kind-mode select:hover {
-  color: var(--warn);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -211,6 +238,10 @@
   padding: var(--sp-4) var(--sp-5);
   background: var(--note-bg);
   box-shadow: var(--shadow-1);
+  /* A permission question is the one thing that stops the agent. It arrives
+     with the view's entrance so the eye is drawn to what changed, rather than
+     appearing as if it had always been there. */
+  animation: view-in var(--dur-enter) var(--ease-out);
 }
 
 .permission p {
@@ -238,18 +269,9 @@
   text-align: center;
   padding: var(--sp-7);
   overflow-y: auto;
-  animation: harbor-in 400ms ease-out backwards;
-}
-
-@keyframes harbor-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+  /* Shares the view entrance: the harbor replaces the same pane a session
+     would fill, so it arrives the same way. */
+  animation: view-in var(--dur-enter) var(--ease-out) backwards;
 }
 
 .brand-lockup {
@@ -304,7 +326,9 @@
 }
 
 /* Composing over a live session uses the settings overlay's trick: cover, do
-   not unmount, so the terminal underneath keeps its scrollback and size. */
+   not unmount, so the terminal underneath keeps its scrollback and size. It
+   arrives the same way the settings panel does — one kind of change, one
+   motion — because to the user both are "a surface came over the session". */
 .composer-overlay {
   position: absolute;
   inset: 0;
@@ -314,6 +338,7 @@
     var(--bg);
   display: flex;
   min-height: 0;
+  animation: overlay-in var(--dur-enter) var(--ease-out);
 }
 
 /* The session name and its live state read together: the pill is the state at
@@ -401,7 +426,7 @@
   color: var(--dim);
   list-style: none;
   border-radius: var(--r-sm);
-  transition: background 120ms ease;
+  transition: background var(--dur-hover) var(--ease-out);
 }
 
 .entry-run summary:hover,
@@ -421,7 +446,9 @@
   content: "▸";
   margin-left: auto;
   color: var(--muted);
-  transition: transform 120ms ease;
+  /* The fold marker turns rather than swaps: the arrow explains that the same
+     control opened, not that a new one appeared. */
+  transition: transform var(--dur-hover) var(--ease-move);
 }
 
 .entry-run[open] summary::after {
@@ -475,10 +502,6 @@
   flex-wrap: wrap;
   gap: var(--sp-2);
   min-width: 0;
-}
-
-.composer-mode {
-  text-transform: uppercase;
 }
 
 .composer-shield {

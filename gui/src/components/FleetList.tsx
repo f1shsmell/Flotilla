@@ -1,4 +1,6 @@
-import { dirLabel } from "../fleetView";
+import { useEffect, useState } from "react";
+
+import { dirLabel, modeLabel } from "../fleetView";
 import type { ArchivedEntry, Lifecycle, StatusEntry } from "../store";
 import { IconStop } from "./Icons";
 
@@ -28,6 +30,91 @@ function lifecycleClass(lifecycle: Lifecycle): string {
     default:
       return "badge unknown";
   }
+}
+
+// StopButton ends a session. Ending one is the single action in this window
+// that loses work — the host goes away and the log is all that is left — so it
+// arms first: one click turns the control into a question, and only a second
+// click on the armed control answers it. Moving away, pressing Escape, or four
+// seconds passing takes the question back, so a stray click costs nothing.
+function StopButton({
+  id,
+  onStop,
+}: {
+  id: string;
+  onStop: (id: string) => void;
+}): React.ReactElement {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) {
+      return;
+    }
+    const timer = setTimeout(() => setArmed(false), 4000);
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setArmed(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [armed]);
+
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        className="session-stop"
+        title={`end ${id}`}
+        aria-label={`end ${id}`}
+        onClick={() => setArmed(true)}
+      >
+        <IconStop />
+        Stop
+      </button>
+    );
+  }
+
+  return (
+    <>
+      {/* The quiet control keeps its place while the question is up. Hidden
+          rather than removed: the row's second column is sized by its content,
+          so removing it would let the card grow — and a row that widens under
+          the cursor moves the button the user is aiming at. */}
+      <button
+        type="button"
+        className="session-stop session-stop-ghost"
+        aria-hidden="true"
+        tabIndex={-1}
+      >
+        <IconStop />
+        Stop
+      </button>
+      <span className="session-stop-confirm">
+        <button
+          type="button"
+          className="session-stop armed"
+          title={`confirm ending ${id}`}
+          aria-label={`confirm ending ${id}`}
+          onClick={() => onStop(id)}
+        >
+          End it?
+        </button>
+        <button
+          type="button"
+          className="session-stop-cancel"
+          title="keep it running"
+          aria-label={`keep ${id} running`}
+          onClick={() => setArmed(false)}
+        >
+          Keep
+        </button>
+      </span>
+    </>
+  );
 }
 
 export function FleetList({
@@ -77,7 +164,7 @@ export function FleetList({
                     </span>
                   </span>
                   <span className="card-meta">
-                    <span className="chip">{session.mode}</span>
+                    <span className="chip">{modeLabel(session.mode)}</span>
                     {dirLabel(session.dir) ? (
                       <span className="chip chip-dir" title={session.dir}>
                         {dirLabel(session.dir)}
@@ -92,16 +179,7 @@ export function FleetList({
                   </span>
                 </span>
               </button>
-              <button
-                type="button"
-                className="session-stop"
-                title={`end ${session.id}`}
-                aria-label={`end ${session.id}`}
-                onClick={() => onStop(session.id)}
-              >
-                <IconStop />
-                Stop
-              </button>
+              <StopButton id={session.id} onStop={onStop} />
             </li>
           ))}
         </ul>
@@ -135,7 +213,7 @@ export function FleetList({
                       <span className="badge ended">ended</span>
                     </span>
                     <span className="card-meta">
-                      {run.mode ? <span className="chip">{run.mode}</span> : null}
+                      {run.mode ? <span className="chip">{modeLabel(run.mode)}</span> : null}
                       {dirLabel(run.dir) ? (
                         <span className="chip chip-dir" title={run.dir}>
                           {dirLabel(run.dir)}

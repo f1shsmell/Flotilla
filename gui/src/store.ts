@@ -86,6 +86,48 @@ export function worktreeOf(
   return { request: { repo: repository, branch: name } };
 }
 
+// worktreeRequest is what the form submits: the same rules as worktreeOf, plus
+// the one thing a person should not have to type. A repository with no branch
+// is unambiguous — a worktree needs a new branch — so one is named for them
+// rather than answered with an error they must then fix by hand.
+export function worktreeRequest(
+  repo: string,
+  branch: string,
+  now: Date = new Date(),
+): { request?: { repo: string; branch: string }; error?: string } {
+  if (repo.trim() !== "" && branch.trim() === "") {
+    return { request: { repo: repo.trim(), branch: defaultBranch(now) } };
+  }
+  return worktreeOf(repo, branch);
+}
+
+// defaultBranch names the branch a worktree gets when the user did not name
+// one: the date and time it was made, so two worktrees never collide and the
+// name still says when the work started.
+export function defaultBranch(now: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `feat/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+}
+
+// defaultAgent is who the form starts with when the user has not chosen yet, and
+// the answer is unambiguous: with exactly one startable agent there is nothing to
+// decide, so the form decides it. With several, picking one for the user would be
+// a guess about intent, and the list stays a question.
+export function defaultAgent(usable: readonly { id: string }[]): string | null {
+  return usable.length === 1 ? usable[0].id : null;
+}
+
+// modeForAgent is the mode a chosen agent runs in. A preset is one complete
+// recipe — command, args and mode together — so picking one settles the mode;
+// asking the user to also flip a switch leaves a way to build a request the
+// agent cannot serve.
+export function modeForAgent(agent: { mode: string } | null): "acp" | "pty" | null {
+  if (agent === null) {
+    return null;
+  }
+  return agent.mode === "pty" ? "pty" : "acp";
+}
+
 // splitArgs turns the form's argument line into argv: spaces separate, double
 // quotes group, and a quote with nothing in it still makes an empty argument.
 export function splitArgs(line: string): string[] {
@@ -424,6 +466,10 @@ export interface Permission {
 export interface PermissionOption {
   id: string;
   kind: string;
+  // name is the label the agent gave for a person to read. Empty when it
+  // offered none, in which case the card shows a word of its own rather than
+  // the protocol's id.
+  name: string;
 }
 
 export type Turn = "idle" | "working" | "ended" | "lost";
@@ -701,10 +747,14 @@ export function addPermission(state: SessionState, raw: unknown): SessionState {
     ? value.options
         .map((option) =>
           typeof option === "string"
-            ? { id: option, kind: "" }
+            ? { id: option, kind: "", name: "" }
             : typeof option === "object" && option !== null
-              ? { id: asString((option as Record<string, unknown>).id), kind: asString((option as Record<string, unknown>).kind) }
-              : { id: "", kind: "" },
+              ? {
+                  id: asString((option as Record<string, unknown>).id),
+                  kind: asString((option as Record<string, unknown>).kind),
+                  name: asString((option as Record<string, unknown>).name),
+                }
+              : { id: "", kind: "", name: "" },
         )
         .filter((option) => option.id !== "")
     : [];

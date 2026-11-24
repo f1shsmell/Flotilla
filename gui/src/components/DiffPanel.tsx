@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { GitActions } from "./GitActions";
+import { RefreshButton } from "./RefreshButton";
 
+import { fileStatusLabel, scopeLabel } from "../fleetView";
 import {
   commentPrompt,
   commentsOn,
@@ -129,13 +131,11 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
         >
           {scopes.map((name) => (
             <option key={name} value={name}>
-              {name}
+              {scopeLabel(name)}
             </option>
           ))}
         </select>
-        <button type="button" onClick={() => void load(scope)}>
-          Refresh
-        </button>
+        <RefreshButton onRefresh={() => load(scope)} />
         <span className="muted">
           {files === null ? "" : `${files.length} file${files.length === 1 ? "" : "s"}`}
           {notes.length > 0 ? ` · ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}
@@ -155,15 +155,14 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
 
       <div className="diff-body">
         <ul className="diff-files">
-          {(files ?? []).map((file) => (
-            <li key={file.path}>
+          {(files ?? []).map((file) => (            <li key={file.path}>
               <button
                 type="button"
                 className={open?.path === file.path ? "diff-file selected" : "diff-file"}
                 onClick={() => void openFile(file.path)}
               >
                 <span className="diff-path">{file.path}</span>
-                <span className="diff-status">{file.status}</span>
+                <span className="diff-status">{fileStatusLabel(file.status)}</span>
                 <span className="diff-counts">
                   {file.binary ? "binary" : `+${file.added} −${file.removed}`}
                 </span>
@@ -239,7 +238,13 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
           </div>
         ) : (
           <p className="empty">
-            {files && files.length > 0 ? "Pick a file to read its patch." : "Nothing changed here."}
+            {/* A null list is still loading. Saying "nothing changed" before the
+                answer arrives is a claim the window cannot make. */}
+            {files === null
+              ? "Reading the diff…"
+              : files.length > 0
+                ? "Pick a file to read its patch."
+                : "Nothing changed here."}
           </p>
         )}
       </div>

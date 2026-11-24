@@ -290,6 +290,7 @@ export const wireTypes = {
   "session.PermissionOption": {
     "id": { go: "ID", type: "string" },
     "kind": { go: "Kind", type: "string" },
+    "name": { go: "Name", type: "string", optional: true },
   },
   "session.PermissionQuestion": {
     "id": { go: "ID", type: "string" },

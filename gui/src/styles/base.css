@@ -36,8 +36,14 @@ button {
   border-radius: var(--r-sm);
   padding: var(--sp-2) var(--sp-5);
   cursor: pointer;
-  transition: border-color 120ms ease, background-color 120ms ease,
-    box-shadow 120ms ease, color 120ms ease;
+  /* Colour and shadow answers a hover; the transform is what makes a press
+     feel taken rather than only re-coloured. All of it eases out, because the
+     button is arriving at a new look, not travelling anywhere. */
+  transition: border-color var(--dur-hover) var(--ease-out),
+    background-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
 button:hover:not(:disabled) {
@@ -45,8 +51,12 @@ button:hover:not(:disabled) {
   box-shadow: var(--shadow-1);
 }
 
+/* A press takes the control down a hair. It is 90ms and 1.5%: the hand feels
+   it, the layout never moves. */
 button:active:not(:disabled) {
   box-shadow: none;
+  transform: scale(0.985);
+  transition-duration: var(--dur-press);
 }
 
 button:disabled {
@@ -80,7 +90,8 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   padding: var(--sp-2) var(--sp-4);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
 }
 
 input:not([type="checkbox"]):focus,
@@ -147,6 +158,57 @@ textarea::placeholder {
 .empty {
   color: var(--muted);
 }
+
+/* Arriving content rises by 2px while it fades: enough to read as "this is now
+   in front", far too small to be seen as a slide. No scale, so text never
+   resamples mid-animation. Every file that replaces content names this, so a
+   session, a patch and a panel all arrive the same way. */
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A covering surface arrives by fading up over what it covers, with a small
+   lift downward that says "this came over what you were reading". It never
+   scales: a panel that zooms reads as a modal dialog, and these are layers of
+   the same view. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The one refresh control. A press turns the icon while the read runs, then it
+   stops. The turn is a loop only for as long as the read is outstanding, so it
+   is an answer to a press rather than background decoration; and it is short
+   enough (700ms a turn) that a fast read still shows a visible nudge. */
+button.refresh .icon {
+  transition: transform var(--dur-state) var(--ease-move);
+}
+
+button.refresh.running .icon {
+  animation: refresh-turn 700ms linear infinite;
+}
+
+@keyframes refresh-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The icon animates, the button does not: the label stays steady under the
+   cursor so a second press lands on the same target. */
 
 /* Motion is event-driven only: entrance and hover transitions, never a loop.
    A user who asks for less motion gets none of it. */

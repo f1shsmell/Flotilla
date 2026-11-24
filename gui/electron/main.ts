@@ -463,8 +463,14 @@ function register(): void {
 
 function createWindow(): void {
   const saved = readUiState(userData());
-  const width = saved.window?.width ?? 1180;
-  const height = saved.window?.height ?? 780;
+  // A smoke run may ask for a size, so the narrow layout can be photographed
+  // on the same build a wide one is: a media query nobody looked at is a
+  // layout nobody verified.
+  const [smokeWidth, smokeHeight] = (process.env.FLT_GUI_SMOKE_SIZE ?? "")
+    .split("x")
+    .map((value) => Number(value));
+  const width = smokeWidth > 0 ? smokeWidth : (saved.window?.width ?? 1180);
+  const height = smokeHeight > 0 ? smokeHeight : (saved.window?.height ?? 780);
 
   window = new BrowserWindow(
     windowSetup(__dirname, { width, height, smoke: Boolean(process.env.FLT_GUI_SMOKE) }),

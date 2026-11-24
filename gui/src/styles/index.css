@@ -15,3 +15,4 @@
 @import "./session.css" layer(design);
 @import "./terminal.css" layer(design);
 @import "./diff.css" layer(design);
+@import "./responsive.css" layer(design);

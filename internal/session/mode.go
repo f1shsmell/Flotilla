@@ -258,6 +258,11 @@ type PermissionOption struct {
 	ID string `json:"id"`
 	// Kind is the ACP kind, such as "allow_once" or "reject_once".
 	Kind string `json:"kind"`
+	// Name is the label the agent gave the choice for a person to read. It is
+	// empty when the agent offered none, and a client then falls back to ID —
+	// which is the protocol's spelling, not something to show if a better word
+	// exists.
+	Name string `json:"name,omitempty"`
 }
 
 // PermissionReply is the client's answer to a question.

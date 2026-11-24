@@ -303,7 +303,14 @@ func (h *Host) askClient(ctx context.Context, req acp.PermissionRequest) (acp.Pe
 
 	options := make([]session.PermissionOption, 0, len(req.Options))
 	for _, opt := range req.Options {
-		options = append(options, session.PermissionOption{ID: opt.ID, Kind: opt.Kind})
+		// The agent's own label travels with the choice: it is the only party
+		// that knows what "allow_once" means for this tool call, and a client
+		// that received only the id would have to invent a word or show one.
+		options = append(options, session.PermissionOption{
+			ID:   opt.ID,
+			Kind: opt.Kind,
+			Name: opt.Name,
+		})
 	}
 
 	h.mu.Lock()

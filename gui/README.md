@@ -92,6 +92,10 @@ true before a signed one ships.
 | `FLT_GUI_SMOKE_NOTE` | note to leave on that line |
 | `FLT_GUI_SMOKE_EXPAND` | open the first folded tool run, prove its body and that the fold survives a trip to the diff and back; needs `FLT_GUI_SMOKE_PROMPT` |
 | `FLT_GUI_SMOKE_SET_CONTROL` | write one setting as `Name=value` (the select's label) and wait for the agent's own update to store it; needs `FLT_GUI_SMOKE_OPEN` and a scenario with a surface |
+| `FLT_GUI_SMOKE_STARTS` | JSON array of start requests: a fleet of several sessions for the walks and screenshots that need more than one card |
+| `FLT_GUI_SMOKE_SHOT` | save the window's render to this path as it ends, so the UI review reads a real render rather than a description of one |
+| `FLT_GUI_SMOKE_SIZE` | window size as `WIDTHxHEIGHT` (e.g. `860x720`), so the narrow layout can be photographed on the same build |
+| `FLT_GUI_SMOKE_STOP_ARM` | arm a card's Stop and assert the question appears without moving the card, then Keep takes it back and the session survives |
 
 `FLT_GUI_SMOKE_FORM` and `FLT_GUI_SMOKE_AGENTS` are the two paths that walk this
 build's agent catalogue: the first picks an agent by name in the new-session

@@ -78,6 +78,9 @@ type Option struct {
 	ID string
 	// Kind is the ACP kind, such as "allow_once" or "reject_always".
 	Kind string
+	// Name is the label the agent gave for a person to read, empty when it
+	// offered none.
+	Name string
 }
 
 // Granted reports whether this option lets the tool call proceed.
@@ -206,7 +209,11 @@ func (c *Client) RequestPermission(ctx context.Context, params sdk.RequestPermis
 		Kind:  string(patchValue(params.ToolCall.Kind)),
 	}
 	for _, opt := range params.Options {
-		req.Options = append(req.Options, Option{ID: string(opt.OptionId), Kind: string(opt.Kind)})
+		req.Options = append(req.Options, Option{
+			ID:   string(opt.OptionId),
+			Kind: string(opt.Kind),
+			Name: opt.Name,
+		})
 	}
 
 	switch c.decide(req) {
