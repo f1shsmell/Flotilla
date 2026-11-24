@@ -34,3 +34,8 @@ Thumbs.db
 /flt-fake-acp-agent.exe
 /flt-replay-agent.exe
 *.exe~
+
+# Third-party notices are generated at release time from the module graph and
+# the gui's node graph; the output depends on what this machine has fetched, so
+# a committed copy drifts from the one CI produces. See scripts/third-party-notices.sh.
+/THIRD-PARTY-NOTICES.md
