@@ -30,8 +30,8 @@
   从上一正式版升级同一安装位置,验收口径(2026-11-23 排实测钉定):
   安装器自动关闭运行中的应用并完成安装;`FLT_HOME` 的 token/transcript/seen
   与 `%APPDATA%` 的 ui-state 布局保持;升级后新会话即开即用。升级替换
-  daemon/host 二进制,活会话随升级结束——死会话的舰队重现与历史 UI 再水化
-  属 M3,不得按「会话保持」字面判 PASS。
+  daemon/host 二进制,活会话随升级结束——结束后它们出现在舰队的 **Finished**
+  分区,日志可读但不可续写;升级不得按「会话保持」字面判 PASS。
 - 保活边界实测:杀 GUI、杀 daemon 各若干次,会话不断;记录 host 崩溃时的
   恢复行为与 README 承诺一致。
 - 每项写 PASS / FAIL / UNANSWERED,附证据;缺环境属于 UNANSWERED,不算通过。

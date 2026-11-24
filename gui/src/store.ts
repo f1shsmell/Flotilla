@@ -27,11 +27,28 @@ export interface StatusEntry {
   reachable: boolean;
 }
 
+// ArchivedEntry is a session that is over: nothing holds its agent, and its log
+// is all that is left. It is deliberately not a StatusEntry: a finished run has
+// no lifecycle, and giving it one would let the list act on a process that does
+// not exist.
+export interface ArchivedEntry {
+  id: string;
+  mode: string;
+  command: string;
+  dir: string;
+  // started and ended are the run's bounds. An empty string means this build
+  // never recorded it — an older log, or a host that died unwatched — and the
+  // view says so rather than showing a time nothing observed.
+  started: string;
+  ended: string;
+}
+
 export interface Status {
   channel: string;
   pid: number;
   ready: boolean;
   sessions: StatusEntry[];
+  archived: ArchivedEntry[];
   failures: string[];
 }
 
@@ -468,9 +485,14 @@ function orderSessions(sessions: StatusEntry[]): StatusEntry[] {
 
 // parseStatus reads the daemon's answer without trusting it: a field the daemon
 // did not send becomes a visible default rather than `undefined` in the UI.
+//
+// The archive is parsed separately and never merged into `sessions`: a finished
+// run has no process, and a list that mixed the two would let the window offer
+// a stop button for something that already stopped.
 export function parseStatus(raw: unknown): Status {
   const value = (raw ?? {}) as Record<string, unknown>;
   const sessions = Array.isArray(value.sessions) ? value.sessions : [];
+  const archived = Array.isArray(value.archived) ? value.archived : [];
 
   return {
     channel: asString(value.channel),
@@ -479,6 +501,17 @@ export function parseStatus(raw: unknown): Status {
     failures: Array.isArray(value.failures)
       ? value.failures.filter((f): f is string => typeof f === "string")
       : [],
+    archived: archived.map((entry) => {
+      const run = (entry ?? {}) as Record<string, unknown>;
+      return {
+        id: asString(run.id),
+        mode: asString(run.mode),
+        command: asString(run.command),
+        dir: asString(run.dir),
+        started: asString(run.started),
+        ended: asString(run.ended),
+      };
+    }).filter((entry) => entry.id !== ""),
     sessions: orderSessions(sessions.map((entry) => {
       const session = (entry ?? {}) as Record<string, unknown>;
       return {

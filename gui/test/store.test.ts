@@ -101,6 +101,7 @@ describe("parseStatus", () => {
       pid: 0,
       ready: false,
       sessions: [],
+      archived: [],
       failures: [],
     });
   });
@@ -495,6 +496,7 @@ describe("fleet lifecycle", () => {
       pid: 1,
       ready: true,
       failures: [],
+      archived: [],
       sessions: [
         {
           id: "a",

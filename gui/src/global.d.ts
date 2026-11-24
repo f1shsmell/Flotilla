@@ -9,6 +9,7 @@ interface FlotillaBridge {
   stop(sessionId: string): Promise<unknown>;
   detach(sessionId: string): Promise<unknown>;
   open(sessionId: string): Promise<unknown>;
+  archive(sessionId: string): Promise<unknown>;
   prompt(sessionId: string, text: string): Promise<unknown>;
   seen(sessionId: string): Promise<unknown>;
   cancel(sessionId: string): Promise<unknown>;

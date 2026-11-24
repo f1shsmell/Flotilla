@@ -360,6 +360,15 @@ function register(): void {
     }
   });
 
+  // A finished session is read on the control connection: it has no link to
+  // travel on, and opening one would be an attach to a process that is gone.
+  ipcMain.handle("flotilla:archive", async (_event, sessionId: string) => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel, client: clientId });
+    }
+    return control.call(methods.session.MethodArchive, { id: sessionId });
+  });
+
   ipcMain.handle("flotilla:prompt", async (_event, sessionId: string, text: string) =>
     link(sessionId).call(methods.session.MethodPrompt, { text }, turnTimeoutMs),
   );

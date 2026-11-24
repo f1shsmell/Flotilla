@@ -63,7 +63,12 @@ type Status struct {
 	PID      int           `json:"pid"`
 	Ready    bool          `json:"ready"`
 	Sessions []StatusEntry `json:"sessions"`
-	Failures []string      `json:"failures,omitempty"`
+	// Archived lists the sessions this daemon no longer serves but still has a
+	// log for. They are not sessions: nothing holds an agent handle, and the
+	// reader can look but not continue. A restart that lost a host moves it
+	// here rather than dropping the run out of sight.
+	Archived []session.ArchivedEntry `json:"archived,omitempty"`
+	Failures []string                `json:"failures,omitempty"`
 }
 
 // StatusEntry is one session in a status report.

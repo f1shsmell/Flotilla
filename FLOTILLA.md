@@ -31,7 +31,9 @@ user-to-agent cycle, including follow-up work such as checkpointing),
 vendor credential, bridged from magpie, never stored by the core),
 **daemon** (the control plane), **session host** (the per-session handle
 holder), **adapter** (the JSON definition plus engine that speaks one agent's
-protocol).
+protocol), **finished run** (a session whose host is gone and whose log
+remains: listed under the fleet's Finished section, readable, never resumed —
+it is not a sixth session state).
 
 ## Conventions
 
