@@ -12,6 +12,8 @@ import (
 	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
+
+	"github.com/f1shsmell/flotilla/internal/version"
 )
 
 // shutdownGrace is how long Close waits for the agent to exit after its stdin
@@ -158,7 +160,7 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 		ClientCapabilities: sdk.ClientCapabilities{
 			Fs: sdk.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
 		},
-		ClientInfo: &sdk.Implementation{Name: "flotilla", Version: "0.0.0-dev"},
+		ClientInfo: &sdk.Implementation{Name: "flotilla", Version: version.String()},
 	})
 	if err != nil {
 		_ = s.Close()

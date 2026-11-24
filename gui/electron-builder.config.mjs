@@ -10,7 +10,15 @@ const config = {
   // app launches with no env (double-click, login item) and must still land
   // on its own pipe, home and userData. app.getName() reads this manifest's
   // productName, which is what splits the two channels' userData apart.
-  extraMetadata: { fltChannel: channel, productName: identity.productName },
+  //
+  // The version rides the same manifest: electron-builder takes it from
+  // package.json, and extraMetadata is what overrides that copy, so the
+  // installer's file name and the Go binaries' `--version` cannot disagree.
+  extraMetadata: {
+    fltChannel: channel,
+    productName: identity.productName,
+    version: identity.version,
+  },
   copyright: "MIT",
   directories: {
     output: "release",

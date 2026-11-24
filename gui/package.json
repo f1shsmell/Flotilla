@@ -1,7 +1,7 @@
 {
   "name": "flotilla-gui",
   "private": true,
-  "version": "0.0.0-dev",
+  "version": "0.1.0",
   "description": "Flotilla desktop client",
   "main": "dist/electron/main.js",
   "scripts": {
@@ -10,8 +10,8 @@
     "test": "vitest run",
     "start": "electron .",
     "bundle:binaries": "node scripts/bundle-binaries.mjs",
-    "dist": "pnpm build && pnpm bundle:binaries && node scripts/make-icons.mjs && node scripts/dist.mjs stable",
-    "dist:preview": "pnpm build && pnpm bundle:binaries && node scripts/make-icons.mjs && node scripts/dist.mjs preview"
+    "dist": "pnpm build && node scripts/make-icons.mjs && node scripts/dist.mjs stable",
+    "dist:preview": "pnpm build && node scripts/make-icons.mjs && node scripts/dist.mjs preview"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { packagingConfig } from "../scripts/packaging-config.mjs";
+import { packagingConfig, versionParts } from "../scripts/packaging-config.mjs";
 
 // The two channels install beside each other on one machine. Every field the
 // OS keys an installed app on — appId, product name, artifact, shortcut —
@@ -30,6 +30,28 @@ describe("packaging identity", () => {
     for (const identity of [stable, preview]) {
       expect(identity.artifactName).toContain("${version}");
     }
+  });
+
+  it("carries the version both consumers read", () => {
+    // The installer's name and the Go binaries' `--version` come from this one
+    // number; a second copy would let a release ship two different versions.
+    expect(stable.version).toBe("0.1.0");
+    expect(preview.version).toBe("0.1.0-preview.1");
+    expect(preview.version.startsWith(stable.version)).toBe(true);
+  });
+
+  it("splits a preview version into the halves the binaries carry", () => {
+    expect(versionParts("0.1.0")).toEqual({ version: "0.1.0", preRelease: "" });
+    expect(versionParts("0.1.0-preview.1")).toEqual({
+      version: "0.1.0",
+      preRelease: "preview.1",
+    });
+    // A pre-release suffix with its own dash keeps the rest whole: only the
+    // first dash separates the number from the suffix.
+    expect(versionParts("0.1.0-preview.1-hotfix")).toEqual({
+      version: "0.1.0",
+      preRelease: "preview.1-hotfix",
+    });
   });
 
   it("refuses a channel it does not know", () => {
