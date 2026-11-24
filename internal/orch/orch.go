@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -65,6 +66,13 @@ type Config struct {
 	Log *slog.Logger
 	// Now reads the clock. Nil uses time.Now.
 	Now func() time.Time
+	// OnChange is called after every committed change, so a caller that runs
+	// the effect worker knows to look at the queue it just grew. Nil means
+	// nobody is waiting for one.
+	//
+	// It is called outside the store's transaction and must not block: the
+	// daemon's implementation rings a channel and returns.
+	OnChange func()
 }
 
 // DefaultMaxRuns is how many starts one task gets when the caller named none. It
@@ -99,6 +107,10 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // Orchestrator runs tasks from the queue.
 type Orchestrator struct {
 	cfg Config
+	// wake carries one token per request to look at the queue again. A caller
+	// that just enqueued work rings it; the loop then reads the rows rather than
+	// trusting the caller's account of what it wrote.
+	wake chan struct{}
 }
 
 // New builds an orchestrator.
@@ -106,7 +118,48 @@ func New(cfg Config) (*Orchestrator, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("orch: no store")
 	}
-	return &Orchestrator{cfg: cfg.withDefaults()}, nil
+	return &Orchestrator{cfg: cfg.withDefaults(), wake: make(chan struct{}, 1)}, nil
+}
+
+// Wake asks a serving loop to look at the queue. It never blocks: a second
+// wake-up while one is pending tells the loop nothing it does not already know.
+//
+// It is called after every change that might make a task runnable. The loop
+// re-reads the rows instead of being handed the task, so a wake-up that arrives
+// twice cannot run anything twice.
+func (o *Orchestrator) Wake() {
+	select {
+	case o.wake <- struct{}{}:
+	default:
+	}
+}
+
+// commit writes one task change and, when there is one, the effect it owes. It
+// is the single write path, so the effect worker is told about every change
+// without each caller remembering to: a forgotten notification here is a queue
+// row nobody drains, which is exactly the failure the outbox exists to prevent.
+//
+// The notification runs after the transaction commits. A caller that learned
+// about an effect before it was durable would race the store and might read a
+// row that rolled back.
+func (o *Orchestrator) commit(ctx context.Context, kind string, t store.Task, effect *store.Effect) (uint64, error) {
+	var (
+		seq uint64
+		err error
+	)
+	if effect != nil {
+		seq, err = o.cfg.Store.AppendTaskWithEffect(ctx, kind, t, effect)
+	} else {
+		seq, err = o.cfg.Store.AppendTask(ctx, kind, t)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("record %s for task %q: %w", kind, t.ID, err)
+	}
+
+	if o.cfg.OnChange != nil {
+		o.cfg.OnChange()
+	}
+	return seq, nil
 }
 
 // Enqueue adds one task to the queue.
@@ -134,9 +187,12 @@ func (o *Orchestrator) Enqueue(ctx context.Context, t store.Task) (store.Task, e
 	t.Created = o.cfg.Now()
 	t.Updated = t.Created
 
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskQueued, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskQueued, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("enqueue task %q: %w", t.ID, err)
 	}
+	// A loop that is idle is waiting for this: without it the task would sit
+	// queued until something else happened to wake the loop.
+	o.Wake()
 	return t, nil
 }
 
@@ -154,7 +210,7 @@ func (o *Orchestrator) Hold(ctx context.Context, id, reason string) (store.Task,
 
 	t.State = store.TaskWaiting
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskWaiting, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskWaiting, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("hold task %q: %w", id, err)
 	}
 	o.cfg.Log.Info("task held for a person", "task", id, "reason", reason)
@@ -174,9 +230,12 @@ func (o *Orchestrator) Release(ctx context.Context, id string) (store.Task, erro
 
 	t.State = store.TaskQueued
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskQueued, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskQueued, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("release task %q: %w", id, err)
 	}
+	// The task is runnable again, so an idle loop has to be told. Without this
+	// a released task waits for the next enqueue to be noticed.
+	o.Wake()
 	return t, nil
 }
 
@@ -195,7 +254,7 @@ func (o *Orchestrator) Cancel(ctx context.Context, id, reason string) (store.Tas
 	t.State = store.TaskCancelled
 	t.LastError = reason
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskCancelled, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskCancelled, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("cancel task %q: %w", id, err)
 	}
 	return t, nil
@@ -218,7 +277,7 @@ func (o *Orchestrator) Recover(ctx context.Context) ([]store.Task, error) {
 		t.LastError = "the daemon stopped while this task was running; it may have done its work, " +
 			"so it was not run again"
 		t.Updated = o.cfg.Now()
-		if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskFinished, t); err != nil {
+		if _, err := o.commit(ctx, store.EventTaskFinished, t, nil); err != nil {
 			return recovered, fmt.Errorf("park task %q: %w", t.ID, err)
 		}
 		o.cfg.Log.Warn("parked a task the daemon died under", "task", t.ID)
@@ -272,6 +331,12 @@ func (o *Orchestrator) refusal(t store.Task) error {
 
 // run starts one task, waits for it, and settles the result. It returns the task
 // as it stands when it finished.
+//
+// A run's output is not written here. The task change and the output are queued
+// together — the row says what happened, the effect says what was said — so a
+// daemon that dies between the two does not lose the only record of an
+// unattended run. Who drains that queue is the caller's business: this package
+// never runs an effect itself.
 func (o *Orchestrator) run(ctx context.Context, t store.Task) (store.Task, error) {
 	dialect, ok := o.cfg.Dialects(t.Dialect)
 	if !ok {
@@ -285,7 +350,7 @@ func (o *Orchestrator) run(ctx context.Context, t store.Task) (store.Task, error
 	t.State = store.TaskRunning
 	t.Runs++
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskStarted, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskStarted, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("start task %q: %w", t.ID, err)
 	}
 	o.cfg.Log.Info("task started", "task", t.ID, "dialect", t.Dialect, "run", t.Runs)
@@ -298,7 +363,8 @@ func (o *Orchestrator) run(ctx context.Context, t store.Task) (store.Task, error
 	})
 
 	// What the run reported is recorded whether it succeeded or not: a failed
-	// run that was priced still cost its money.
+	// run that was priced still cost its money, and a run that died mid-turn
+	// still said things worth reading.
 	if res.Usage.HasCost {
 		t.SpentUSD += res.Usage.CostUSD
 	}
@@ -306,14 +372,19 @@ func (o *Orchestrator) run(ctx context.Context, t store.Task) (store.Task, error
 		t.ResumeID = res.SessionID
 	}
 
+	effect, effectErr := OutputEffectFor(t.ID, t.Runs, res, err)
+	if effectErr != nil {
+		return store.Task{}, effectErr
+	}
+
 	if err != nil {
-		return o.failAfterRun(ctx, t, err)
+		return o.failAfterRun(ctx, t, err, effect)
 	}
 
 	t.State = store.TaskDone
 	t.LastError = ""
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskFinished, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskFinished, t, effect); err != nil {
 		return store.Task{}, fmt.Errorf("finish task %q: %w", t.ID, err)
 	}
 	o.cfg.Log.Info("task finished", "task", t.ID, "runs", t.Runs, "spent", t.SpentUSD)
@@ -326,7 +397,7 @@ func (o *Orchestrator) run(ctx context.Context, t store.Task) (store.Task, error
 // again on its own. A timeout is exactly that case — the agent had the
 // instruction and this build does not know how far it got — so it is parked. A
 // run that plainly failed before it could act is retried, up to the hop cap.
-func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause error) (store.Task, error) {
+func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause error, effect *store.Effect) (store.Task, error) {
 	t.LastError = cause.Error()
 	t.Updated = o.cfg.Now()
 
@@ -337,7 +408,7 @@ func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause err
 		errors.Is(cause, context.DeadlineExceeded)
 	if ambiguous {
 		t.State = store.TaskFailed
-		if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskFinished, t); err != nil {
+		if _, err := o.commit(ctx, store.EventTaskFinished, t, effect); err != nil {
 			return store.Task{}, fmt.Errorf("park task %q: %w", t.ID, err)
 		}
 		o.cfg.Log.Warn("task parked: the run may have done its work", "task", t.ID, "err", cause.Error())
@@ -349,7 +420,7 @@ func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause err
 	// quota in a loop.
 	if t.Runs < o.cfg.MaxRuns {
 		t.State = store.TaskQueued
-		if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskQueued, t); err != nil {
+		if _, err := o.commit(ctx, store.EventTaskQueued, t, nil); err != nil {
 			return store.Task{}, fmt.Errorf("requeue task %q: %w", t.ID, err)
 		}
 		o.cfg.Log.Info("task requeued after a failed run", "task", t.ID, "run", t.Runs)
@@ -359,7 +430,7 @@ func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause err
 	t.State = store.TaskFailed
 	t.LastError = fmt.Errorf("%w after %d of %d runs: %w",
 		ErrRunsExhausted, t.Runs, o.cfg.MaxRuns, cause).Error()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskFinished, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskFinished, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("fail task %q: %w", t.ID, err)
 	}
 	o.cfg.Log.Warn("task failed: every run used", "task", t.ID, "err", cause.Error())
@@ -372,23 +443,28 @@ func (o *Orchestrator) settle(ctx context.Context, t store.Task, cause error) (s
 	t.State = store.TaskFailed
 	t.LastError = cause.Error()
 	t.Updated = o.cfg.Now()
-	if _, err := o.cfg.Store.AppendTask(ctx, store.EventTaskFinished, t); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskFinished, t, nil); err != nil {
 		return store.Task{}, fmt.Errorf("settle task %q: %w", t.ID, err)
 	}
 	o.cfg.Log.Warn("task settled without running", "task", t.ID, "err", cause.Error())
 	return t, nil
 }
 
-// Run drains the queue until ctx ends. It is the daemon's loop; a caller that
-// wants one step calls Next.
+// Run serves the queue until ctx ends: it takes tasks while there are any and
+// otherwise waits for Wake. It is the daemon's loop; a caller that wants one
+// step calls Next.
+//
+// The wait is the point. A loop that returned when the queue emptied would have
+// to be re-entered by whoever enqueued the next task, and a loop that polled
+// would spin a core in an idle daemon. Waiting on a channel means an idle daemon
+// is genuinely idle and a task that arrives is picked up at once.
 //
 // A cancelled context is a normal end, not a failure: the daemon was told to
 // stop, so this returns nil. Any other error is the store's, and is returned.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	for {
-		// A done context is how the daemon says stop, so it ends the loop
-		// quietly. Reading Done rather than Err keeps the cancellation out of
-		// this function's error return: stopping is not a failure.
+		// Stopping is not a failure, so it leaves through a bare return: a
+		// done context is how the daemon says stop, not an error to report.
 		select {
 		case <-ctx.Done():
 			return nil
@@ -405,13 +481,114 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		if !more {
-			// Nothing queued. Waiting for a wake-up rather than polling is the
-			// caller's business: this loop is for a daemon that enqueues as it
-			// goes, and a busy poll would spin a core doing nothing.
+		if more {
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
 			return nil
+		case <-o.wake:
 		}
 	}
+}
+
+// RunRecord is what one run of a task produced, as it is stored and read back.
+//
+// It is this package's own type rather than headless.Result because the record
+// outlives the run and the reader: a field that the execution layer renames must
+// not silently change what an old row means.
+type RunRecord struct {
+	// Run is the run number, the same one the task counted.
+	Run int `json:"run"`
+	// SessionID is the conversation the agent reported, so a later run can
+	// continue it.
+	SessionID string `json:"session_id,omitempty"`
+	// StopReason is the agent's own word for why the turn ended.
+	StopReason string `json:"stop_reason,omitempty"`
+	// Output is the agent's final message text.
+	Output string `json:"output,omitempty"`
+	// Usage is what the run cost, as the agent reported it.
+	Usage RunUsage `json:"usage,omitempty"`
+	// Updates is everything the run streamed, in order.
+	Updates []RunUpdate `json:"updates,omitempty"`
+	// Error is why the run failed, empty when it did not. It is recorded with
+	// the output because a failed run's partial output is the only account of
+	// what it did before it stopped.
+	Error string `json:"error,omitempty"`
+}
+
+// RunUsage is one run's cost.
+type RunUsage struct {
+	InputTokens     int64   `json:"input_tokens,omitempty"`
+	OutputTokens    int64   `json:"output_tokens,omitempty"`
+	ReasoningTokens int64   `json:"reasoning_tokens,omitempty"`
+	CostUSD         float64 `json:"cost_usd,omitempty"`
+	// HasCost says whether the dialect priced the run at all. A zero cost and
+	// an unknown cost are different, and a reader must not confuse them.
+	HasCost bool `json:"has_cost,omitempty"`
+}
+
+// RunUpdate is one update a run streamed.
+type RunUpdate struct {
+	Seq        uint64 `json:"seq"`
+	Kind       string `json:"kind"`
+	Text       string `json:"text,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolTitle  string `json:"tool_title,omitempty"`
+	ToolStatus string `json:"tool_status,omitempty"`
+}
+
+// OutputEffectFor renders the effect that stores what a run produced, or nil
+// when there is nothing worth storing.
+//
+// A run that said nothing and cost nothing is not stored: a row of empty fields
+// would claim the agent ran and was silent, which is a different fact from "the
+// run never got that far". The error travels with the output rather than only in
+// the task row, because the task row keeps one line and the run may have said
+// a great deal before it failed.
+func OutputEffectFor(taskID string, run int, res headless.Result, runErr error) (*store.Effect, error) {
+	record := RunRecord{
+		Run:        run,
+		SessionID:  res.SessionID,
+		StopReason: res.StopReason,
+		Output:     res.Output,
+		Usage: RunUsage{
+			InputTokens:     res.Usage.InputTokens,
+			OutputTokens:    res.Usage.OutputTokens,
+			ReasoningTokens: res.Usage.ReasoningTokens,
+			CostUSD:         res.Usage.CostUSD,
+			HasCost:         res.Usage.HasCost,
+		},
+		Updates: make([]RunUpdate, 0, len(res.Updates)),
+	}
+	if runErr != nil {
+		record.Error = runErr.Error()
+	}
+	for _, u := range res.Updates {
+		record.Updates = append(record.Updates, RunUpdate{
+			Seq:        u.Seq,
+			Kind:       u.Kind,
+			Text:       u.Text,
+			ToolCallID: u.ToolCallID,
+			ToolTitle:  u.ToolTitle,
+			ToolStatus: u.ToolStatus,
+		})
+	}
+
+	if len(record.Updates) == 0 && record.Output == "" && record.Error == "" {
+		return nil, nil
+	}
+
+	body, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("encode the record of task %q run %d: %w", taskID, run, err)
+	}
+	payload, err := json.Marshal(store.TaskOutputPayload{TaskID: taskID, Run: run, Body: body})
+	if err != nil {
+		return nil, fmt.Errorf("encode the output effect of task %q run %d: %w", taskID, run, err)
+	}
+	return &store.Effect{Name: store.OutputEffect, Payload: payload}, nil
 }
 
 // newID returns an id for a task nothing else will collide with.
