@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/store"
 )
@@ -42,6 +43,9 @@ type Worker struct {
 	handlers map[string]Handler
 	log      *slog.Logger
 	maxTries int
+	// retry is how long Run waits before another pass when effects are still
+	// owed. It is a field so a test can shrink it and still exercise the loop.
+	retry time.Duration
 	// wake carries one token per request to look at the queue again. A nil
 	// channel (a worker nobody woken) parks the loop, which is what makes an
 	// idle daemon idle rather than busy.
@@ -56,6 +60,10 @@ type Config struct {
 	Log *slog.Logger
 	// MaxAttempts bounds retries per effect. Zero uses DefaultMaxAttempts.
 	MaxAttempts int
+	// Retry is how long the loop waits before another pass when effects are
+	// still owed. Zero uses retryDelay. It is configurable because a test that
+	// exercises the loop must not spend seconds of wall clock doing it.
+	Retry time.Duration
 }
 
 // New builds a worker with no handlers. A worker that meets an effect it has no
@@ -71,11 +79,15 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = DefaultMaxAttempts
 	}
+	if cfg.Retry <= 0 {
+		cfg.Retry = retryDelay
+	}
 	return &Worker{
 		store:    cfg.Store,
 		handlers: make(map[string]Handler),
 		log:      cfg.Log,
 		maxTries: cfg.MaxAttempts,
+		retry:    cfg.Retry,
 		wake:     make(chan struct{}, 1),
 	}, nil
 }
@@ -100,14 +112,21 @@ func (w *Worker) Wake() {
 	}
 }
 
-// Drain runs every effect that is pending right now and returns how many it
-// settled. It is the deterministic entry point: a test calls it and knows the
-// queue is empty afterwards, without waiting on a timer.
+// Drain runs one pass over the effects that are pending right now and returns
+// how many it attempted. Each effect is attempted at most once per pass: a row
+// that fails is left pending for a later pass rather than retried in a tight
+// loop that would burn every attempt in milliseconds and abandon a transient
+// failure.
 //
 // Draining stops at the first store failure, because a store that cannot be
-// written will not be written on the next iteration either.
+// written will not be written on the next iteration either. A handler's failure
+// is not a store failure: it is recorded and the pass moves on.
 func (w *Worker) Drain(ctx context.Context) (int, error) {
-	settled := 0
+	attempted := 0
+	// seen is the rows this pass has already tried. Re-reading the queue after
+	// each settle is what makes the count honest, and this is what keeps that
+	// re-read from handing back the row that just failed.
+	seen := make(map[int64]struct{})
 
 	for {
 		// A done context ends the drain quietly: the caller asked for a stop,
@@ -115,40 +134,75 @@ func (w *Worker) Drain(ctx context.Context) (int, error) {
 		// they are simply not this call's work.
 		select {
 		case <-ctx.Done():
-			return settled, nil
+			return attempted, nil
 		default:
 		}
 
 		pending, err := w.store.Pending(ctx, 0)
 		if err != nil {
-			return settled, fmt.Errorf("read the outbox: %w", err)
-		}
-		if len(pending) == 0 {
-			return settled, nil
+			return attempted, fmt.Errorf("read the outbox: %w", err)
 		}
 
-		// One row per iteration, oldest first. Re-reading after each settle is
-		// what makes the count honest: a crash in the middle leaves the rest
-		// queued, and the next drain picks them up without a cursor to trust.
-		if err := w.run(ctx, pending[0]); err != nil {
-			return settled, err
+		next := -1
+		for i := range pending {
+			if _, done := seen[pending[i].ID]; !done {
+				next = i
+				break
+			}
 		}
-		settled++
+		if next < 0 {
+			// Everything pending has been tried this pass. Whatever is left is
+			// owed to a later pass; Run schedules one.
+			return attempted, nil
+		}
+
+		seen[pending[next].ID] = struct{}{}
+		if err := w.run(ctx, pending[next]); err != nil {
+			return attempted, err
+		}
+		attempted++
 	}
 }
 
-// Run drains the queue and then waits for a wake-up, until ctx ends. It does not
-// poll: an idle daemon with an empty outbox sleeps in the select below, and a
-// producer that queues work calls Wake.
+// retryDelay is how long Run waits before another pass when effects are still
+// owed after one. It is the backoff that keeps a failing effect from being
+// retried in a tight loop while still letting it be retried at all: without a
+// pass, a failed row would wait for a wake-up that its own failure never sent.
+//
+// It is short because the failures this covers are meant to be transient — a
+// locked file, a database busy moment — and the attempt cap already bounds how
+// long a permanent failure can keep the queue busy.
+const retryDelay = 2 * time.Second
+
+// Run drains the queue and then waits, until ctx ends. It does not poll when the
+// queue is empty: an idle daemon sleeps in the select below, and a producer that
+// queues work calls Wake.
+//
+// When the queue is not empty after a pass, the next pass is scheduled here
+// rather than left to a wake-up: an effect that failed is owed now, and nothing
+// else is going to ring.
 func (w *Worker) Run(ctx context.Context) error {
 	for {
 		if _, err := w.Drain(ctx); err != nil {
 			return err
 		}
 
+		pending, err := w.store.Pending(ctx, 0)
+		if err != nil {
+			return fmt.Errorf("read the outbox: %w", err)
+		}
+
+		wait := w.retry
+		if len(pending) == 0 {
+			// Nothing owed. The only thing that can make work appear is a
+			// producer calling Wake, so waiting on a timer would be a poll.
+			wait = 0
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-time.After(wait):
 		case <-w.wake:
 		}
 	}

@@ -264,9 +264,11 @@ CREATE INDEX IF NOT EXISTS tasks_state ON tasks (state, created);
 -- task_output is what one run of a task printed, one row per run. It is a
 -- separate table from transcripts on purpose: a transcript belongs to a session
 -- with a host, and letting a task's output live there would make it show up in
--- the archive as a session that never existed.
+-- the archive as a session that never existed. The foreign key is declared for
+-- the reason every other one is: a run's output with no task is a bug the
+-- database should refuse to hold.
 CREATE TABLE IF NOT EXISTS task_output (
-	task_id TEXT    NOT NULL,
+	task_id TEXT    NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
 	run     INTEGER NOT NULL,
 	body    BLOB    NOT NULL,
 	at      INTEGER NOT NULL,

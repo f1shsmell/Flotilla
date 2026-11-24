@@ -417,10 +417,12 @@ func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause err
 
 	// A run that failed outright is retried until the cap, and the cap is the
 	// circuit breaker: past it the task stops instead of spending a provider's
-	// quota in a loop.
+	// quota in a loop. The effect travels either way: what the run said before
+	// it failed is the only account of it, and discarding that here would throw
+	// away exactly the records a person most wants to read.
 	if t.Runs < o.cfg.MaxRuns {
 		t.State = store.TaskQueued
-		if _, err := o.commit(ctx, store.EventTaskQueued, t, nil); err != nil {
+		if _, err := o.commit(ctx, store.EventTaskQueued, t, effect); err != nil {
 			return store.Task{}, fmt.Errorf("requeue task %q: %w", t.ID, err)
 		}
 		o.cfg.Log.Info("task requeued after a failed run", "task", t.ID, "run", t.Runs)
@@ -430,7 +432,7 @@ func (o *Orchestrator) failAfterRun(ctx context.Context, t store.Task, cause err
 	t.State = store.TaskFailed
 	t.LastError = fmt.Errorf("%w after %d of %d runs: %w",
 		ErrRunsExhausted, t.Runs, o.cfg.MaxRuns, cause).Error()
-	if _, err := o.commit(ctx, store.EventTaskFinished, t, nil); err != nil {
+	if _, err := o.commit(ctx, store.EventTaskFinished, t, effect); err != nil {
 		return store.Task{}, fmt.Errorf("fail task %q: %w", t.ID, err)
 	}
 	o.cfg.Log.Warn("task failed: every run used", "task", t.ID, "err", cause.Error())

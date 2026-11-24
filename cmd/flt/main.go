@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
 	"github.com/f1shsmell/flotilla/internal/acp/replay"
@@ -180,6 +181,10 @@ func status(channel string, asJSON bool, out io.Writer) error {
 // oneLine renders a task's prompt or error as a single line. A task carries
 // whole instructions and multi-line failures, and either would tear apart a
 // table that a person reads row by row.
+//
+// The cut is on a rune boundary, not a byte: half a multi-byte character is
+// invalid UTF-8, and a table that shows a replacement glyph where a word should
+// be is a table a reader stops trusting. A Chinese prompt hits this immediately.
 func oneLine(s string) string {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {
@@ -187,10 +192,16 @@ func oneLine(s string) string {
 	}
 	joined := strings.Join(fields, " ")
 	const limit = 100
-	if len(joined) > limit {
-		return joined[:limit] + "…"
+	if len(joined) <= limit {
+		return joined
 	}
-	return joined
+
+	// Back up to the start of the rune the cut landed inside.
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(joined[cut]) {
+		cut--
+	}
+	return joined[:cut] + "…"
 }
 
 // listAgents reports the agents a running daemon offers, with the switches the

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite" // the same driver the store uses, so the file format matches
 
@@ -181,6 +182,16 @@ func TestAFailingEffectIsRetriedThenAbandoned(t *testing.T) {
 	s := open(t)
 	queue(t, s, store.Effect{Name: "task.output", Payload: json.RawMessage(`{}`)})
 
+	// The event sequence is read before the drains: it is what the receipt would
+	// be keyed by, and the queue no longer holds the row once it is abandoned.
+	queued, err := s.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("pending = %+v, want the one queued effect", queued)
+	}
+
 	cause := errors.New("the disk said no")
 	rec := &recorder{err: cause}
 
@@ -190,15 +201,17 @@ func TestAFailingEffectIsRetriedThenAbandoned(t *testing.T) {
 	}
 	w.Register("task.output", rec.handle)
 
-	// Three drains: each one makes an attempt and records it.
+	// Three passes: each one makes one attempt and records it. A pass never
+	// retries the same row twice, which is what keeps a transient failure from
+	// burning every attempt in milliseconds.
 	for i := 0; i < 3; i++ {
 		if _, err := w.Drain(t.Context()); err != nil {
 			t.Fatalf("Drain %d: %v", i, err)
 		}
-	}
-
-	if rec.calls() != 3 {
-		t.Fatalf("handler called %d times, want exactly the 3 attempts", rec.calls())
+		if got, want := rec.calls(), i+1; got != want {
+			t.Fatalf("after pass %d the handler had been called %d times, want %d: one attempt per pass",
+				i+1, got, want)
+		}
 	}
 
 	// Past the cap the effect is abandoned rather than left pending forever: it
@@ -211,12 +224,105 @@ func TestAFailingEffectIsRetriedThenAbandoned(t *testing.T) {
 		t.Fatalf("pending = %+v, want the failing effect abandoned", pending)
 	}
 
-	applied, err := s.Applied(t.Context(), 1, "task.output")
+	applied, err := s.Applied(t.Context(), queued[0].EventSeq, "task.output")
 	if err != nil {
 		t.Fatalf("Applied: %v", err)
 	}
 	if applied {
 		t.Fatal("a receipt was recorded for work that never succeeded")
+	}
+}
+
+// TestOneDrainAttemptsEachRowOnce pins the pass boundary. A single Drain used to
+// retry a failing effect until it was abandoned, so five attempts happened in
+// microseconds and a transient failure became permanent. One pass must mean one
+// attempt per row.
+func TestOneDrainAttemptsEachRowOnce(t *testing.T) {
+	s := open(t)
+	queue(t, s, store.Effect{Name: "task.output", Payload: json.RawMessage(`{}`)})
+
+	rec := &recorder{err: errors.New("a momentary lock")}
+	w, err := outbox.New(outbox.Config{Store: s, MaxAttempts: 5})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Register("task.output", rec.handle)
+
+	attempted, err := w.Drain(t.Context())
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if attempted != 1 {
+		t.Fatalf("attempted = %d, want 1: one pass is one attempt per row", attempted)
+	}
+	if rec.calls() != 1 {
+		t.Fatalf("handler called %d times in one pass, want 1", rec.calls())
+	}
+
+	// And the row is still owed, so a later pass can succeed where this one did.
+	pending, err := s.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %+v, want the failed row still owed", pending)
+	}
+	if pending[0].Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 recorded", pending[0].Attempts)
+	}
+}
+
+// TestRunRetriesAfterAFailureAndStopsOnSuccess is the loop the daemon runs: a
+// failed effect must be retried by a later pass, because nothing else is going
+// to ring the wake channel after a handler's own failure.
+func TestRunRetriesAfterAFailureAndStopsOnSuccess(t *testing.T) {
+	s := open(t)
+	queue(t, s, store.Effect{Name: "task.output", Payload: json.RawMessage(`{}`)})
+
+	rec := &recorder{err: errors.New("the first attempt fails")}
+	w, err := outbox.New(outbox.Config{
+		Store: s,
+		// A short retry so the loop is exercised without spending seconds.
+		Retry: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// The handler fails once and then succeeds, which is the case a backoff
+	// exists for: a transient failure that a second attempt fixes.
+	var calls int
+	w.Register("task.output", func(_ context.Context, _ json.RawMessage) error {
+		calls++
+		if calls == 1 {
+			return rec.err
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _ = w.Run(ctx) }()
+
+	// Wait for the queue to settle, which is the observable end state. The wait
+	// is bounded by the test's own context, not by a sleep long enough to work.
+	for {
+		pending, err := s.Pending(ctx, 0)
+		if err != nil {
+			t.Fatalf("Pending: %v", err)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the loop never settled the effect (handler called %d times)", calls)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	if calls < 2 {
+		t.Fatalf("handler called %d times, want at least 2: the loop must retry a failed effect", calls)
 	}
 }
 

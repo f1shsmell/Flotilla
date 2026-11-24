@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -58,6 +59,11 @@ type Config struct {
 
 // attachTimeout is the default bound on the wait for one host.
 const attachTimeout = 5 * time.Second
+
+// statusReadTimeout bounds the disk reads a status poll makes. A poll is a
+// question with a caller waiting on it, and a database that stopped answering
+// must not hold the answer: the next poll gets the queue instead.
+const statusReadTimeout = 2 * time.Second
 
 func (c Config) attachTimeout() time.Duration {
 	if c.AttachTimeout > 0 {
@@ -213,10 +219,15 @@ type Daemon struct {
 	// background holds the loops Run started, so Detach can wait for them
 	// before it closes the database they read.
 	background sync.WaitGroup
-	// bgCancel stops those loops. It is called by Detach rather than by Run's
-	// context: a test that never calls Run still Detaches, and a loop that
-	// outlived the database would fail every query it made afterwards.
+	// bgMu guards the two fields below. They are written by startBackground and
+	// read by stopBackground, which are called from different goroutines when a
+	// daemon is detached while it is still starting.
+	bgMu     sync.Mutex
 	bgCancel context.CancelFunc
+	// bgFailures is what a loop said when it last stopped. It is reported in
+	// Status.Failures, because a daemon whose worker died is a daemon that is
+	// quietly not doing its job, and silence there is worse than an error.
+	bgFailures map[string]string
 	// bgOnce guards starting and stopping, so a daemon that is detached twice
 	// does not close the database under a loop it already stopped.
 	bgStart sync.Once
@@ -364,20 +375,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 
-	// The queue is repaired before the daemon serves. A task left saying
-	// running is a run whose outcome nobody knows, and parking it is the one
-	// thing that must happen before a client can enqueue more work.
-	d.startBackground()
-
 	l, err := ipc.Listen(d.addr, d.cfg.StateDir)
 	if err != nil {
 		// A channel this process cannot bind is a channel a live daemon already
 		// serves. Saying so, rather than "access denied", is what tells the GUI
 		// that the daemon it tried to start is not needed.
-		d.stopBackground()
 		return fmt.Errorf("listen on %s: %w", d.addr, err)
 	}
 	defer func() { _ = l.Close() }()
+
+	// The queue is repaired only once this process really serves the channel.
+	// Listen is what decides that: a daemon that lost the race must not have
+	// touched the queue at all, because parking a running row and running tasks
+	// belong to the daemon holding the lock, not to the one that just lost it.
+	d.startBackground()
 
 	go func() {
 		<-ctx.Done()
@@ -483,7 +494,10 @@ func (d *Daemon) startBackground() {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		d.bgMu.Lock()
 		d.bgCancel = cancel
+		d.bgFailures = make(map[string]string)
+		d.bgMu.Unlock()
 
 		if d.tasks != nil {
 			recovered, err := d.tasks.Recover(ctx)
@@ -496,15 +510,16 @@ func (d *Daemon) startBackground() {
 			}
 		}
 
-		// The outbox is drained once before the loop waits: an effect queued by
-		// a daemon that died is owed now, and waiting for a wake-up that may
-		// never come would leave it owed until the next enqueue.
+		// Each loop reports its own death. A daemon whose worker stopped is a
+		// daemon that is quietly not doing its job, and the failure rides in
+		// Status.Failures so a window can say so rather than showing a queue
+		// that never moves.
 		if d.effects != nil {
 			d.background.Add(1)
 			go func() {
 				defer d.background.Done()
 				if err := d.effects.Run(ctx); err != nil {
-					d.cfg.Log.Error("the effect worker stopped", "err", err.Error())
+					d.recordLoopFailure("effects", err)
 				}
 			}()
 		}
@@ -514,11 +529,53 @@ func (d *Daemon) startBackground() {
 			go func() {
 				defer d.background.Done()
 				if err := d.tasks.Run(ctx); err != nil {
-					d.cfg.Log.Error("the task queue stopped", "err", err.Error())
+					d.recordLoopFailure("tasks", err)
 				}
 			}()
 		}
 	})
+}
+
+// recordLoopFailure keeps what a stopped loop said, so a status report can show
+// it. It is a stop, not a crash, when the daemon is the one that cancelled the
+// loop: a stopped loop is not a failure to report.
+func (d *Daemon) recordLoopFailure(loop string, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	d.cfg.Log.Error("a background loop stopped", "loop", loop, "err", err.Error())
+
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+	if d.bgFailures == nil {
+		d.bgFailures = make(map[string]string)
+	}
+	d.bgFailures[loop] = err.Error()
+}
+
+// loopFailures reports what the background loops said when they stopped. It is
+// read by the status projection, which is the only place a person can see that
+// the queue is no longer being served.
+func (d *Daemon) loopFailures() []string {
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+
+	if len(d.bgFailures) == 0 {
+		return nil
+	}
+	// Sorted so two polls of an unchanged daemon report the same list: a status
+	// report that reordered itself would look like something happened.
+	names := make([]string, 0, len(d.bgFailures))
+	for name := range d.bgFailures {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, fmt.Sprintf("the %s loop stopped: %s", name, d.bgFailures[name]))
+	}
+	return out
 }
 
 // stopBackground stops the loops and waits for them. Safe to call twice, and
@@ -526,8 +583,12 @@ func (d *Daemon) startBackground() {
 // nothing to stop.
 func (d *Daemon) stopBackground() {
 	d.bgStop.Do(func() {
-		if d.bgCancel != nil {
-			d.bgCancel()
+		d.bgMu.Lock()
+		cancel := d.bgCancel
+		d.bgMu.Unlock()
+
+		if cancel != nil {
+			cancel()
 		}
 		d.background.Wait()
 	})

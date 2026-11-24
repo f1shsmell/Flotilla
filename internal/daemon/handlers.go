@@ -108,18 +108,30 @@ func (d *Daemon) status(peer *ipc.Conn) Status {
 	// list because a task has no host and no window: a reader that treated one
 	// as a session would try to attach to it.
 	st.Tasks = d.taskEntries()
+	// A background loop that stopped is a fact about this daemon, not about a
+	// session, so it rides in the failures a window already shows. Without it a
+	// daemon whose queue stopped being served would look merely idle.
+	if diagnostics {
+		st.Failures = append(st.Failures, d.loopFailures()...)
+	}
 	return st
 }
 
 // taskEntries lists the unattended queue for one status report. A daemon whose
 // database did not open has no queue, which is reported as no tasks rather than
 // as a failure: the fleet it does serve is still worth knowing about.
+//
+// The read is bounded: a status poll must not hang on a database that stopped
+// answering, and a window that gets no queue this time will get one the next.
 func (d *Daemon) taskEntries() []TaskEntry {
 	if d.state == nil {
 		return nil
 	}
 
-	tasks, err := d.state.AllTasks(context.Background(), 0)
+	ctx, cancel := context.WithTimeout(context.Background(), statusReadTimeout)
+	defer cancel()
+
+	tasks, err := d.state.AllTasks(ctx, 0)
 	if err != nil {
 		d.cfg.Log.Warn("cannot list the task queue", "err", err.Error())
 		return nil
