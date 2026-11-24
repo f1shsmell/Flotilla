@@ -75,6 +75,7 @@ var WireTypes = []string{
 	"session.SurfaceSetRequest",
 	"daemon.Status",
 	"daemon.StatusEntry",
+	"daemon.TaskEntry",
 	"daemon.StartRequest",
 	"daemon.StartResponse",
 	"daemon.SetAgentRequest",

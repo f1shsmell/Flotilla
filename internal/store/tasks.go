@@ -101,6 +101,16 @@ const (
 // transaction. A row without its event would be a state nobody can explain, and
 // an event without its row would be a fact the queue does not act on.
 func (s *Store) AppendTask(ctx context.Context, kind string, t Task) (uint64, error) {
+	return s.AppendTaskWithEffect(ctx, kind, t, nil)
+}
+
+// AppendTaskWithEffect records the same change and, in the same transaction,
+// queues the work it owes. The two belong together for the reason the whole
+// package exists: a task marked finished whose output was never stored is a
+// state no later reader can repair, because nothing knows what was lost.
+//
+// A nil effect means the change owes nothing, which is the common case.
+func (s *Store) AppendTaskWithEffect(ctx context.Context, kind string, t Task, effect *Effect) (uint64, error) {
 	if !t.State.Valid() {
 		return 0, fmt.Errorf("task %q: state %q is not one this build knows", t.ID, t.State)
 	}
@@ -114,7 +124,8 @@ func (s *Store) AppendTask(ctx context.Context, kind string, t Task) (uint64, er
 	}
 
 	return s.Append(ctx, Commit{
-		Event: Event{Kind: kind, Payload: payload},
+		Event:  Event{Kind: kind, Payload: payload},
+		Effect: effect,
 		Apply: func(ctx context.Context, tx *sql.Tx, _ uint64) error {
 			return writeTask(ctx, tx, t)
 		},
@@ -180,6 +191,50 @@ func (s *Store) Task(ctx context.Context, id string) (Task, error) {
 	}
 	return t, nil
 }
+
+// AllTasks reads every task this daemon knows, newest first. It is what a status
+// report needs: a list of the queue rather than one state of it, because a
+// person reading the fleet wants to see what is waiting behind what.
+//
+// The bound exists because a queue can hold more rows than a window can draw. A
+// caller that asked for everything gets the newest, which is what a reader is
+// looking for.
+func (s *Store) AllTasks(ctx context.Context, limit int) ([]Task, error) {
+	if limit <= 0 {
+		limit = maxStatusTasks
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, prompt, dialect, dir, access, state, parent,
+		        budget_usd, spent_usd, runs, resume_id, last_error,
+		        created, updated
+		   FROM tasks ORDER BY created DESC, id LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read the tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("read a task: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the tasks: %w", err)
+	}
+	return out, nil
+}
+
+// maxStatusTasks bounds what a status report lists. A queue longer than this is
+// a queue nobody is reading, and the bound keeps one runaway producer from
+// making every window's poll expensive.
+const maxStatusTasks = 200
 
 // TasksInState reads the tasks in one state, oldest first. It is what a worker
 // reads after a restart: the rows are the durable record of what was owed.

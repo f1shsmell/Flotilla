@@ -2,10 +2,13 @@ package orch_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/headless"
 	"github.com/f1shsmell/flotilla/internal/orch"
@@ -16,7 +19,11 @@ import (
 // times it was asked. It is a struct rather than a function so a test can read
 // the call count after the orchestrator has finished: "it was not run again" is
 // the assertion several of these tests exist for.
+//
+// The counter is behind a mutex because Run is exercised from its own goroutine,
+// and a test that read the slice while the loop appended to it would race.
 type fakeExecutor struct {
+	mu sync.Mutex
 	// results are answered in order; past the end the last one repeats.
 	results []headless.Result
 	// errs are answered in order; past the end the last one repeats.
@@ -26,9 +33,10 @@ type fakeExecutor struct {
 }
 
 func (f *fakeExecutor) Run(_ context.Context, _ headless.Dialect, t headless.Task) (headless.Result, error) {
+	f.mu.Lock()
 	f.tasks = append(f.tasks, t)
-
 	i := len(f.tasks) - 1
+
 	var res headless.Result
 	if len(f.results) > 0 {
 		if i < len(f.results) {
@@ -46,7 +54,16 @@ func (f *fakeExecutor) Run(_ context.Context, _ headless.Dialect, t headless.Tas
 			err = f.errs[len(f.errs)-1]
 		}
 	}
+	f.mu.Unlock()
+
 	return res, err
+}
+
+// calls reports how many runs were asked for.
+func (f *fakeExecutor) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.tasks)
 }
 
 // newOrch builds an orchestrator over a fresh database.
@@ -147,8 +164,8 @@ func TestAHeldTaskCostsNothing(t *testing.T) {
 	if more {
 		t.Fatal("Next ran something, want the waiting task left alone")
 	}
-	if len(exec.tasks) != 0 {
-		t.Fatalf("executor ran %d times, want zero while the task waits on a person", len(exec.tasks))
+	if exec.calls() != 0 {
+		t.Fatalf("executor ran %d times, want zero while the task waits on a person", exec.calls())
 	}
 
 	stored, err := s.Task(ctx, task.ID)
@@ -166,8 +183,8 @@ func TestAHeldTaskCostsNothing(t *testing.T) {
 	if _, more, err := o.Next(ctx); err != nil || !more {
 		t.Fatalf("Next after release: more=%v err=%v, want the task run", more, err)
 	}
-	if len(exec.tasks) != 1 {
-		t.Fatalf("executor ran %d times, want once after release", len(exec.tasks))
+	if exec.calls() != 1 {
+		t.Fatalf("executor ran %d times, want once after release", exec.calls())
 	}
 }
 
@@ -234,8 +251,8 @@ func TestATimeoutIsNeverResent(t *testing.T) {
 	if _, more, err := o.Next(ctx); err != nil || more {
 		t.Fatalf("Next: more=%v err=%v, want the parked task left alone", more, err)
 	}
-	if len(exec.tasks) != 1 {
-		t.Fatalf("executor ran %d times, want exactly once", len(exec.tasks))
+	if exec.calls() != 1 {
+		t.Fatalf("executor ran %d times, want exactly once", exec.calls())
 	}
 }
 
@@ -260,8 +277,8 @@ func TestTheHopCapStopsALoop(t *testing.T) {
 		}
 	}
 
-	if len(exec.tasks) != 3 {
-		t.Fatalf("executor ran %d times, want exactly the 3 allowed runs", len(exec.tasks))
+	if exec.calls() != 3 {
+		t.Fatalf("executor ran %d times, want exactly the 3 allowed runs", exec.calls())
 	}
 
 	stored, err := s.Task(ctx, task.ID)
@@ -311,12 +328,12 @@ func TestTheBudgetGateStopsSpending(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	// Burn its budget the way a first run would.
-	before := len(exec.tasks)
+	before := exec.calls()
 	if _, _, err := o.Next(ctx); err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if len(exec.tasks) != before+1 {
-		t.Fatalf("second task did not run: %d calls", len(exec.tasks))
+	if exec.calls() != before+1 {
+		t.Fatalf("second task did not run: %d calls", exec.calls())
 	}
 
 	// Requeue it with its budget already spent, which is what a retry after a
@@ -331,12 +348,12 @@ func TestTheBudgetGateStopsSpending(t *testing.T) {
 		t.Fatalf("requeue: %v", err)
 	}
 
-	before = len(exec.tasks)
+	before = exec.calls()
 	if _, _, err := o.Next(ctx); err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if len(exec.tasks) != before {
-		t.Fatalf("executor ran a task whose budget was spent (%d calls, want %d)", len(exec.tasks), before)
+	if exec.calls() != before {
+		t.Fatalf("executor ran a task whose budget was spent (%d calls, want %d)", exec.calls(), before)
 	}
 
 	settled, err := s.Task(ctx, second.ID)
@@ -490,5 +507,147 @@ func TestAnUnknownDialectSettlesInsteadOfLooping(t *testing.T) {
 	}
 	if stored.State != store.TaskFailed {
 		t.Fatalf("state = %s, want failed: a dialect this build lacks cannot be fixed by retrying", stored.State)
+	}
+}
+
+// TestAFailedRunStillKeepsWhatItSaid is the regression this branch needed: a run
+// that failed after printing something used to have its record thrown away, so
+// the one account of what an unattended agent did before it stopped was lost.
+// Every terminal path now carries the effect.
+func TestAFailedRunStillKeepsWhatItSaid(t *testing.T) {
+	exec := &fakeExecutor{
+		results: []headless.Result{{
+			StopReason: "failed",
+			Output:     "I read three files, then the tool call was refused",
+			Updates: []headless.UpdateRecord{
+				{Seq: 1, Kind: headless.KindMessage, Text: "I read three files, then the tool call was refused"},
+			},
+		}},
+		errs: []error{errors.New("the agent exited 1")},
+	}
+	o, s := newOrch(t, orch.Config{Executor: exec, Dialects: dialect, MaxRuns: 1})
+	ctx := t.Context()
+
+	task, err := o.Enqueue(ctx, store.Task{Prompt: "do it", Dialect: "fake"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, _, err := o.Next(ctx); err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+
+	// The task is settled as failed at the cap, and the run's own record is
+	// owed as an effect in the same commit.
+	stored, err := s.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("read the task: %v", err)
+	}
+	if stored.State != store.TaskFailed {
+		t.Fatalf("state = %s, want failed", stored.State)
+	}
+
+	pending, err := s.Pending(ctx, 0)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %+v, want the failed run's output queued", pending)
+	}
+	if pending[0].Name != store.OutputEffect {
+		t.Fatalf("effect = %q, want %q", pending[0].Name, store.OutputEffect)
+	}
+
+	// And what it said survives the round trip through the payload.
+	var payload store.TaskOutputPayload
+	if err := json.Unmarshal(pending[0].Payload, &payload); err != nil {
+		t.Fatalf("decode the queued payload: %v", err)
+	}
+	var record struct {
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(payload.Body, &record); err != nil {
+		t.Fatalf("decode the run record: %v", err)
+	}
+	if record.Output == "" {
+		t.Fatal("the failed run's output is empty, want what it said before it stopped")
+	}
+	if record.Error == "" {
+		t.Fatal("the run record carries no error, want why it stopped")
+	}
+}
+
+// TestRunServesTasksArrivingAfterItStarted is the wake rule. A loop that began
+// with an empty queue must pick up a task enqueued later: waiting on the queue
+// rather than returning is what makes an idle daemon pick work up at once.
+//
+// The wait is on the orchestrator's own change signal, not on the executor's
+// start: the loop is only done with a task once its last commit landed, and a
+// test that read the row when the run began would see `running` and be right.
+func TestRunServesTasksArrivingAfterItStarted(t *testing.T) {
+	exec := &fakeExecutor{results: []headless.Result{{Output: "done"}}}
+
+	// The change hook fires after every commit, so counting them is an exact
+	// synchronisation point: enqueue, started, finished.
+	var (
+		mu      sync.Mutex
+		commits int
+		settled = make(chan struct{})
+	)
+	o, s := newOrch(t, orch.Config{
+		Executor: exec,
+		Dialects: dialect,
+		OnChange: func() {
+			mu.Lock()
+			defer mu.Unlock()
+			commits++
+			// Three commits is the whole life of one task. Closing once is what
+			// makes the wait a signal rather than a poll.
+			if commits == 3 {
+				close(settled)
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = o.Run(ctx)
+	}()
+
+	// Enqueue only after the loop is running. A loop that returned on an empty
+	// queue would have died here and never seen this task.
+	task, err := o.Enqueue(ctx, store.Task{Prompt: "do it", Dialect: "fake"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	select {
+	case <-settled:
+	case <-ctx.Done():
+		t.Fatal("the loop never settled the task enqueued after it started")
+	}
+
+	stored, err := s.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("read the task: %v", err)
+	}
+	if stored.State != store.TaskDone {
+		t.Fatalf("state = %s, want done", stored.State)
+	}
+	if exec.calls() != 1 {
+		t.Fatalf("executor ran %d times, want once", exec.calls())
+	}
+
+	// Stopping the loop is the daemon's stop, and it must be a clean return
+	// rather than an error: nothing failed.
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop did not stop when its context ended")
 	}
 }

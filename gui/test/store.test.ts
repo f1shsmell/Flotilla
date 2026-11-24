@@ -99,6 +99,66 @@ describe("parseStatus", () => {
     ]);
   });
 
+  it("reads the queue apart from the fleet", () => {
+    const status = parseStatus({
+      sessions: [{ id: "sess-1", state: "working", reachable: true }],
+      tasks: [
+        {
+          id: "task-1",
+          dialect: "claude",
+          state: "queued",
+          prompt: "summarise the branch",
+          dir: "C:\\work",
+          runs: 2,
+          spent_usd: 0.25,
+          budget_usd: 2,
+          last_error: "the agent exited 1",
+        },
+      ],
+    });
+
+    // A task never becomes a session: the fleet list must not offer to attach to
+    // something with no host, even when a task is in the same report.
+    expect(status.sessions).toHaveLength(1);
+    expect(status.tasks).toHaveLength(1);
+    expect(status.tasks[0]).toEqual({
+      id: "task-1",
+      dialect: "claude",
+      state: "queued",
+      prompt: "summarise the branch",
+      dir: "C:\\work",
+      runs: 2,
+      spent_usd: 0.25,
+      budget_usd: 2,
+      last_error: "the agent exited 1",
+    });
+  });
+
+  it("fills a task's blanks rather than leaking undefined", () => {
+    const status = parseStatus({ tasks: [{ id: "task-2" }] });
+
+    expect(status.tasks[0]).toEqual({
+      id: "task-2",
+      dialect: "",
+      // A state the daemon did not send is named unknown rather than mapped onto
+      // a lifecycle: a task is not a session, and "idle" would claim the queue
+      // is empty.
+      state: "unknown",
+      prompt: "",
+      dir: "",
+      runs: 0,
+      spent_usd: 0,
+      budget_usd: 0,
+      last_error: "",
+    });
+  });
+
+  it("drops a task with no id instead of listing a row that cannot be named", () => {
+    const status = parseStatus({ tasks: [{ prompt: "orphan" }, { id: "task-3" }] });
+
+    expect(status.tasks.map((task) => task.id)).toEqual(["task-3"]);
+  });
+
   it("survives a shape it did not expect", () => {
     expect(parseStatus(null)).toEqual({
       channel: "",
@@ -106,6 +166,7 @@ describe("parseStatus", () => {
       ready: false,
       sessions: [],
       archived: [],
+      tasks: [],
       failures: [],
     });
   });
@@ -558,6 +619,7 @@ describe("fleet lifecycle", () => {
       ready: true,
       failures: [],
       archived: [],
+      tasks: [],
       sessions: [
         {
           id: "a",

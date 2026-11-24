@@ -165,6 +165,7 @@ export const wireTypes = {
     "pid": { go: "PID", type: "int" },
     "ready": { go: "Ready", type: "bool" },
     "sessions": { go: "Sessions", type: "[]StatusEntry" },
+    "tasks": { go: "Tasks", type: "[]TaskEntry", optional: true },
   },
   "daemon.StatusEntry": {
     "command": { go: "Command", type: "string" },
@@ -174,6 +175,17 @@ export const wireTypes = {
     "mode": { go: "Mode", type: "session.Mode" },
     "reachable": { go: "Reachable", type: "bool" },
     "state": { go: "State", type: "session.State" },
+  },
+  "daemon.TaskEntry": {
+    "budget_usd": { go: "BudgetUSD", type: "float64", optional: true },
+    "dialect": { go: "Dialect", type: "string" },
+    "dir": { go: "Dir", type: "string", optional: true },
+    "id": { go: "ID", type: "string" },
+    "last_error": { go: "LastError", type: "string", optional: true },
+    "prompt": { go: "Prompt", type: "string" },
+    "runs": { go: "Runs", type: "int" },
+    "spent_usd": { go: "SpentUSD", type: "float64", optional: true },
+    "state": { go: "State", type: "string" },
   },
   "daemon.WorktreeRequest": {
     "base": { go: "Base", type: "string", optional: true },

@@ -23,8 +23,9 @@ import (
 // schemaVersion is bumped whenever a migration changes the layout. A database
 // written by a newer build is refused rather than read with older assumptions.
 //
-// 2 adds the task tables the orchestrator keeps its queue in.
-const schemaVersion = 2
+// 2 adds the task tables the orchestrator keeps its queue in. 3 adds the table
+// a task's runs write their output to.
+const schemaVersion = 3
 
 // ErrNewerSchema reports a database this build is too old to read.
 var ErrNewerSchema = errors.New("store: the database was written by a newer build")
@@ -259,4 +260,18 @@ CREATE TABLE IF NOT EXISTS tasks (
 	updated    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tasks_state ON tasks (state, created);
+
+-- task_output is what one run of a task printed, one row per run. It is a
+-- separate table from transcripts on purpose: a transcript belongs to a session
+-- with a host, and letting a task's output live there would make it show up in
+-- the archive as a session that never existed. The foreign key is declared for
+-- the reason every other one is: a run's output with no task is a bug the
+-- database should refuse to hold.
+CREATE TABLE IF NOT EXISTS task_output (
+	task_id TEXT    NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+	run     INTEGER NOT NULL,
+	body    BLOB    NOT NULL,
+	at      INTEGER NOT NULL,
+	PRIMARY KEY (task_id, run)
+);
 `

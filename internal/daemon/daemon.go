@@ -5,17 +5,21 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/orch"
+	"github.com/f1shsmell/flotilla/internal/outbox"
 	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/store"
 )
@@ -42,12 +46,24 @@ type Config struct {
 	// the default: a host that accepts the pipe and then stops answering must
 	// not hold the scan, which runs before the daemon listens.
 	AttachTimeout time.Duration
+	// TaskExecutor runs one unattended task. Nil uses the real headless runner;
+	// a test substitutes one so the queue can be drained without starting an
+	// agent.
+	TaskExecutor orch.Executor
+	// TaskMaxRuns bounds how many times one task may start. Zero uses the
+	// orchestrator's default.
+	TaskMaxRuns int
 	// Log receives the daemon's diagnostics.
 	Log *slog.Logger
 }
 
 // attachTimeout is the default bound on the wait for one host.
 const attachTimeout = 5 * time.Second
+
+// statusReadTimeout bounds the disk reads a status poll makes. A poll is a
+// question with a caller waiting on it, and a database that stopped answering
+// must not hold the answer: the next poll gets the queue instead.
+const statusReadTimeout = 2 * time.Second
 
 func (c Config) attachTimeout() time.Duration {
 	if c.AttachTimeout > 0 {
@@ -67,7 +83,40 @@ type Status struct {
 	// reader can look but not continue. A restart that lost a host moves it
 	// here rather than dropping the run out of sight.
 	Archived []session.ArchivedEntry `json:"archived,omitempty"`
-	Failures []string                `json:"failures,omitempty"`
+	// Tasks lists the unattended jobs this daemon knows about: queued, running,
+	// waiting on a person, or settled. They are not sessions — nothing holds an
+	// agent handle and no window can attach — so they ride beside the fleet
+	// rather than inside it, and a reader that ignores this field loses nothing.
+	Tasks    []TaskEntry `json:"tasks,omitempty"`
+	Failures []string    `json:"failures,omitempty"`
+}
+
+// TaskEntry is one unattended job in a status report.
+//
+// The fields are the ones a person needs to decide what to do next: what the
+// job is, where it stands, what it cost, and why it stopped. The prompt is
+// included because a list of opaque ids would make the queue unreadable, and it
+// is the only thing that says which job is which.
+type TaskEntry struct {
+	ID string `json:"id"`
+	// Dialect names the headless dialect that runs it, e.g. "claude".
+	Dialect string `json:"dialect"`
+	// State is queued, running, waiting, done, failed or cancelled. A state this
+	// build does not know is reported as it stands rather than mapped onto the
+	// nearest one.
+	State string `json:"state"`
+	// Prompt is the instruction the agent receives.
+	Prompt string `json:"prompt"`
+	// Dir is where it runs; empty means the daemon's own directory.
+	Dir string `json:"dir,omitempty"`
+	// Runs is how many times it was started, and SpentUSD is what those runs
+	// reported costing. An unpriced run leaves SpentUSD where it was.
+	Runs     int     `json:"runs"`
+	SpentUSD float64 `json:"spent_usd,omitempty"`
+	// BudgetUSD bounds what it may spend; zero means unbounded.
+	BudgetUSD float64 `json:"budget_usd,omitempty"`
+	// LastError is why it last stopped, for a person to read.
+	LastError string `json:"last_error,omitempty"`
 }
 
 // StatusEntry is one session in a status report.
@@ -161,6 +210,28 @@ type Daemon struct {
 	// update exactly once, and because all of it has to outlive the host that
 	// produced it.
 	state *store.Store
+	// tasks runs the unattended queue. It is nil when the database could not be
+	// opened: a daemon that cannot record a task must not start one.
+	tasks *orch.Orchestrator
+	// effects drains the work the store says is owed, so a task's output lands
+	// even if the daemon dies between recording the task and writing the output.
+	effects *outbox.Worker
+	// background holds the loops Run started, so Detach can wait for them
+	// before it closes the database they read.
+	background sync.WaitGroup
+	// bgMu guards the two fields below. They are written by startBackground and
+	// read by stopBackground, which are called from different goroutines when a
+	// daemon is detached while it is still starting.
+	bgMu     sync.Mutex
+	bgCancel context.CancelFunc
+	// bgFailures is what a loop said when it last stopped. It is reported in
+	// Status.Failures, because a daemon whose worker died is a daemon that is
+	// quietly not doing its job, and silence there is worse than an error.
+	bgFailures map[string]string
+	// bgOnce guards starting and stopping, so a daemon that is detached twice
+	// does not close the database under a loop it already stopped.
+	bgStart sync.Once
+	bgStop  sync.Once
 	// agents is the catalogue this machine can offer; it holds no handles.
 	agents *agent.Catalog
 }
@@ -224,7 +295,68 @@ func New(cfg Config, spawn Spawner) *Daemon {
 	if err := d.relay.persistSeenTo(state); err != nil {
 		cfg.Log.Warn("cannot load the seen table", "err", err.Error())
 	}
+
+	// The queue and the outbox are built here rather than in Run so a test can
+	// enqueue a task and drain it through the same objects the daemon serves
+	// from. A database that failed to open leaves both nil: a daemon that
+	// cannot record a task must not start one, and every caller below checks.
+	if state != nil {
+		// The worker is built first because the queue's only notification hook
+		// points at it. Building them the other way round would need a forward
+		// reference or a second wake channel, and the hook is what makes "a task
+		// finished" reach the worker that stores its output.
+		effects, err := outbox.New(outbox.Config{Store: state, Log: cfg.Log})
+		if err != nil {
+			cfg.Log.Warn("cannot build the effect worker", "err", err.Error())
+		} else {
+			// The one effect this build produces: a run's output. It is
+			// registered here, next to the worker, so a reader can see every
+			// effect name in one place.
+			effects.Register(store.OutputEffect, storeOutputHandler(state))
+			d.effects = effects
+		}
+
+		queueCfg := orch.Config{
+			Store:    state,
+			Executor: cfg.TaskExecutor,
+			MaxRuns:  cfg.TaskMaxRuns,
+			Log:      cfg.Log,
+		}
+		if effects != nil {
+			// Every committed task change rings the worker: an effect queued by a
+			// finished run is owed now, and nothing else would tell the worker to
+			// look. The call is a non-blocking channel send, so it is safe from
+			// the orchestrator's own goroutine.
+			queueCfg.OnChange = effects.Wake
+		}
+
+		tasks, err := orch.New(queueCfg)
+		switch {
+		case err != nil:
+			cfg.Log.Warn("cannot build the task queue", "err", err.Error())
+		default:
+			d.tasks = tasks
+		}
+	}
 	return d
+}
+
+// storeOutputHandler runs the effect that stores what one run produced. It
+// decodes the payload the orchestrator queued and writes the body, replacing any
+// earlier copy of the same run: that is what makes the effect safe to re-run
+// after a crash between the write and its receipt.
+func storeOutputHandler(state *store.Store) outbox.Handler {
+	return func(ctx context.Context, payload json.RawMessage) error {
+		var out store.TaskOutputPayload
+		if err := json.Unmarshal(payload, &out); err != nil {
+			return fmt.Errorf("decode the output effect: %w", err)
+		}
+		return state.WriteTaskOutput(ctx, store.TaskOutput{
+			TaskID: out.TaskID,
+			Run:    out.Run,
+			Body:   out.Body,
+		})
+	}
 }
 
 // Addr reports the endpoint this daemon serves.
@@ -251,6 +383,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("listen on %s: %w", d.addr, err)
 	}
 	defer func() { _ = l.Close() }()
+
+	// The queue is repaired only once this process really serves the channel.
+	// Listen is what decides that: a daemon that lost the race must not have
+	// touched the queue at all, because parking a running row and running tasks
+	// belong to the daemon holding the lock, not to the one that just lost it.
+	d.startBackground()
 
 	go func() {
 		<-ctx.Done()
@@ -319,6 +457,12 @@ func (d *Daemon) Reattach(ctx context.Context) error {
 // Detach closes every host connection. The hosts keep running; only this
 // daemon's view of them goes away.
 func (d *Daemon) Detach() {
+	// The background loops stop first and are waited for: they read the
+	// database, and closing it under them would turn their next query into an
+	// error nobody asked for. The order is the same one Run's failure path
+	// takes, so a daemon that never listened shuts down the same way.
+	d.stopBackground()
+
 	d.mu.Lock()
 	fleet := d.fleet
 	d.fleet = Fleet{}
@@ -335,6 +479,119 @@ func (d *Daemon) Detach() {
 	}
 
 	d.relay.closeSeen()
+}
+
+// startBackground repairs the queue and starts the two loops that serve it. It
+// is safe to call twice: the second call does nothing.
+//
+// The repair is not optional and not deferred. A task left saying running is a
+// run whose outcome this build cannot vouch for; parking it is what stops the
+// next client's enqueue from sitting behind work that will never finish.
+func (d *Daemon) startBackground() {
+	d.bgStart.Do(func() {
+		if d.tasks == nil && d.effects == nil {
+			return
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		d.bgMu.Lock()
+		d.bgCancel = cancel
+		d.bgFailures = make(map[string]string)
+		d.bgMu.Unlock()
+
+		if d.tasks != nil {
+			recovered, err := d.tasks.Recover(ctx)
+			switch {
+			case err != nil:
+				d.cfg.Log.Warn("cannot repair the task queue", "err", err.Error())
+			case len(recovered) > 0:
+				d.cfg.Log.Warn("parked tasks the previous daemon died under",
+					"tasks", len(recovered))
+			}
+		}
+
+		// Each loop reports its own death. A daemon whose worker stopped is a
+		// daemon that is quietly not doing its job, and the failure rides in
+		// Status.Failures so a window can say so rather than showing a queue
+		// that never moves.
+		if d.effects != nil {
+			d.background.Add(1)
+			go func() {
+				defer d.background.Done()
+				if err := d.effects.Run(ctx); err != nil {
+					d.recordLoopFailure("effects", err)
+				}
+			}()
+		}
+
+		if d.tasks != nil {
+			d.background.Add(1)
+			go func() {
+				defer d.background.Done()
+				if err := d.tasks.Run(ctx); err != nil {
+					d.recordLoopFailure("tasks", err)
+				}
+			}()
+		}
+	})
+}
+
+// recordLoopFailure keeps what a stopped loop said, so a status report can show
+// it. It is a stop, not a crash, when the daemon is the one that cancelled the
+// loop: a stopped loop is not a failure to report.
+func (d *Daemon) recordLoopFailure(loop string, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	d.cfg.Log.Error("a background loop stopped", "loop", loop, "err", err.Error())
+
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+	if d.bgFailures == nil {
+		d.bgFailures = make(map[string]string)
+	}
+	d.bgFailures[loop] = err.Error()
+}
+
+// loopFailures reports what the background loops said when they stopped. It is
+// read by the status projection, which is the only place a person can see that
+// the queue is no longer being served.
+func (d *Daemon) loopFailures() []string {
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+
+	if len(d.bgFailures) == 0 {
+		return nil
+	}
+	// Sorted so two polls of an unchanged daemon report the same list: a status
+	// report that reordered itself would look like something happened.
+	names := make([]string, 0, len(d.bgFailures))
+	for name := range d.bgFailures {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, fmt.Sprintf("the %s loop stopped: %s", name, d.bgFailures[name]))
+	}
+	return out
+}
+
+// stopBackground stops the loops and waits for them. Safe to call twice, and
+// safe to call without a start: a daemon whose database failed to open has
+// nothing to stop.
+func (d *Daemon) stopBackground() {
+	d.bgStop.Do(func() {
+		d.bgMu.Lock()
+		cancel := d.bgCancel
+		d.bgMu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+		d.background.Wait()
+	})
 }
 
 // legacyLayout names where a build before the database kept its state, relative

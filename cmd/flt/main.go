@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
 	"github.com/f1shsmell/flotilla/internal/acp/replay"
@@ -128,9 +129,6 @@ func status(channel string, asJSON bool, out io.Writer) error {
 		return print(out, string(payload))
 	}
 
-	if len(st.Sessions) == 0 {
-		return print(out, "no sessions")
-	}
 	for _, s := range st.Sessions {
 		state := "unreachable"
 		if s.Reachable {
@@ -144,7 +142,66 @@ func status(channel string, asJSON bool, out io.Writer) error {
 			return err
 		}
 	}
+	if len(st.Sessions) == 0 {
+		if err := print(out, "no sessions"); err != nil {
+			return err
+		}
+	}
+
+	// The queue is printed after the fleet rather than folded into it: a task
+	// has no host and no window, and a caller scanning session ids must not meet
+	// one it cannot attach to. It is still printed when the fleet is empty,
+	// because a queue of unattended work is exactly what a daemon with no
+	// sessions is doing.
+	if len(st.Tasks) == 0 {
+		return nil
+	}
+	if err := print(out, ""); err != nil {
+		return err
+	}
+	for _, t := range st.Tasks {
+		cost := ""
+		if t.BudgetUSD > 0 {
+			cost = fmt.Sprintf("\t$%.4f/$%.2f", t.SpentUSD, t.BudgetUSD)
+		} else if t.SpentUSD > 0 {
+			cost = fmt.Sprintf("\t$%.4f", t.SpentUSD)
+		}
+		detail := t.LastError
+		if detail == "" {
+			detail = t.Prompt
+		}
+		if err := print(out, fmt.Sprintf("%s\t%s\t%s\truns=%d%s\t%s",
+			t.ID, t.Dialect, t.State, t.Runs, cost, oneLine(detail))); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// oneLine renders a task's prompt or error as a single line. A task carries
+// whole instructions and multi-line failures, and either would tear apart a
+// table that a person reads row by row.
+//
+// The cut is on a rune boundary, not a byte: half a multi-byte character is
+// invalid UTF-8, and a table that shows a replacement glyph where a word should
+// be is a table a reader stops trusting. A Chinese prompt hits this immediately.
+func oneLine(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	joined := strings.Join(fields, " ")
+	const limit = 100
+	if len(joined) <= limit {
+		return joined
+	}
+
+	// Back up to the start of the rune the cut landed inside.
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(joined[cut]) {
+		cut--
+	}
+	return joined[:cut] + "…"
 }
 
 // listAgents reports the agents a running daemon offers, with the switches the
