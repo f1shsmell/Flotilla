@@ -12,6 +12,7 @@ export const methods = {
     MethodStatus: "daemon.status",
   },
   session: {
+    MethodArchive: "session.archive",
     MethodAttach: "session.attach",
     MethodCancel: "session.cancel",
     MethodCommentAdd: "session.comment.add",
@@ -158,6 +159,7 @@ export const wireTypes = {
     "worktree_skipped": { go: "Skipped", type: "[]string", optional: true },
   },
   "daemon.Status": {
+    "archived": { go: "Archived", type: "[]session.ArchivedEntry", optional: true },
     "channel": { go: "Channel", type: "string" },
     "failures": { go: "Failures", type: "[]string", optional: true },
     "pid": { go: "PID", type: "int" },
@@ -204,6 +206,22 @@ export const wireTypes = {
     "session": { go: "Session", type: "string", optional: true },
     "token": { go: "Token", type: "string" },
     "version": { go: "Version", type: "int" },
+  },
+  "session.ArchiveRequest": {
+    "id": { go: "ID", type: "ID" },
+  },
+  "session.ArchiveResponse": {
+    "more": { go: "More", type: "bool", optional: true },
+    "session": { go: "Session", type: "ArchivedEntry" },
+    "updates": { go: "Updates", type: "[]UpdateMessage" },
+  },
+  "session.ArchivedEntry": {
+    "command": { go: "Command", type: "string", optional: true },
+    "dir": { go: "Dir", type: "string", optional: true },
+    "ended": { go: "Ended", type: "time.Time", optional: true },
+    "id": { go: "ID", type: "ID" },
+    "mode": { go: "Mode", type: "Mode", optional: true },
+    "started": { go: "Started", type: "time.Time", optional: true },
   },
   "session.AttachRequest": {
     "id": { go: "ID", type: "ID" },

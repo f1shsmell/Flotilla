@@ -28,6 +28,10 @@ const (
 	// MethodSessionStop ends a session from the control plane. A client that
 	// already attached asks its own connection instead; both reach the same end.
 	MethodSessionStop = session.MethodStop
+	// MethodSessionArchive reads a session that is over. The daemon answers it
+	// itself: the host that ran the agent is gone, and the log it left behind
+	// is the daemon's.
+	MethodSessionArchive = session.MethodArchive
 )
 
 func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, params json.RawMessage) (any, error) {
@@ -48,6 +52,8 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 		return d.startSession(ctx, params)
 	case MethodSessionStop:
 		return d.stopSession(ctx, params)
+	case MethodSessionArchive:
+		return d.archive(params)
 	case session.MethodAttach:
 		return d.attachClient(ctx, peer, params)
 	default:
@@ -92,6 +98,17 @@ func (d *Daemon) status(peer *ipc.Conn) Status {
 		diagnostics = ipc.Has(peer.PeerCapabilities(), ipc.CapabilityDiagnostics)
 	}
 
+	st := d.fleetStatus(client, diagnostics)
+	// The archive is read with the fleet lock released: it lists the disk, and
+	// a poll must not hold the fleet while a slow disk answers. It is a field of
+	// its own rather than a sixth lifecycle value — a finished run has no
+	// process, and folding it into `sessions` would let a reader act on it.
+	st.Archived = d.archivedEntries()
+	return st
+}
+
+// fleetStatus projects the sessions this daemon serves for one client.
+func (d *Daemon) fleetStatus(client string, diagnostics bool) Status {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -227,6 +244,11 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	d.fleet.Attachments = append(d.fleet.Attachments, att)
 	d.mu.Unlock()
 	d.watch(att)
+
+	// What this session is about is written down once it is running: the
+	// archive reads it after the host is gone, and a record taken before the
+	// spawn would claim a run that never started.
+	d.recordStart(req.ID, session.Mode(att.Info.Mode), att.Info.Command, att.Info.Dir)
 
 	d.cfg.Log.Info("session started",
 		"session", req.ID, "host_pid", att.Info.PID, "endpoint", endpoint.String(), "dir", dir)

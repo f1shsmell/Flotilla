@@ -630,6 +630,9 @@ func (d *Daemon) end(id session.ID, explicit bool) {
 	// The handle a finished session wrote through goes; the file it wrote stays,
 	// because "the agent is gone" is not "what the agent did did not happen".
 	d.releaseTranscript(id)
+	// A session that stops being served is a session that ended. The stamp is
+	// what lets the archive say when, instead of only that.
+	d.recordEnd(id)
 
 	// An explicit stop does not read the record first. On Windows a read that
 	// races the host's own removal fails with a sharing violation rather than
