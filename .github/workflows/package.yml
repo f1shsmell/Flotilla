@@ -2,6 +2,11 @@ name: package
 
 # Building an installer needs the Electron binary and NSIS, which a pull request
 # should not pay for. It runs when asked, and on a release tag.
+#
+# A tag that names a pre-release (`v0.1.0-preview.1`) packages the preview
+# channel and publishes a GitHub pre-release; a tag without one packages stable
+# and publishes a normal release. A manual run packages stable and publishes
+# nothing: it is a rehearsal, and the artefacts are the point.
 
 on:
   workflow_dispatch:
@@ -9,8 +14,10 @@ on:
     tags:
       - "v*"
 
+# Publishing a release writes to the repository, which the default read-only
+# token does not allow.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: package-${{ github.ref }}
@@ -41,9 +48,31 @@ jobs:
       - name: install
         run: pnpm --dir gui install --frozen-lockfile
 
-      # The window, the Go binaries it spawns, and the NSIS installer.
+      # The channel decides the packaging identity, the embedded version and the
+      # pipe/home namespace. It is derived once here so every later step agrees.
+      - name: resolve the channel
+        id: channel
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "push" -and $tag -match "-preview\.") {
+            "channel=preview" >> $env:GITHUB_OUTPUT
+            "prerelease=true"  >> $env:GITHUB_OUTPUT
+          } else {
+            "channel=stable"   >> $env:GITHUB_OUTPUT
+            "prerelease=false" >> $env:GITHUB_OUTPUT
+          }
+
+      # The window, the Go binaries it spawns (stamped with this channel's
+      # version), and the NSIS installer.
       - name: build the installer
-        run: pnpm --dir gui dist
+        shell: pwsh
+        run: |
+          if ("${{ steps.channel.outputs.channel }}" -eq "preview") {
+            pnpm --dir gui dist:preview
+          } else {
+            pnpm --dir gui dist
+          }
 
       # An installer without the binaries the window spawns looks complete and
       # is useless; the check is one path away from the artefact.
@@ -53,8 +82,52 @@ jobs:
           $bin = "gui/release/win-unpacked/resources/bin/flt-daemon.exe"
           if (-not (Test-Path $bin)) { throw "the installer is missing $bin" }
 
+      # The binaries must report the version the installer claims: a release
+      # whose daemon says 0.0.0-dev cannot be diagnosed from a bug report.
+      - name: the binaries carry the release version
+        shell: pwsh
+        run: |
+          $channel = "${{ steps.channel.outputs.channel }}"
+          $version = (node scripts/print-version.mjs $channel).Trim()
+          $reported = (& "gui/release/win-unpacked/resources/bin/flt-daemon.exe" --version).Trim()
+          Write-Host "daemon reports $reported, packaging identity is $version"
+          if ($reported -ne $version) { throw "the daemon reports $reported, the installer is $version" }
+
       - uses: actions/upload-artifact@v7
         with:
           name: flotilla-installer
           path: gui/release/*.exe
           if-no-files-found: error
+
+      # The notices ship with the release, so a stale copy is a licence claim
+      # nobody checked. Regenerating and comparing is what makes the committed
+      # file trustworthy: it must describe this commit's module graph.
+      - name: the committed notices describe this commit
+        shell: bash
+        run: |
+          bash scripts/third-party-notices.sh "$RUNNER_TEMP/notices.md"
+          if ! diff -q THIRD-PARTY-NOTICES.md "$RUNNER_TEMP/notices.md" >/dev/null; then
+            echo "THIRD-PARTY-NOTICES.md is stale: rerun scripts/third-party-notices.sh and commit it"
+            diff THIRD-PARTY-NOTICES.md "$RUNNER_TEMP/notices.md" || true
+            exit 1
+          fi
+
+      - name: publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $channel = "${{ steps.channel.outputs.channel }}"
+          $version = (node scripts/print-version.mjs $channel).Trim()
+          # node prints one line per note; PowerShell captures that as an array,
+          # and `gh --notes` needs one string.
+          $notes = (node scripts/release-notes.mjs $version) -join "`n"
+          $args = @("release", "create", $tag, "--title", $tag, "--notes", $notes)
+          if ("${{ steps.channel.outputs.prerelease }}" -eq "true") {
+            $args += "--prerelease"
+          }
+          $args += (Get-ChildItem gui/release/*.exe | ForEach-Object { $_.FullName })
+          $args += "$RUNNER_TEMP/notices.md"
+          gh @args

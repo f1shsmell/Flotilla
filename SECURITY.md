@@ -4,8 +4,8 @@
 
 | Version | Security support |
 | --- | --- |
-| Latest 0.x release (stable channel) | Supported |
-| Preview channel | Best effort |
+| 0.1.x (stable channel) | Supported |
+| Preview channel (`-preview.N`) | Best effort |
 | Older releases, forks, modified builds | Not covered unless reproducible upstream |
 
 ## Reporting a Vulnerability
