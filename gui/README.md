@@ -19,6 +19,8 @@ electron/window.ts   the BrowserWindow settings: the security switches, offscree
 electron/smoke.ts    offscreen run that drives the real UI (FLT_GUI_SMOKE)
 src/store.ts         pure folding of the wire into what the view renders
 src/App.tsx          one store, components project it; updates flush on a frame
+src/components/LogView.tsx      the log a live session and a finished run both render
+src/components/ArchiveView.tsx  a finished run, read-only: no composer, no stop
 ```
 
 ## Scripts
