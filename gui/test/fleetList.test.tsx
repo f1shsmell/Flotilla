@@ -27,7 +27,14 @@ const sessions: StatusEntry[] = [
 
 function list(entries: StatusEntry[] = sessions): string {
   return renderToStaticMarkup(
-    <FleetList sessions={entries} selected="sess-a" onSelect={() => {}} onStop={() => {}} />,
+    <FleetList
+      sessions={entries}
+      archived={[]}
+      selected="sess-a"
+      onSelect={() => {}}
+      onStop={() => {}}
+      onSelectArchived={() => {}}
+    />,
   );
 }
 

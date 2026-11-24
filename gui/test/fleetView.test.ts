@@ -8,12 +8,12 @@ function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true
 }
 
 function status(sessions: StatusEntry[]): Status {
-  return { channel: "stable", pid: 7, ready: true, sessions, failures: [] };
+  return { channel: "stable", pid: 7, ready: true, sessions, archived: [], failures: [] };
 }
 
 describe("fleetSummary", () => {
   it("reads zero from a fleet that has not arrived", () => {
-    expect(fleetSummary(null)).toEqual({ total: 0, reachable: 0, attention: 0 });
+    expect(fleetSummary(null)).toEqual({ total: 0, reachable: 0, attention: 0, archived: 0 });
   });
 
   it("counts reachability and attention separately", () => {
@@ -24,7 +24,7 @@ describe("fleetSummary", () => {
       entry("d", "idle", false),
       entry("e", "unknown"),
     ]);
-    expect(fleetSummary(fleet)).toEqual({ total: 5, reachable: 4, attention: 2 });
+    expect(fleetSummary(fleet)).toEqual({ total: 5, reachable: 4, attention: 2, archived: 0 });
   });
 
   it("does not call quiet work attention: only blocked and done ask for the user", () => {

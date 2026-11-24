@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld("flotilla", {
   stop: (sessionId: string) => ipcRenderer.invoke("flotilla:stop", sessionId),
   detach: (sessionId: string) => ipcRenderer.invoke("flotilla:detach", sessionId),
   open: (sessionId: string) => ipcRenderer.invoke("flotilla:open", sessionId),
+  // archive reads a session that is over. It is a different call from open on
+  // purpose: open attaches a live session, and this one cannot.
+  archive: (sessionId: string) => ipcRenderer.invoke("flotilla:archive", sessionId),
   prompt: (sessionId: string, text: string) =>
     ipcRenderer.invoke("flotilla:prompt", sessionId, text),
   seen: (sessionId: string) => ipcRenderer.invoke("flotilla:seen", sessionId),

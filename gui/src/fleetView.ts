@@ -7,16 +7,20 @@ export interface FleetSummary {
   total: number;
   reachable: number;
   attention: number;
+  // archived counts finished runs. They are not sessions: the summary keeps
+  // them apart so a footer cannot read "3 sessions" when one of them is a log.
+  archived: number;
 }
 
 export function fleetSummary(status: Status | null): FleetSummary {
   if (status === null) {
-    return { total: 0, reachable: 0, attention: 0 };
+    return { total: 0, reachable: 0, attention: 0, archived: 0 };
   }
   return {
     total: status.sessions.length,
     reachable: status.sessions.filter((session) => session.reachable).length,
     attention: status.sessions.filter((session) => needsAttention(session.lifecycle)).length,
+    archived: status.archived.length,
   };
 }
 

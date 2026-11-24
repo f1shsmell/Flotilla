@@ -9,7 +9,7 @@ function entry(id: string, lifecycle: StatusEntry["lifecycle"], reachable = true
 }
 
 function status(sessions: StatusEntry[]): Status {
-  return { channel: "stable", pid: 4242, ready: true, sessions, failures: [] };
+  return { channel: "stable", pid: 4242, ready: true, sessions, archived: [], failures: [] };
 }
 
 describe("StatusBar", () => {

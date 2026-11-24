@@ -459,3 +459,72 @@ button.link:hover:not(:disabled) {
   box-shadow: none;
   text-decoration: underline;
 }
+
+/* Finished runs sit under the live fleet, quieter than any session card: they
+   are a record, and a record must not compete with work that still needs the
+   user. The heading and the caption carry the one fact the cards cannot. */
+.archive {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.archive-heading {
+  margin: 0;
+  font-size: var(--fs-tiny);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.archive-caption {
+  margin: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--fs-tiny);
+}
+
+/* An archived card is read-only, so it carries no hover lift and no stop: the
+   only affordance is opening the log. */
+.session-row.archived {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.session-row.archived:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--line-strong);
+  opacity: 1;
+}
+
+.session-row.archived.selected {
+  border-style: solid;
+  border-color: var(--primary);
+  opacity: 1;
+}
+
+.rail-ended {
+  background: var(--line-strong);
+}
+
+.badge.ended {
+  color: var(--muted);
+  background: var(--sunken);
+}
+
+.turn-pill.life-ended {
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+/* The archive's own notice: it is the one line a reader must not miss, so it
+   sits above the log rather than inside it. */
+.archive-notice {
+  margin: 0;
+}
+
+.archive-bounds {
+  margin: 0;
+  font-size: var(--fs-tiny);
+}
+

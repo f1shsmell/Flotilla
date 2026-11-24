@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentSettings } from "./components/AgentSettings";
+import { ArchiveView } from "./components/ArchiveView";
 import { BrandMark } from "./components/Brand";
 import { FleetList } from "./components/FleetList";
 import { HarborEmpty } from "./components/HarborEmpty";
@@ -83,6 +84,10 @@ export function App(): React.ReactElement {
   // settings the picker sends the user to when nothing installed matches.
   const [route, setRoute] = useState<"session" | "agents">("session");
   const [selected, setSelected] = useState<string | null>(null);
+  // archivedId is the finished run on screen. It is its own field rather than a
+  // second meaning for `selected`: a live session and a log are read by
+  // different calls, and one id cannot say which view to build.
+  const [archivedId, setArchivedId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const [session, setSession] = useState<SessionState | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -349,6 +354,9 @@ export function App(): React.ReactElement {
     // would hide the session the user just asked for.
     setRoute("session");
     setComposing(false);
+    // A live session replaces the log on screen: two views of two sessions in
+    // one pane would leave the header describing neither.
+    setArchivedId(null);
 
     const previous = selectedId.current;
     if (previous !== null && previous !== id) {
@@ -510,6 +518,26 @@ export function App(): React.ReactElement {
     [open, refresh],
   );
 
+  // Opening a finished run leaves whatever live session was on screen. The
+  // detach is the same one a switch between sessions does: the host keeps
+  // running, and this window simply stops watching it.
+  const openArchived = useCallback((id: string) => {
+    setRoute("session");
+    setComposing(false);
+
+    const previous = selectedId.current;
+    if (previous !== null) {
+      void window.flotilla.detach(previous);
+      selectedId.current = null;
+      terminalWrite.current = null;
+      pendingOutput.current = [];
+      setSelected(null);
+      setSession(null);
+    }
+    setOpenError(null);
+    setArchivedId(id);
+  }, []);
+
   // Stopping clears the view when it was showing that session: the log it held
   // has no host behind it any more, so keeping it on screen would be a lie.
   const stop = useCallback(async (id: string) => {
@@ -616,9 +644,11 @@ export function App(): React.ReactElement {
 
         <FleetList
           sessions={fleet?.sessions ?? []}
-          selected={selected}
+          archived={fleet?.archived ?? []}
+          selected={archivedId ?? selected}
           onSelect={(id) => void open(id)}
           onStop={(id) => void stop(id)}
+          onSelectArchived={openArchived}
         />
       </aside>
 
@@ -657,6 +687,21 @@ export function App(): React.ReactElement {
               // the next measure sends the new one.
               void window.flotilla.resize(session.id, cols, rows).catch(() => {});
             }}
+          />
+        ) : archivedId !== null ? (
+          <ArchiveView
+            key={archivedId}
+            entry={
+              fleet?.archived.find((run) => run.id === archivedId) ?? {
+                id: archivedId,
+                mode: "",
+                command: "",
+                dir: "",
+                started: "",
+                ended: "",
+              }
+            }
+            onBack={() => setArchivedId(null)}
           />
         ) : (
           <HarborEmpty mode={composing ? "compose" : mainEmpty(fleet)}>
