@@ -9,11 +9,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// canonical resolves every link along path, including the junctions Windows
-// uses where a symlink would need a privilege. EvalSymlinks stops at a
-// junction, and a junction is exactly the escape a containment check has to
-// catch.
-func canonical(path string) (string, error) {
+// Canonical resolves every link along path to the one spelling the filesystem
+// keeps: the long name, with junctions and symlinks followed. EvalSymlinks
+// stops at a junction and leaves short names alone, and either is exactly the
+// escape a containment check has to catch.
+func Canonical(path string) (string, error) {
 	pointer, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return "", fmt.Errorf("encode %q: %w", path, err)

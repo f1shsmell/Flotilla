@@ -4,7 +4,8 @@ package worktree
 
 import "path/filepath"
 
-// canonical resolves every link along path.
-func canonical(path string) (string, error) {
+// Canonical resolves every link along path to the one spelling the filesystem
+// keeps.
+func Canonical(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
 }

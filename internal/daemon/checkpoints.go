@@ -13,6 +13,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/gitops"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
+	"github.com/f1shsmell/flotilla/internal/worktree"
 )
 
 // errCheckpointNeedsAgent reports checkpoints asked for on a session whose mode
@@ -139,9 +140,41 @@ func (d *Daemon) checkoutHolderUnderLock(id session.ID, root string) session.ID 
 	return ""
 }
 
-// within reports whether child is parent or below it. A session started in a
-// subdirectory is as affected by a rollback as one at the root.
+// within reports whether child is parent or below it. One checkout can be
+// spelled more than one way — a short name, a junction — so a spelling
+// difference is resolved through the filesystem before it reads as two trees.
 func within(parent, child string) bool {
+	if relWithin(parent, child) {
+		return true
+	}
+	resolvedParent, ok := resolvePath(parent)
+	if !ok {
+		return false
+	}
+	resolvedChild, ok := resolvePath(child)
+	if !ok {
+		return false
+	}
+	return relWithin(resolvedParent, resolvedChild)
+}
+
+// resolvePath gives the spelling the filesystem keeps for a path that exists:
+// absolute, with short names expanded and junctions and symlinks followed.
+func resolvePath(path string) (string, bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	resolved, err := worktree.Canonical(abs)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// relWithin reports whether child is parent or below it as written; a session
+// started in a subdirectory is as affected by a rollback as one at the root.
+func relWithin(parent, child string) bool {
 	parent = filepath.Clean(parent)
 	child = filepath.Clean(child)
 	if runtime.GOOS == "windows" {

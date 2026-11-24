@@ -216,7 +216,7 @@ func copyFile(src, dest string) error {
 // exist is resolved as far as it goes, which is what a containment check needs:
 // a link that points outside the repository is exactly the escape to catch.
 func resolve(path string) string {
-	if resolved, err := canonical(path); err == nil {
+	if resolved, err := Canonical(path); err == nil {
 		return resolved
 	}
 

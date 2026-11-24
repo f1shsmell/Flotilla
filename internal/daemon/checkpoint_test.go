@@ -222,6 +222,34 @@ func TestARollbackIsRefusedWhileAnotherSessionUsesTheCheckout(t *testing.T) {
 	}
 }
 
+// TestWithinSeesThroughTheSpellingsOfOneDirectory pins the comparison the shared
+// checkout is refused on: one directory has more than one spelling — a junction
+// on Windows, a symlink elsewhere — and a spelling difference must not read as
+// two trees.
+func TestWithinSeesThroughTheSpellingsOfOneDirectory(t *testing.T) {
+	root := t.TempDir()
+	alias := aliasSpelling(t, root)
+
+	below := filepath.Join(root, "work")
+	if err := os.MkdirAll(below, 0o755); err != nil {
+		t.Fatalf("create a subdirectory: %v", err)
+	}
+
+	same := []struct{ parent, child string }{
+		{root, alias},
+		{alias, root},
+		{alias, below},
+	}
+	for _, c := range same {
+		if !within(c.parent, c.child) {
+			t.Fatalf("within(%q, %q) is false: the two spellings name one directory", c.parent, c.child)
+		}
+	}
+	if within(below, alias) {
+		t.Fatalf("within(%q, %q) is true: the root is not below its own subdirectory", below, alias)
+	}
+}
+
 // TestARollbackIsRefusedWhileTheTurnRuns keeps a destructive rewrite away from
 // a tree an agent may be writing: the state is the only thing that says the
 // turn is over.
