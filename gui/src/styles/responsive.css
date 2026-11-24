@@ -1,0 +1,45 @@
+/* Window sizes. The window refuses anything under 720×480 (electron/window.ts),
+   so these steps are about giving the session pane its room back rather than
+   hiding controls: the fleet column narrows, and the diff's file list moves
+   above its patch instead of both sharing a third of the width.
+
+   This file is imported last on purpose. A media query overrides an earlier
+   rule of equal specificity, but only if it comes later in the cascade: put
+   these in fleet.css and diff.css would win them back. */
+
+@media (max-width: 1080px) {
+  :root {
+    --fleet-width: 264px;
+  }
+}
+
+@media (max-width: 900px) {
+  :root {
+    --fleet-width: 232px;
+  }
+
+  .fleet,
+  .session,
+  .agent-settings-overlay {
+    padding: var(--sp-4);
+  }
+
+  /* Two columns become one: a file list and a patch both cramped is worse than
+     a list over a patch. The list keeps a bounded height, so the patch is on
+     screen without scrolling past every filename. */
+  .diff-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .diff-files {
+    max-height: 168px;
+  }
+
+  /* The composer's hint is the first thing to go when the bar is narrow: it
+     repeats what the field's own placeholder already says, and the controls
+     beside it are the ones the user actually presses. */
+  .composer-hint {
+    display: none;
+  }
+}

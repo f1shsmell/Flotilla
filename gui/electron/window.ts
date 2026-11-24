@@ -16,6 +16,11 @@ export interface Placement {
 export interface Setup {
   width: number;
   height: number;
+  // minWidth and minHeight keep the window from being dragged into a size the
+  // layout cannot serve: two columns and a composer need room, and a window
+  // narrower than the floor would hide controls rather than reflow them.
+  minWidth: number;
+  minHeight: number;
   backgroundColor: string;
   show: boolean;
   x?: number;
@@ -35,6 +40,11 @@ export function windowSetup(dirname: string, at: Placement): Setup {
   return {
     width: at.width,
     height: at.height,
+    // The floor is where the two-column layout stops working: below it the
+    // session pane would be narrower than a terminal's minimum. The window
+    // refuses the size instead of the layout hiding a control.
+    minWidth: 720,
+    minHeight: 480,
     backgroundColor: "#f6f4ee",
     show: false,
     // A desktop window opens where the user left it; a smoke window offscreen,

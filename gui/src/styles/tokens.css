@@ -83,4 +83,26 @@
 
   /* The fleet column. */
   --fleet-width: 320px;
+
+  /* Motion. One vocabulary for the whole shell, so the same kind of change
+     reads the same everywhere: a card arriving, a panel covering a view and a
+     badge changing state all use the shared curves below rather than each
+     inventing a duration.
+
+     The curves are the three verbs of the interface:
+       --ease-out    something arrives (fast, then settles)
+       --ease-in     something leaves (goes quietly, gets out of the way)
+       --ease-move   something travels or is dragged (no overshoot, no bounce,
+                     so an interrupted move can be picked up mid-flight)
+     A press or a hover is answered in under a tenth of a second; a whole view
+     change finishes inside 380ms. Anything slower is decoration. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.2, 0, 0, 1);
+
+  --dur-press: 90ms;
+  --dur-hover: 140ms;
+  --dur-state: 200ms;
+  --dur-enter: 280ms;
+  --dur-view: 380ms;
 }

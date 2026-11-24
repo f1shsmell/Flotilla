@@ -65,6 +65,13 @@
   font-family: var(--mono);
 }
 
+/* Counts change while you watch. Tabular figures keep the row from twitching
+   every time a number gains a digit — the change itself needs no animation,
+   because the number is the point. */
+.status-bar {
+  font-variant-numeric: tabular-nums;
+}
+
 .status-bar .attention {
   color: var(--warn);
   font-weight: 600;
@@ -117,7 +124,9 @@
 }
 
 /* Cards arrive once, in order, when the fleet lands: a one-shot entrance, not
-   a loop. The delay rides a custom property so the stagger is per row. */
+   a loop. The delay rides a custom property so the stagger is per row. It
+   arrives without moving the layout: opacity and a 4px lift, nothing that
+   reflows the column. */
 @keyframes card-in {
   from {
     opacity: 0;
@@ -134,8 +143,13 @@
   grid-template-columns: 1fr auto;
   gap: var(--sp-1);
   align-items: center;
-  animation: card-in 280ms ease-out backwards;
-  animation-delay: calc(var(--i, 0) * 45ms);
+  /* Anchors the armed Stop's question, which is painted over the ghost. */
+  position: relative;
+  animation: card-in var(--dur-enter) var(--ease-out) backwards;
+  /* The stagger is capped: a fleet of fifty would otherwise take 1.7s before
+     its last card appeared, which reads as a slow window rather than as an
+     entrance. Past the sixth card the delay stops growing. */
+  animation-delay: calc(min(var(--i, 0), 6) * 35ms);
 }
 
 .session-row {
@@ -154,7 +168,11 @@
   padding: var(--sp-3) var(--sp-4);
   position: relative;
   overflow: hidden;
-  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  /* The lift on hover is a move, so it uses the move curve and stops short of
+     the border colour change, which goes through the same ease. */
+  transition: border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    transform var(--dur-hover) var(--ease-move);
 }
 
 .session-row:hover:not(:disabled) {
@@ -177,7 +195,9 @@
   bottom: 0;
   width: 4px;
   background: var(--muted);
-  transition: background-color 200ms ease;
+  /* The rail is the state's colour. When a session goes blocked, this bar
+     eases into amber instead of snapping, so the change is followable. */
+  transition: background-color var(--dur-state) var(--ease-out);
 }
 
 .rail-blocked {
@@ -258,6 +278,57 @@
   box-shadow: none;
 }
 
+/* The ghost is the quiet Stop, still laid out while the question is up: it is
+   what gives the row's second column its width. Invisible and untabbable, it
+   occupies space and answers nothing. */
+.session-stop-ghost {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* The armed stop replaces the quiet control with a question, painted over the
+   ghost's place so the card's width does not change. */
+.session-stop-confirm {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  padding-left: var(--sp-2);
+  /* The card's own surface, so the ghost underneath does not show through the
+     gap between the two buttons. */
+  background: var(--panel);
+  animation: view-in var(--dur-hover) var(--ease-out);
+}
+
+.session-stop.armed {
+  font-size: var(--fs-tiny);
+  padding: 2px var(--sp-2);
+  background: var(--down);
+  border-color: var(--down);
+  color: var(--panel);
+  opacity: 1;
+  font-weight: 600;
+}
+
+.session-stop.armed:hover:not(:disabled) {
+  background: var(--down);
+  border-color: var(--down);
+  color: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.session-stop-cancel {
+  font-size: var(--fs-tiny);
+  padding: 2px var(--sp-2);
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
 /* Badges are pills of tinted paper with a signal dot: colour and shape carry
    the state together, so it survives a greyscale read. */
 .badge {
@@ -270,7 +341,10 @@
   padding: 1px var(--sp-3);
   border-radius: var(--r-pill);
   white-space: nowrap;
-  transition: background-color 200ms ease, color 200ms ease;
+  /* A badge's colour is its state. Easing it means a session turning blocked
+     or done is a change the eye can follow, not a flicker. */
+  transition: background-color var(--dur-state) var(--ease-out),
+    color var(--dur-state) var(--ease-out);
 }
 
 .badge-dot {
@@ -528,3 +602,19 @@ button.link:hover:not(:disabled) {
   font-size: var(--fs-tiny);
 }
 
+
+
+/* The form's own answer to a grey Start: it sits right under the button, in the
+   same column, so the reason is where the user is looking. */
+.new-session-hint {
+  margin: 0;
+  font-size: var(--fs-tiny);
+}
+
+/* The worktree section's own head: a label and the way back out. It sits above
+   the two fields it names, so the section reads as one thing rather than as two
+   inputs that happened to appear. */
+.worktree-head {
+  align-items: baseline;
+  justify-content: space-between;
+}
