@@ -21,7 +21,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
 
@@ -426,10 +426,17 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 		return fmt.Errorf("resolve state paths: %w", err)
 	}
 
-	store := transcript.NewStore(filepath.Join(paths.Sessions, "transcripts"))
-	defer func() { _ = store.Close() }()
+	// The daemon writes its state to one database; this reads the same file, so
+	// an export sees what a running daemon recorded. A read-only open would be
+	// kinder to a live daemon, but the store's own migration needs a write when
+	// it is the first thing to touch the file.
+	state, err := store.Open(filepath.Join(paths.Sessions, "state.db"))
+	if err != nil {
+		return fmt.Errorf("open the state database: %w", err)
+	}
+	defer func() { _ = state.Close() }()
 
-	page, err := store.Page(id, transcript.Window{})
+	page, err := state.TranscriptPage(context.Background(), id, store.TranscriptWindow{})
 	if err != nil {
 		return fmt.Errorf("read the log of session %q: %w", id, err)
 	}

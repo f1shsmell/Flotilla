@@ -1,13 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // historyTail is how many updates a window gets when it asks for a session's
@@ -40,13 +41,19 @@ func (d *Daemon) recordUpdate(id session.ID, params json.RawMessage) (json.RawMe
 	if err := json.Unmarshal(params, &msg); err != nil {
 		return params, true
 	}
+	if d.state == nil {
+		// A daemon without its database still relays the live update: the
+		// window's present is worth more than a gap in a log that has nowhere
+		// to go.
+		return params, true
+	}
 
-	seq, err := d.transcripts.Append(string(id), msg.HostSeq, params)
+	seq, err := d.state.AppendTranscript(context.Background(), string(id), msg.HostSeq, params)
 	switch {
 	case err == nil:
-	case errors.Is(err, transcript.ErrTrimmed):
+	case errors.Is(err, store.ErrTrimmed):
 		return nil, false
-	case errors.Is(err, transcript.ErrDuplicate):
+	case errors.Is(err, store.ErrDuplicate):
 		// Stored already; the copy keeps the sequence it was first given.
 	case err != nil:
 		d.cfg.Log.Warn("cannot store an agent update", "session", id, "err", err.Error())
@@ -88,7 +95,7 @@ func (d *Daemon) readHistory(id session.ID, req session.HistoryRequest) ([]sessi
 		tail = historyTail
 	}
 
-	page, err := d.transcripts.Page(string(id), transcript.Window{
+	page, err := d.state.TranscriptPage(context.Background(), string(id), store.TranscriptWindow{
 		After:  req.After,
 		Tail:   tail,
 		Budget: historyBudget,
@@ -109,12 +116,4 @@ func (d *Daemon) readHistory(id session.ID, req session.HistoryRequest) ([]sessi
 		updates = append(updates, msg)
 	}
 	return updates, page.More, nil
-}
-
-// releaseTranscript closes the handle a finished session's log was written
-// through. The file stays: the session is gone, what it did is not.
-func (d *Daemon) releaseTranscript(id session.ID) {
-	if err := d.transcripts.Release(string(id)); err != nil {
-		d.cfg.Log.Debug("cannot release a transcript", "session", id, "err", err.Error())
-	}
 }

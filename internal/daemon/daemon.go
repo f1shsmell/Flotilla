@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"github.com/f1shsmell/flotilla/internal/agent"
-	"github.com/f1shsmell/flotilla/internal/comments"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
-	"github.com/f1shsmell/flotilla/internal/transcript"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // errUnknownMethod reports a call this daemon does not serve.
@@ -156,15 +155,12 @@ type Daemon struct {
 	// baselines is the commit each session started at, which is what the turn
 	// scope compares against. It is memory only: a daemon restart forgets it.
 	baselines map[session.ID]string
-	// comments are the reviewer's notes, which outlive the daemon. They sit
-	// beside the session records: both are the daemon's per-session state, and
-	// the registry skips a directory when it scans for records.
-	comments comments.Store
-	// transcripts are the agent updates of every session this daemon has seen,
-	// kept on disk. They are the daemon's because it is the only process that
-	// sees each update exactly once, and because a log has to outlive the host
-	// that produced it.
-	transcripts *transcript.Store
+	// state is the daemon's durable state: the transcript of every session it
+	// has seen, the reviewer's notes, the seen table and the events behind
+	// them. It is the daemon's because it is the only process that sees each
+	// update exactly once, and because all of it has to outlive the host that
+	// produced it.
+	state *store.Store
 	// agents is the catalogue this machine can offer; it holds no handles.
 	agents *agent.Catalog
 }
@@ -182,6 +178,31 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		configDir = filepath.Join(cfg.StateDir, "config")
 	}
 
+	// The database is the daemon's state. A store that cannot be opened is not
+	// something a daemon can serve around: every read below needs it.
+	state, err := store.Open(filepath.Join(cfg.StateDir, "state.db"))
+	if err != nil {
+		cfg.Log.Error("cannot open the state database", "err", err.Error())
+		state = nil
+	}
+
+	// A build before the database kept its state in files beside it. They are
+	// imported once, on the first start of a build that has a database, and
+	// left in place afterwards: a user's history is not something an importer
+	// is trusted to move.
+	if state != nil {
+		report, err := state.Migrate(context.Background(), legacyLayout(cfg.StateDir))
+		switch {
+		case err != nil:
+			cfg.Log.Warn("cannot import the pre-database state", "err", err.Error())
+		case report.Ran:
+			cfg.Log.Info("imported the pre-database state",
+				"transcripts", report.Transcripts, "clients", report.Clients,
+				"seen", report.Seen, "comments", report.Comments,
+				"problems", len(report.Problems))
+		}
+	}
+
 	d := &Daemon{
 		cfg:   cfg,
 		reg:   session.NewRegistry(cfg.StateDir),
@@ -193,15 +214,14 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		relay: newRelay(func(err error) {
 			cfg.Log.Debug("deliver a queued frame failed", "err", err.Error())
 		}),
-		baselines:   make(map[session.ID]string),
-		comments:    comments.NewStore(filepath.Join(cfg.StateDir, "comments")),
-		transcripts: transcript.NewStore(filepath.Join(cfg.StateDir, "transcripts")),
-		agents:      agent.New(configDir),
+		baselines: make(map[session.ID]string),
+		state:     state,
+		agents:    agent.New(configDir),
 	}
-	// A read turn stays read across a daemon restart: the seen table lives on
-	// disk beside the records it annotates. A table that cannot be read is a
-	// warning, not a refusal to serve.
-	if err := d.relay.persistSeenTo(filepath.Join(cfg.StateDir, "seen.json")); err != nil {
+	// A read turn stays read across a daemon restart: the seen table is loaded
+	// from the database beside the records it annotates. A table that cannot be
+	// read is a warning, not a refusal to serve.
+	if err := d.relay.persistSeenTo(state); err != nil {
 		cfg.Log.Warn("cannot load the seen table", "err", err.Error())
 	}
 	return d
@@ -306,12 +326,24 @@ func (d *Daemon) Detach() {
 
 	fleet.Close()
 
-	// The transcript handles go with the daemon. On Windows a file still open
-	// when the process exits is left to the cleanup of a machine that may not
-	// come back; the logs themselves stay, which is the point of writing them.
-	if err := d.transcripts.Close(); err != nil {
-		d.cfg.Log.Debug("cannot close the transcripts", "err", err.Error())
+	// The database closes with the daemon. WAL leaves the data on disk; the
+	// handle going is what lets a later start open it cleanly on Windows.
+	if d.state != nil {
+		if err := d.state.Close(); err != nil {
+			d.cfg.Log.Debug("cannot close the state database", "err", err.Error())
+		}
 	}
 
 	d.relay.closeSeen()
+}
+
+// legacyLayout names where a build before the database kept its state, relative
+// to the daemon's state directory. It is one function because the importer and
+// the test that seeds those files have to agree on the same paths.
+func legacyLayout(stateDir string) store.LegacyLayout {
+	return store.LegacyLayout{
+		Transcripts: filepath.Join(stateDir, "transcripts"),
+		Seen:        filepath.Join(stateDir, "seen.json"),
+		Comments:    filepath.Join(stateDir, "comments"),
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/gitops"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/session"
+	"github.com/f1shsmell/flotilla/internal/store"
 )
 
 // ErrUnknownSession reports an attach for a session this daemon does not serve.
@@ -53,10 +54,11 @@ type relay struct {
 	// returns, so without a bound a long-lived daemon would keep one entry per
 	// launch forever.
 	present map[string]struct{}
-	// seenPath names the file the seen table is kept in; empty means memory
-	// only. The writer goroutine owns the file, waking on seenWake and taking
-	// its final snapshot when seenStop closes.
-	seenPath string
+	// state is the database the seen table is kept in; nil means memory only,
+	// which is what a relay built by a test without a store gets. The writer
+	// goroutine owns the write, waking on seenWake and taking its final
+	// snapshot when seenStop closes.
+	state    *store.Store
 	seenWake chan struct{}
 	seenStop chan struct{}
 	seenDone chan struct{}
@@ -384,9 +386,21 @@ func (d *Daemon) readDiff(ctx context.Context, id session.ID, params json.RawMes
 
 // listComments returns a session's notes, oldest first.
 func (d *Daemon) listComments(id session.ID) (any, error) {
-	list, err := d.comments.List(string(id))
+	if d.state == nil {
+		return session.CommentListResponse{Comments: nil}, nil
+	}
+	stored, err := d.state.Comments(context.Background(), string(id))
 	if err != nil {
 		return nil, fmt.Errorf("list the comments of session %q: %w", id, err)
+	}
+	// The wire type is the contract the GUI reads; the store's own type stays
+	// internal, so one of them converts here rather than both drifting.
+	list := make([]comments.Comment, 0, len(stored))
+	for _, c := range stored {
+		list = append(list, comments.Comment{
+			ID: c.ID, Path: c.Path, Line: c.Line,
+			Side: comments.Side(c.Side), Text: c.Text, Author: c.Author, At: c.At,
+		})
 	}
 	return session.CommentListResponse{Comments: list}, nil
 }
@@ -397,14 +411,39 @@ func (d *Daemon) addComment(id session.ID, params json.RawMessage) (any, error) 
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", session.MethodCommentAdd, err)
 	}
+	if d.state == nil {
+		return nil, fmt.Errorf("%s on session %q: no state database", session.MethodCommentAdd, id)
+	}
 
-	added, err := d.comments.Add(string(id), comments.Comment{
+	commentID, err := comments.NewID()
+	if err != nil {
+		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentAdd, id, err)
+	}
+
+	added := comments.Comment{
+		ID:   commentID,
 		Path: req.Path,
 		Line: req.Line,
 		Side: comments.Side(req.Side),
 		Text: req.Text,
-	})
-	if err != nil {
+		// The old file store filled these two in, and a client that receives a
+		// note without an author cannot tell a person's note from the agent's.
+		// UTC matches what that store wrote, so a comment read after the
+		// upgrade compares equal to one written before it.
+		Author: "user",
+		At:     time.Now().UTC(),
+	}
+	if err := d.state.AddComment(context.Background(), string(id), store.Comment{
+		ID: added.ID, Path: added.Path, Line: added.Line,
+		Side: string(added.Side), Text: added.Text, Author: added.Author, At: added.At,
+	}); err != nil {
+		// The class belongs to the layer that knows the caller: the store says
+		// what went wrong, the daemon says which wire error that is. A GUI that
+		// keys on the code keeps working across the storage change.
+		if errors.Is(err, store.ErrBadComment) {
+			return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentAdd, id,
+				ipc.Class(err, ipc.CodeBadComment))
+		}
 		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentAdd, id, err)
 	}
 	return added, nil
@@ -416,8 +455,15 @@ func (d *Daemon) removeComment(id session.ID, params json.RawMessage) (any, erro
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", session.MethodCommentRemove, err)
 	}
+	if d.state == nil {
+		return struct{}{}, nil
+	}
 
-	if err := d.comments.Remove(string(id), req.ID); err != nil {
+	if err := d.state.RemoveComment(context.Background(), string(id), req.ID); err != nil {
+		if errors.Is(err, store.ErrNoComment) {
+			return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentRemove, id,
+				ipc.Class(err, ipc.CodeNoComment))
+		}
 		return nil, fmt.Errorf("%s on session %q: %w", session.MethodCommentRemove, id, err)
 	}
 	return struct{}{}, nil
@@ -627,11 +673,9 @@ func (d *Daemon) dropSession(id session.ID) {
 // wedged host deserves another attempt on the next scan.
 func (d *Daemon) end(id session.ID, explicit bool) {
 	d.forget(id)
-	// The handle a finished session wrote through goes; the file it wrote stays,
-	// because "the agent is gone" is not "what the agent did did not happen".
-	d.releaseTranscript(id)
 	// A session that stops being served is a session that ended. The stamp is
-	// what lets the archive say when, instead of only that.
+	// what lets the archive say when, instead of only that. The log itself
+	// stays: "the agent is gone" is not "what the agent did did not happen".
 	d.recordEnd(id)
 
 	// An explicit stop does not read the record first. On Windows a read that

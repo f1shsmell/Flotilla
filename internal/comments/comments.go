@@ -221,6 +221,11 @@ func sanitize(id string) string {
 	return string(out)
 }
 
+// NewID generates the id a new comment is stored under. It is exported because
+// the daemon writes comments through the state database now, and an id has to
+// be generated the same way whichever store holds the note.
+func NewID() (string, error) { return newID() }
+
 func newID() (string, error) {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {

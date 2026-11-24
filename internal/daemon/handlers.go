@@ -197,10 +197,13 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	// again, its first update would look like a replay of the old run's and be
 	// dropped. A log that cannot be read is not a refusal — the session still
 	// starts, it just numbers from one.
-	seqBase, err := d.transcripts.LastHostSeq(string(req.ID))
-	if err != nil {
-		d.cfg.Log.Warn("cannot read a session's last host number", "session", req.ID, "err", err.Error())
-		seqBase = 0
+	var seqBase uint64
+	if d.state != nil {
+		seqBase, err = d.state.LastHostSeq(ctx, string(req.ID))
+		if err != nil {
+			d.cfg.Log.Warn("cannot read a session's last host number", "session", req.ID, "err", err.Error())
+			seqBase = 0
+		}
 	}
 
 	// The adapter's operational knowledge comes from the catalogue, not from
