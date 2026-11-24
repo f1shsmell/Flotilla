@@ -24,8 +24,9 @@ import (
 // written by a newer build is refused rather than read with older assumptions.
 //
 // 2 adds the task tables the orchestrator keeps its queue in. 3 adds the table
-// a task's runs write their output to.
-const schemaVersion = 3
+// a task's runs write their output to. 4 adds the sessions a user pinned
+// against idle reclamation.
+const schemaVersion = 4
 
 // ErrNewerSchema reports a database this build is too old to read.
 var ErrNewerSchema = errors.New("store: the database was written by a newer build")
@@ -273,5 +274,13 @@ CREATE TABLE IF NOT EXISTS task_output (
 	body    BLOB    NOT NULL,
 	at      INTEGER NOT NULL,
 	PRIMARY KEY (task_id, run)
+);
+
+-- protected is the user's pin: a session listed here is never reclaimed as
+-- idle, however quiet it gets. It is durable because the pin is a decision
+-- about a session, not a property of a running daemon.
+CREATE TABLE IF NOT EXISTS protected (
+	session_id TEXT PRIMARY KEY,
+	at         INTEGER NOT NULL
 );
 `

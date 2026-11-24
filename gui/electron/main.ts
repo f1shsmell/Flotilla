@@ -373,6 +373,21 @@ function register(): void {
     link(sessionId).call(methods.session.MethodPrompt, { text }, turnTimeoutMs),
   );
 
+  // A steer is a question to the running turn, not a turn of its own, so it
+  // uses the default call timeout: the answer is quick or the turn is gone.
+  ipcMain.handle("flotilla:steer", async (_event, sessionId: string, text: string) =>
+    link(sessionId).call(methods.session.MethodSteer, { text }),
+  );
+
+  // A pin is daemon state about a session, not a call into its host, so it
+  // travels on the control connection and works even before a window attaches.
+  ipcMain.handle("flotilla:protect", async (_event, sessionId: string, on: boolean) => {
+    if (!control || !control.alive) {
+      control = await ensure({ channel, client: clientId });
+    }
+    return control.call(methods.session.MethodProtect, { id: sessionId, protected: on });
+  });
+
   ipcMain.handle("flotilla:seen", async (_event, sessionId: string) => {
     // Looking at a session is what turns done into idle, and it belongs to the
     // window that looked: the daemon records it against this window's client
@@ -384,6 +399,44 @@ function register(): void {
   ipcMain.handle("flotilla:cancel", async (_event, sessionId: string) => {
     await link(sessionId).call(methods.session.MethodCancel, {});
   });
+
+  // The message queue is daemon state, not a turn: these calls are answered
+  // even while an agent works, and every mutation answers with the whole
+  // queue, so the renderer draws one order instead of guessing at an update.
+  ipcMain.handle("flotilla:queue", async (_event, sessionId: string) =>
+    link(sessionId).call(methods.session.MethodQueue, {}),
+  );
+
+  ipcMain.handle("flotilla:queue:add", async (_event, sessionId: string, text: string) =>
+    link(sessionId).call(methods.session.MethodQueueAdd, { text }),
+  );
+
+  ipcMain.handle(
+    "flotilla:queue:edit",
+    async (_event, sessionId: string, id: string, text: string) =>
+      link(sessionId).call(methods.session.MethodQueueEdit, { id, text }),
+  );
+
+  ipcMain.handle("flotilla:queue:remove", async (_event, sessionId: string, id: string) =>
+    link(sessionId).call(methods.session.MethodQueueRemove, { id }),
+  );
+
+  ipcMain.handle(
+    "flotilla:queue:move",
+    async (_event, sessionId: string, id: string, to: number) =>
+      link(sessionId).call(methods.session.MethodQueueMove, { id, to }),
+  );
+
+  // Checkpoints belong to the checkout, not to a turn: the daemon answers both
+  // calls, and the restore is refused unless the session's turn is settled and
+  // no other session holds the same checkout.
+  ipcMain.handle("flotilla:checkpoints", async (_event, sessionId: string) =>
+    link(sessionId).call(methods.session.MethodCheckpointList, {}),
+  );
+
+  ipcMain.handle("flotilla:checkpoints:restore", async (_event, sessionId: string, turn: number) =>
+    link(sessionId).call(methods.session.MethodCheckpointRestore, { turn }),
+  );
 
   ipcMain.handle(
     "flotilla:surface:set",

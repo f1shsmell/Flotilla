@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -184,6 +185,12 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	return exec1(ctx, "git", dir, args...)
 }
 
+// runEnv executes git in dir with extra environment entries, which is how a
+// caller points one command at an index file of its own.
+func runEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	return execEnv(ctx, "git", dir, env, args...)
+}
+
 // runGh executes gh in dir, reporting a missing binary as ErrGhMissing.
 func runGh(ctx context.Context, dir string, args ...string) (string, error) {
 	output, err := exec1(ctx, "gh", dir, args...)
@@ -194,8 +201,15 @@ func runGh(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func exec1(ctx context.Context, binary, dir string, args ...string) (string, error) {
+	return execEnv(ctx, binary, dir, nil, args...)
+}
+
+func execEnv(ctx context.Context, binary, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

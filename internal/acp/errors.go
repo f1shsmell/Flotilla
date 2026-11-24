@@ -36,7 +36,9 @@ const (
 	kindThought = "thought"
 	kindTool    = "tool"
 	kindPlan    = "plan"
-	kindOther   = "other"
+	// kindSubagent is a child-session registration or state change.
+	kindSubagent = "subagent"
+	kindOther    = "other"
 
 	kindRead  = "read"
 	kindEdit  = "edit"
@@ -45,11 +47,12 @@ const (
 
 // Update kinds, exported for callers that switch on them.
 const (
-	UpdateMessage = kindMessage
-	UpdateThought = kindThought
-	UpdateTool    = kindTool
-	UpdatePlan    = kindPlan
-	UpdateOther   = kindOther
+	UpdateMessage  = kindMessage
+	UpdateThought  = kindThought
+	UpdateTool     = kindTool
+	UpdatePlan     = kindPlan
+	UpdateSubagent = kindSubagent
+	UpdateOther    = kindOther
 )
 
 // cancelled answers a permission request with no grant.

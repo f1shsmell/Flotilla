@@ -54,6 +54,10 @@ type relay struct {
 	// returns, so without a bound a long-lived daemon would keep one entry per
 	// launch forever.
 	present map[string]struct{}
+	// asks holds the questions each blocked session waits on, for status and replay.
+	asks map[session.ID]*questionEntry
+	// msgs holds each session's messages waiting for its turn to end.
+	msgs map[session.ID]*messageQueue
 	// state is the database the seen table is kept in; nil means memory only,
 	// which is what a relay built by a test without a store gets. The writer
 	// goroutine owns the write, waking on seenWake and taking its final
@@ -78,6 +82,8 @@ func newRelay(onWriteError func(error)) *relay {
 		queues:       make(map[*ipc.Conn]*peerQueue),
 		seen:         make(map[session.ID]map[string]struct{}),
 		present:      make(map[string]struct{}),
+		asks:         make(map[session.ID]*questionEntry),
+		msgs:         make(map[session.ID]*messageQueue),
 		onWriteError: onWriteError,
 	}
 }
@@ -208,6 +214,10 @@ func (r *relay) drop(id session.ID) []*ipc.Conn {
 		out = append(out, peer)
 	}
 	delete(r.subs, id)
+	delete(r.asks, id)
+	// The queue is the session's, so it ends with the session: a delivered
+	// turn already left the queue, and a waiting one has no agent to run it.
+	delete(r.msgs, id)
 	return out
 }
 
@@ -223,19 +233,35 @@ func (d *Daemon) attachClient(ctx context.Context, peer *ipc.Conn, params json.R
 		return nil, fmt.Errorf("%s: empty session id: %w", session.MethodAttach, session.ErrNoRecord)
 	}
 
-	att := d.lookup(req.ID)
-	if att == nil {
+	// The bind happens under d.mu, the lock the sweep decides under: a window
+	// either opened this session before the reclaim question went out, or is
+	// told the session is closing rather than shown one that disappears.
+	d.mu.Lock()
+	att := d.attachmentLocked(req.ID)
+	switch {
+	case att == nil || d.reclaiming[req.ID]:
+		d.mu.Unlock()
 		return nil, fmt.Errorf("attach to session %q: %w", req.ID, ErrUnknownSession)
-	}
-	if !att.Conn.Alive() {
+	case !att.Conn.Alive():
+		d.mu.Unlock()
 		return nil, fmt.Errorf("attach to session %q: %w", req.ID, ErrHostUnreachable)
 	}
-
 	d.relay.bind(peer, req.ID)
+	d.mu.Unlock()
 	go func() {
 		<-peer.Done()
 		d.relay.forget(peer)
 	}()
+
+	// A window that opens a blocked session from the inbox attaches after the
+	// host asked, and the host asked its one client — this daemon. The stored
+	// cards go through the ordering gate, so they arrive once the attach answer
+	// is on the wire.
+	for _, q := range d.relay.pendingQuestions(req.ID) {
+		if err := d.relay.deliver(peer, func() error { return peer.Notify(session.MethodPermission, q) }); err != nil {
+			d.cfg.Log.Debug("replay a pending question failed", "session", req.ID, "err", err.Error())
+		}
+	}
 
 	// A host writes its scrollback to whoever is attached when the output
 	// arrives, and its only client is this daemon. The daemon attached at
@@ -297,8 +323,9 @@ func (d *Daemon) requestReplay(id session.ID, conn *ipc.Conn) {
 // reply is handed back untouched, so the client decodes the same shape it would
 // have got by dialling the host itself.
 func (d *Daemon) relayCall(ctx context.Context, peer *ipc.Conn, id session.ID, method string, params json.RawMessage) (any, error) {
-	// The diff and its notes belong to the checkout, not to the agent: the daemon
-	// answers them itself instead of forwarding to a host with no repository.
+	// The diff, its notes and the checkpoints belong to the checkout, not to the
+	// agent: the daemon answers them itself instead of forwarding to a host with
+	// no repository.
 	switch method {
 	case session.MethodSeen:
 		// Seen belongs to the window that looked, and this is the only layer
@@ -325,6 +352,28 @@ func (d *Daemon) relayCall(ctx context.Context, peer *ipc.Conn, id session.ID, m
 		// The transcript is the daemon's own record of the session, not the
 		// agent's current state: the host it came from may already be gone.
 		return d.history(id, params)
+	case session.MethodQueue:
+		return d.listQueue(id), nil
+	case session.MethodQueueAdd:
+		return d.queueMessage(id, params)
+	case session.MethodQueueEdit:
+		return d.editQueueMessage(id, params)
+	case session.MethodQueueRemove:
+		return d.removeQueueMessage(id, params)
+	case session.MethodQueueMove:
+		return d.moveQueueMessage(id, params)
+	case session.MethodSteer:
+		return d.steerMessage(id, params)
+	case session.MethodCheckpointList:
+		return d.listCheckpoints(ctx, id)
+	case session.MethodCheckpointRestore:
+		return d.restoreCheckpoint(ctx, id, params)
+	case session.MethodProtect:
+		var req session.ProtectRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", session.MethodProtect, err)
+		}
+		return struct{}{}, d.setProtected(id, req.Protected)
 	}
 
 	switch method {
@@ -343,6 +392,14 @@ func (d *Daemon) relayCall(ctx context.Context, peer *ipc.Conn, id session.ID, m
 	raw, err := att.Conn.Call(ctx, method, params)
 	if err != nil {
 		return nil, fmt.Errorf("%s on session %q: %w", method, id, err)
+	}
+	// An answer that reached the agent settles one card, and the others stay:
+	// the call failed above when nothing was answered, so the ask still waits.
+	if method == session.MethodPermissionReply {
+		var reply session.PermissionReply
+		if json.Unmarshal(params, &reply) == nil {
+			d.relay.forgetQuestion(id, att.Conn, reply.ID)
+		}
 	}
 	return raw, nil
 }
@@ -564,80 +621,6 @@ func (d *Daemon) clientData(peer *ipc.Conn, stream uint32, payload []byte) {
 	_ = att.Conn.SendData(stream, payload)
 }
 
-// hostHooks build the callbacks for one host connection: its notifications go to
-// every attached client, and its terminal bytes go to them the same way.
-func (d *Daemon) hostHooks(id session.ID) HostHooks {
-	return HostHooks{
-		Handler: func(_ context.Context, _ *ipc.Conn, method string, params json.RawMessage) (any, error) {
-			// A state change is also the daemon's own business: status reports
-			// read it, so it is recorded before being fanned out. A daemon that
-			// only forwarded it would answer "unknown" for a session the host
-			// had already classified.
-			if method == session.MethodState {
-				var update session.StateUpdate
-				if err := json.Unmarshal(params, &update); err == nil {
-					d.rememberState(id, update.State)
-					// A turn that just finished is unread in every window:
-					// the badge belongs to this turn, not to one read earlier.
-					// Any other state leaves the flags alone, because a
-					// transition back to done means new work arrived.
-					if update.State == session.StateDone {
-						d.relay.forgetSeen(id)
-					}
-				}
-			}
-
-			// An agent update is stored before it is forwarded, so a window that
-			// attaches later can be told what it missed. What goes out carries
-			// the sequence the store gave it, which is how a client discards an
-			// update it already has from its attach history. A replay of work the
-			// log has already dropped is forwarded to nobody: it would put a line
-			// from before the window's whole log at the end of it.
-			forwarded := params
-			if method == session.MethodUpdate {
-				var keep bool
-				forwarded, keep = d.recordUpdate(id, params)
-				if !keep {
-					return struct{}{}, nil
-				}
-			}
-
-			for _, peer := range d.relay.subscribers(id) {
-				err := d.relay.deliver(peer, func() error { return peer.Notify(method, forwarded) })
-				if err != nil {
-					d.cfg.Log.Debug("forward a session notification failed", "session", id, "err", err.Error())
-				}
-			}
-			return struct{}{}, nil
-		},
-		OnData: func(_ *ipc.Conn, stream uint32, payload []byte) {
-			for _, peer := range d.relay.subscribers(id) {
-				// A failed send reaches the client's own connection close, which
-				// is the event the daemon acts on; a logged line per failed byte
-				// would be a flood of its own.
-				_ = d.relay.deliver(peer, func() error { return peer.SendData(stream, payload) })
-			}
-		},
-	}
-}
-
-// rememberState records the lifecycle a host reported, so a status poll answers
-// with what the host last said rather than with the state it had at attach.
-func (d *Daemon) rememberState(id session.ID, state session.State) {
-	if !state.Valid() {
-		return
-	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for i := range d.fleet.Attachments {
-		if d.fleet.Attachments[i].Record.ID == id {
-			d.fleet.Attachments[i].Info.State = state
-			return
-		}
-	}
-}
-
 // watch ends every client of att when its host connection stops, so a window
 // holding a dead session learns instead of waiting on a stream that cannot come.
 func (d *Daemon) watch(att Attachment) {
@@ -673,6 +656,7 @@ func (d *Daemon) dropSession(id session.ID) {
 // wedged host deserves another attempt on the next scan.
 func (d *Daemon) end(id session.ID, explicit bool) {
 	d.forget(id)
+	d.forgetProtected(id)
 	// A session that stops being served is a session that ended. The stamp is
 	// what lets the archive say when, instead of only that. The log itself
 	// stays: "the agent is gone" is not "what the agent did did not happen".
@@ -730,6 +714,7 @@ func (d *Daemon) forget(id session.ID) {
 	}
 	d.fleet.Attachments = kept
 	delete(d.baselines, id)
+	delete(d.reclaiming, id)
 	d.relay.forgetSeen(id)
 }
 

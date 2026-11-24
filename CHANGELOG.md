@@ -11,11 +11,52 @@ covered by the compatibility promises in VERSIONING.md.
 
 ## [Unreleased]
 
-Scope is the first tranche of M2: the durable state layer the orchestrator needs,
-plus the two pieces it runs on.
+Scope is the opening of M2: the durable state layer the orchestrator needs, the
+pieces it runs on, and the inbox that surfaces what waits on a person.
 
 ### Added
 
+- **An agent can run its own workers.** Every ACP session is opened with
+  `FLT_SESSION_ID`, `FLT_CHANNEL` and `FLT_POLICY` in its environment and a fleet
+  tool server over MCP: the agent lists its own part of the fleet, starts a
+  worker in place or in a fresh worktree, prompts it and reads the turn's
+  answer, and stops it. The tools act only on the session itself and the workers
+  it started, a worker cannot prompt or stop the session it runs inside and may
+  not be given more permission than that session has, and `flt status` run from
+  inside a session reports the same scope. `flt mcp serve` is the server; a
+  build with no `flt` beside the session host registers none.
+- **Idle sessions are closed, pinned ones never.** A session whose agent family
+  has been quiet for an hour is reclaimed: its host process ends and the run
+  moves to Finished with its log intact. Work in a child agent keeps the whole
+  family alive, and so does an open window, a queued message or a finished turn
+  nobody has read. Protect pins a session, and the pin survives a restart.
+- **Child sessions an agent starts.** A session that announces subagents gets a
+  list of them beside the conversation: each child's title and what it is
+  doing, with a later state change moving the entry in place. The lines a child
+  writes stay in the session's own log, attributed by the child's id; the list
+  answers only which children exist, never what they said.
+- **A checkpoint for every finished turn.** A turn that ends leaves a hidden git
+  ref in the session's working tree: a commit of the tree exactly as the turn
+  left it, recorded without moving HEAD, the branch or the user's index. The
+  diff panel lists the turns; restoring one rewrites the working tree and
+  removes what came after it, and is refused while a turn runs or another
+  session holds the same checkout.
+- **A queue for a running turn.** ACP's core has no mid-turn delivery — what a
+  second prompt means is the agent's own choice — so a message typed while the
+  agent works or waits on an answer waits in a queue the daemon owns instead.
+  The finished turn starts the next message, the strip above the composer
+  edits, reorders and removes what waits, and a message whose turn could not
+  start says why rather than disappearing.
+- **Steering a running turn.** An agent that advertises the steering extension
+  takes a message into the turn already running: the composer offers Steer,
+  and the message lands in the stream as the user's own line. An agent that
+  does not advertise it is never sent one mid-turn — the message waits in the
+  queue, and a steer that finds no running turn falls back to the same queue.
+- **An inbox.** A session blocked on an answer and a finished turn this window
+  has not read are listed together across the fleet. A blocked entry carries the
+  agent's own question when it asked one; clicking opens the session where the
+  answer is given. Seen stays per window, so one window reading a turn clears its
+  own entry and leaves every other window's alone.
 - **A state database.** Everything the daemon keeps now lives in one SQLite file
   under `$FLT_HOME/sessions/state.db`: the event log, the projections readers
   query, the receipts of effects already applied, the outbox of effects still

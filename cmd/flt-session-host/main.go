@@ -44,6 +44,8 @@ func run(args []string, out io.Writer) error {
 		rows       = fs.Int("rows", 24, "initial PTY rows")
 		adapter    = fs.String("adapter", "", "JSON operational knowledge for the agent: blocked patterns, paste mode, resume arguments")
 		channel    = fs.String("channel", version.Channel, "release channel this host serves")
+		mcpCommand = fs.String("mcp", "", "flt executable to register as the agent's fleet tool server; empty registers none")
+		parent     = fs.String("parent", "", "session that started this one, when an agent asked for it")
 		showVer    = fs.Bool("version", false, "print the build version and exit")
 		flagOutput = fs.Output()
 	)
@@ -109,6 +111,9 @@ func run(args []string, out io.Writer) error {
 		Command:        *command,
 		Args:           fs.Args(),
 		Dir:            *dir,
+		Channel:        *channel,
+		MCPCommand:     *mcpCommand,
+		Parent:         session.ID(*parent),
 		Policy:         parsedPolicy,
 		PermissionWait: *permWait,
 		Adapter:        parsedAdapter,

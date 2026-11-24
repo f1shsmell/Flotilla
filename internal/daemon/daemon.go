@@ -42,6 +42,12 @@ type Config struct {
 	// PermissionWait bounds how long a spawned host waits for a permission
 	// answer. Zero waits forever.
 	PermissionWait time.Duration
+	// ReclaimIdle is how quiet an agent family must be before its host is
+	// reclaimed. Zero disables reclamation.
+	ReclaimIdle time.Duration
+	// ReclaimSweep is how often the daemon looks for idle families. Zero uses
+	// the default of a minute.
+	ReclaimSweep time.Duration
 	// AttachTimeout bounds the wait for one host during a fleet scan. Zero uses
 	// the default: a host that accepts the pipe and then stops answering must
 	// not hold the scan, which runs before the daemon listens.
@@ -87,8 +93,10 @@ type Status struct {
 	// waiting on a person, or settled. They are not sessions — nothing holds an
 	// agent handle and no window can attach — so they ride beside the fleet
 	// rather than inside it, and a reader that ignores this field loses nothing.
-	Tasks    []TaskEntry `json:"tasks,omitempty"`
-	Failures []string    `json:"failures,omitempty"`
+	Tasks []TaskEntry `json:"tasks,omitempty"`
+	// Inbox is the work waiting on a person, projected per client.
+	Inbox    []InboxEntry `json:"inbox,omitempty"`
+	Failures []string     `json:"failures,omitempty"`
 }
 
 // TaskEntry is one unattended job in a status report.
@@ -119,6 +127,26 @@ type TaskEntry struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
+// Kinds an inbox entry can carry.
+const (
+	// InboxInput is a session blocked on an answer from the user.
+	InboxInput = "input"
+	// InboxUnread is a finished turn the asking client has not looked at.
+	InboxUnread = "unread"
+)
+
+// InboxEntry is one item waiting on a person. It names a live session so a
+// click can attach straight to it; it is not a session and holds no handle.
+type InboxEntry struct {
+	ID session.ID `json:"id"`
+	// Kind is InboxInput when the session waits on an answer, InboxUnread when a turn is unread.
+	Kind string `json:"kind"`
+	// Title is the agent's own question when it asked one; a terminal leaves it empty.
+	Title   string `json:"title,omitempty"`
+	Command string `json:"command"`
+	Dir     string `json:"dir,omitempty"`
+}
+
 // StatusEntry is one session in a status report.
 type StatusEntry struct {
 	ID session.ID `json:"id"`
@@ -135,6 +163,12 @@ type StatusEntry struct {
 	// session's host. A session whose host died, or that another client
 	// attached to directly, reports false.
 	Reachable bool `json:"reachable"`
+	// Protected marks a session pinned against idle reclamation.
+	Protected bool `json:"protected"`
+	// Steer is whether a message sent mid-turn can reach the running turn.
+	Steer bool `json:"steer"`
+	// Parent names the session that started this one; a person's has none.
+	Parent session.ID `json:"parent,omitempty"`
 }
 
 // SetAgentRequest changes one agent's switches. The id names the agent, so a
@@ -163,6 +197,8 @@ type StartRequest struct {
 	// Worktree, when set, creates a worktree and runs the session there, so two
 	// sessions can work on one repository without sharing a checkout.
 	Worktree *WorktreeRequest `json:"worktree,omitempty"`
+	// Parent names the session that asked for this one; a person leaves it empty.
+	Parent session.ID `json:"parent,omitempty"`
 }
 
 // WorktreeRequest asks for a fresh worktree for one session.
@@ -204,6 +240,13 @@ type Daemon struct {
 	// baselines is the commit each session started at, which is what the turn
 	// scope compares against. It is memory only: a daemon restart forgets it.
 	baselines map[session.ID]string
+	// protected is the set of sessions never reclaimed as idle. A pin outlives
+	// the daemon, so it is loaded from and written to the state database.
+	protected map[session.ID]bool
+	// reclaiming names the sessions whose host is being asked to close. A pin,
+	// a window or a queued message arriving meanwhile is refused rather than
+	// accepted into a session that is already leaving.
+	reclaiming map[session.ID]bool
 	// state is the daemon's durable state: the transcript of every session it
 	// has seen, the reviewer's notes, the seen table and the events behind
 	// them. It is the daemon's because it is the only process that sees each
@@ -285,15 +328,29 @@ func New(cfg Config, spawn Spawner) *Daemon {
 		relay: newRelay(func(err error) {
 			cfg.Log.Debug("deliver a queued frame failed", "err", err.Error())
 		}),
-		baselines: make(map[session.ID]string),
-		state:     state,
-		agents:    agent.New(configDir),
+		baselines:  make(map[session.ID]string),
+		protected:  make(map[session.ID]bool),
+		reclaiming: make(map[session.ID]bool),
+		state:      state,
+		agents:     agent.New(configDir),
 	}
 	// A read turn stays read across a daemon restart: the seen table is loaded
 	// from the database beside the records it annotates. A table that cannot be
 	// read is a warning, not a refusal to serve.
 	if err := d.relay.persistSeenTo(state); err != nil {
 		cfg.Log.Warn("cannot load the seen table", "err", err.Error())
+	}
+	// A pin is a user's decision about a session, so it outlives the daemon that
+	// recorded it. A failed load leaves the fleet unpinned, which is the safe
+	// direction: the worst it does is reclaim what the user meant to keep.
+	if state != nil {
+		pins, err := state.ProtectedIDs(context.Background())
+		if err != nil {
+			cfg.Log.Warn("cannot load the protected sessions", "err", err.Error())
+		}
+		for _, id := range pins {
+			d.protected[session.ID(id)] = true
+		}
 	}
 
 	// The queue and the outbox are built here rather than in Run so a test can
@@ -489,10 +546,6 @@ func (d *Daemon) Detach() {
 // next client's enqueue from sitting behind work that will never finish.
 func (d *Daemon) startBackground() {
 	d.bgStart.Do(func() {
-		if d.tasks == nil && d.effects == nil {
-			return
-		}
-
 		ctx, cancel := context.WithCancel(context.Background())
 		d.bgMu.Lock()
 		d.bgCancel = cancel
@@ -531,6 +584,14 @@ func (d *Daemon) startBackground() {
 				if err := d.tasks.Run(ctx); err != nil {
 					d.recordLoopFailure("tasks", err)
 				}
+			}()
+		}
+
+		if d.cfg.ReclaimIdle > 0 {
+			d.background.Add(1)
+			go func() {
+				defer d.background.Done()
+				d.reclaimLoop(ctx)
 			}()
 		}
 	})

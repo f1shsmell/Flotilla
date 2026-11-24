@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { SessionView } from "../src/components/SessionView";
-import type { Control, Entry, Lifecycle, SessionState } from "../src/store";
+import type { Control, Entry, Lifecycle, QueuedMessage, SessionState } from "../src/store";
 
 function entry(key: string, kind: Entry["kind"], toolTitle?: string): Entry {
   return { key, kind, text: `${kind} ${key}`, toolTitle };
@@ -37,25 +37,39 @@ function state(over: Partial<SessionState> = {}): SessionState {
     turn: "idle",
     lastSeq: 0,
     moreHistory: false,
+    queue: [],
+    subagents: [],
     ...over,
   };
+}
+
+function queued(id: string, text: string, error = ""): QueuedMessage {
+  return { id, text, error };
 }
 
 function render(
   s: SessionState,
   view: "stream" | "diff" = "stream",
   lifecycle: Lifecycle = "idle",
+  protectedSession = false,
+  steerEnabled = false,
 ): string {
   return renderToStaticMarkup(
     <SessionView
       state={s}
       lifecycle={lifecycle}
+      protected={protectedSession}
+      steer={steerEnabled}
       view={view}
       onView={() => {}}
       onPrompt={() => {}}
       onCancel={() => {}}
       onSetControl={() => {}}
       onAnswer={() => {}}
+      onQueueEdit={() => {}}
+      onQueueRemove={() => {}}
+      onQueueMove={() => {}}
+      onProtect={() => {}}
       onTerminalReady={() => {}}
       onInput={() => {}}
       onResize={() => {}}
@@ -158,10 +172,28 @@ describe("the session chrome reads as a product", () => {
     expect(html).toMatch(/class="session-composer"/);
   });
 
-  it("does not promise Enter sends while a turn is in flight", () => {
+  it("offers to queue while a turn is in flight instead of disabling Send", () => {
     const html = render(state({ turn: "working" }));
     expect(html).not.toContain("Enter to send");
-    expect(html).toContain("Send unlocks when the turn ends");
+    expect(html).toContain("Send queues · the next turn starts when this one ends");
+    expect(html).toMatch(/Queue<\/button>/);
+  });
+
+  it("offers to steer while a turn runs when the agent advertised it", () => {
+    const html = render(state({ turn: "working" }), "stream", "idle", false, true);
+    expect(html).toContain("Steer · the agent takes this into the running turn");
+    expect(html).toMatch(/Steer<\/button>/);
+  });
+
+  it("lets Cancel reach a turn the daemon started from the queue", () => {
+    // The queue delivers its first message with no call from this window, so
+    // the fleet's lifecycle is the only thing that says the agent is running.
+    const busy = render(state(), "stream", "working");
+    expect(busy).toMatch(/Queue<\/button>/);
+    expect(busy).not.toMatch(/disabled=""[^>]*>Cancel turn/);
+
+    const quiet = render(state(), "stream", "idle");
+    expect(quiet).toMatch(/disabled=""[^>]*>Cancel turn/);
   });
 
   it("shows a permission shield count only while a question is pending", () => {
@@ -213,5 +245,113 @@ describe("the composer dials carry their names and honest state", () => {
     expect(html).toContain("surface-control-static");
     expect(html).toContain("Theme: light");
     expect(html).not.toContain("<select");
+  });
+});
+
+describe("the queue strip above the composer", () => {
+  it("lists the waiting messages in delivery order", () => {
+    const html = render(
+      state({ queue: [queued("q1", "first queued"), queued("q2", "second queued")] }),
+    );
+    expect(html).toContain("Queued for the next turn");
+    expect(html.indexOf("first queued")).toBeGreaterThan(-1);
+    expect(html.indexOf("first queued")).toBeLessThan(html.indexOf("second queued"));
+    expect(html.indexOf("session-queue")).toBeLessThan(html.indexOf("session-composer"));
+  });
+
+  it("shows why a delivery failed instead of hiding the message", () => {
+    const html = render(state({ queue: [queued("q1", "try again", "host_unreachable")] }));
+    expect(html).toContain("try again");
+    expect(html).toContain("the host is unreachable");
+  });
+
+  it("keeps an unknown failure visible as it came", () => {
+    expect(render(state({ queue: [queued("q1", "odd", "something_new")] }))).toContain(
+      "something_new",
+    );
+  });
+
+  it("offers edit, remove and move on each row, with the ends pinned", () => {
+    const html = render(
+      state({ queue: [queued("q1", "first queued"), queued("q2", "second queued")] }),
+    );
+    expect(html).toContain(">Edit</button>");
+    expect(html).toContain(">Remove</button>");
+    expect(html).toMatch(/aria-label="Move queued message 1 up"[^>]*disabled/);
+    expect(html).not.toMatch(/aria-label="Move queued message 1 down"[^>]*disabled/);
+    expect(html).toMatch(/aria-label="Move queued message 2 down"[^>]*disabled/);
+  });
+
+  it("hides the strip when nothing waits", () => {
+    expect(render(state())).not.toContain("session-queue");
+  });
+});
+
+describe("the protect toggle", () => {
+  it("offers to pin the session against idle reclamation", () => {
+    const html = render(state());
+    expect(html).toContain(">Protect</button>");
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it("shows a pinned session as pressed with the word a product uses", () => {
+    const html = render(state(), "stream", "idle", true);
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain(">Protected</button>");
+  });
+});
+
+describe("the subagent strip", () => {
+  it("lists the child sessions an agent registered, with their work state", () => {
+    const html = render(
+      state({
+        subagents: [
+          {
+            id: "child-1",
+            parentId: "sess-x",
+            title: "Test investigator",
+            description: "Investigates.",
+            state: "running",
+          },
+          {
+            id: "grand-1",
+            parentId: "child-1",
+            title: "Helper",
+            description: "",
+            state: "idle",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("Subagents");
+    expect(html).toContain("Test investigator");
+    expect(html).toContain('title="Investigates."');
+    expect(html).toContain("working");
+    expect(html).toContain("Helper");
+    expect(html).toContain("idle");
+    expect(html.indexOf("Test investigator")).toBeLessThan(html.indexOf("Helper"));
+  });
+
+  it("keeps an unknown state visible as it came", () => {
+    const html = render(
+      state({
+        subagents: [
+          {
+            id: "child-1",
+            parentId: "sess-x",
+            title: "",
+            description: "",
+            state: "queued_v2",
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("child-1");
+    expect(html).toContain("queued_v2");
+  });
+
+  it("hides the strip when no child was registered", () => {
+    expect(render(state())).not.toContain("session-subagents");
   });
 });

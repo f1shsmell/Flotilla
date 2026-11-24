@@ -2,13 +2,19 @@ package acptest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
 )
+
+// steerMethod is the extension method both real adapters implement; the fake
+// speaks it only when FLT_FAKE_STEER picks that variant.
+const steerMethod = "_session/steering"
 
 // Agent is an ACP agent with no model behind it. It answers a prompt with a
 // message, a thought, a tool call and a permission request, so the client side
@@ -18,6 +24,9 @@ type Agent struct {
 
 	mu       sync.Mutex
 	sessions map[sdk.SessionId]*SessionState
+	// subagents is what the client advertised at initialize. The fake announces
+	// a child only to a client that accepts them, like a real agent.
+	subagents bool
 }
 
 // SessionState is the fake's per-session bookkeeping.
@@ -30,6 +39,9 @@ type SessionState struct {
 	// guarded by the agent's mutex, like every other field here.
 	modes   *sdk.SessionModeState
 	options []sdk.SessionConfigOption
+	// steer receives one mid-turn message while a turn waits for it, and is nil
+	// when no turn is running or the variant does not steer.
+	steer chan string
 }
 
 var (
@@ -60,7 +72,11 @@ func (a *Agent) connection() *sdk.AgentSideConnection {
 
 // Initialize advertises the capabilities this fake supports. FLT_FAKE_NO_RESUME
 // selects the variant that never advertised resume, whose death ends a session.
-func (a *Agent) Initialize(context.Context, sdk.InitializeRequest) (sdk.InitializeResponse, error) {
+func (a *Agent) Initialize(_ context.Context, params sdk.InitializeRequest) (sdk.InitializeResponse, error) {
+	a.mu.Lock()
+	a.subagents = params.ClientCapabilities.Subagents != nil
+	a.mu.Unlock()
+
 	caps := sdk.AgentCapabilities{
 		LoadSession: true,
 		SessionCapabilities: sdk.SessionCapabilities{
@@ -70,10 +86,56 @@ func (a *Agent) Initialize(context.Context, sdk.InitializeRequest) (sdk.Initiali
 	if os.Getenv("FLT_FAKE_NO_RESUME") != "" {
 		caps.SessionCapabilities.Resume = nil
 	}
-	return sdk.InitializeResponse{
+	resp := sdk.InitializeResponse{
 		ProtocolVersion:   sdk.ProtocolVersionNumber,
 		AgentCapabilities: caps,
-	}, nil
+	}
+	if os.Getenv("FLT_FAKE_STEER") != "" {
+		resp.Meta = sdk.Meta{"steering": json.RawMessage(`{"supported":true}`)}
+	}
+	return resp, nil
+}
+
+// HandleExtensionMethod serves the steering extension. With no turn running it
+// answers the way both adapters do when the request opts into the host-owned
+// idle fallback; the legacy answer is what a request without the opt-in gets.
+func (a *Agent) HandleExtensionMethod(_ context.Context, method string, params json.RawMessage) (any, error) {
+	if method != steerMethod {
+		return nil, fmt.Errorf("unknown extension method %q", method)
+	}
+	var req struct {
+		SessionID sdk.SessionId      `json:"sessionId"`
+		Prompt    []sdk.ContentBlock `json:"prompt"`
+		Meta      struct {
+			Steering struct {
+				IdleBehavior string `json:"idleBehavior"`
+			} `json:"steering"`
+		} `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("decode a steer: %w", err)
+	}
+
+	a.mu.Lock()
+	s := a.sessions[req.SessionID]
+	var steer chan string
+	if s != nil {
+		steer = s.steer
+	}
+	a.mu.Unlock()
+	if steer == nil {
+		if req.Meta.Steering.IdleBehavior == "promptRequired" {
+			return map[string]any{"outcome": "promptRequired", "reason": "noRunningTurn"}, nil
+		}
+		return map[string]any{"outcome": "startedNewTurn"}, nil
+	}
+
+	select {
+	case steer <- promptText(req.Prompt):
+		return map[string]any{"outcome": "injected"}, nil
+	default:
+		return nil, fmt.Errorf("session %q already took a steer this turn", req.SessionID)
+	}
 }
 
 // Authenticate accepts anything.
@@ -135,6 +197,30 @@ func fakeSurface() (*sdk.SessionModeState, []sdk.SessionConfigOption) {
 // would make "the probe read nothing" indistinguishable from "the probe is
 // broken".
 func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+	// FLT_FAKE_CAPTURE records what the client sent and which scope this agent
+	// process itself received, which is how a test reads the injection without
+	// a model behind it.
+	if path := os.Getenv("FLT_FAKE_CAPTURE"); path != "" {
+		record := struct {
+			Request sdk.NewSessionRequest `json:"request"`
+			Env     map[string]string     `json:"env"`
+		}{
+			Request: params,
+			Env: map[string]string{
+				"FLT_SESSION_ID": os.Getenv("FLT_SESSION_ID"),
+				"FLT_CHANNEL":    os.Getenv("FLT_CHANNEL"),
+				"FLT_POLICY":     os.Getenv("FLT_POLICY"),
+			},
+		}
+		payload, err := json.Marshal(record)
+		if err != nil {
+			return sdk.NewSessionResponse{}, fmt.Errorf("encode the captured new-session request: %w", err)
+		}
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
+			return sdk.NewSessionResponse{}, fmt.Errorf("write the captured new-session request: %w", err)
+		}
+	}
+
 	id := sdk.SessionId("fake-" + lastSegment(params.Cwd))
 	modes, options := fakeSurface()
 
@@ -177,6 +263,14 @@ func (a *Agent) ResumeSession(_ context.Context, params sdk.ResumeSessionRequest
 	return sdk.ResumeSessionResponse{Modes: modes, ConfigOptions: options}, nil
 }
 
+// clientAcceptsSubagents reports whether the client advertised the subagent
+// capability at initialize.
+func (a *Agent) clientAcceptsSubagents() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.subagents
+}
+
 // Cancel stops the current turn.
 func (a *Agent) Cancel(_ context.Context, params sdk.CancelNotification) error {
 	a.mu.Lock()
@@ -203,10 +297,14 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
 	s.cancel = cancel
+	if os.Getenv("FLT_FAKE_STEER") != "" {
+		s.steer = make(chan string, 1)
+	}
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
 		s.cancel = nil
+		s.steer = nil
 		a.mu.Unlock()
 		cancel()
 	}()
@@ -217,6 +315,26 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		Update:    sdk.UpdateAgentMessageText("working on: " + prompted),
 	}); err != nil {
 		return sdk.PromptResponse{}, fmt.Errorf("send an update: %w", err)
+	}
+
+	// The steering variant holds the turn open for one mid-turn message, so a
+	// client that steers gets an observable effect instead of a race.
+	if os.Getenv("FLT_FAKE_STEER") != "" {
+		a.mu.Lock()
+		steer := s.steer
+		a.mu.Unlock()
+		select {
+		case text := <-steer:
+			if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
+				SessionId: s.id,
+				Update:    sdk.UpdateAgentMessageText("steered: " + text),
+			}); err != nil {
+				return sdk.PromptResponse{}, fmt.Errorf("send an update: %w", err)
+			}
+		case <-time.After(10 * time.Second):
+		case <-turnCtx.Done():
+			return sdk.PromptResponse{StopReason: sdk.StopReasonCancelled}, nil
+		}
 	}
 
 	if err := conn.SessionUpdate(turnCtx, sdk.SessionNotification{
@@ -236,6 +354,40 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 			Update:    sdk.UpdateAgentMessageText("working in the child"),
 		}); err != nil {
 			return sdk.PromptResponse{}, fmt.Errorf("send a child update: %w", err)
+		}
+	}
+
+	// A child session the agent registers: what it is for, then its own work
+	// under its own id, then the state change that says it finished.
+	// FLT_FAKE_SUBAGENT selects the variant ("running" keeps the child alive
+	// past the turn), and it fires only when the client advertised the
+	// capability.
+	if variant := os.Getenv("FLT_FAKE_SUBAGENT"); variant != "" && a.clientAcceptsSubagents() {
+		child := sdk.SessionId("sess-child-1")
+		steps := []sdk.SessionNotification{
+			{SessionId: s.id, Update: sdk.SessionUpdate{SubagentUpdate: &sdk.SessionSubagentUpdate{
+				SessionId:   child,
+				Title:       sdk.PatchSet("Test investigator"),
+				Description: sdk.PatchSet("Investigates the repo."),
+				State:       sdk.PatchSet(sdk.StateUpdate{Running: &sdk.StateUpdateRunning{}}),
+			}}},
+			{SessionId: child, Update: sdk.UpdateAgentMessageText("working in the child")},
+		}
+		if variant != "running" {
+			steps = append(steps, sdk.SessionNotification{
+				SessionId: s.id,
+				Update: sdk.SessionUpdate{SubagentUpdate: &sdk.SessionSubagentUpdate{
+					SessionId: child,
+					State: sdk.PatchSet(sdk.StateUpdate{Idle: &sdk.StateUpdateIdle{
+						None: &sdk.StateUpdateIdleNone{},
+					}}),
+				}},
+			})
+		}
+		for _, step := range steps {
+			if err := conn.SessionUpdate(turnCtx, step); err != nil {
+				return sdk.PromptResponse{}, fmt.Errorf("update a subagent: %w", err)
+			}
 		}
 	}
 

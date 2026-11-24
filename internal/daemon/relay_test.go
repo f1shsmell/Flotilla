@@ -83,9 +83,16 @@ func runDaemon(t *testing.T, dir, token string) *Daemon {
 // directory, which is where the agent adapters and switches live.
 func runDaemonWith(t *testing.T, cfg Config) *Daemon {
 	t.Helper()
+	return runDaemonSpawning(t, cfg, nil)
+}
+
+// runDaemonSpawning is runDaemonWith for a test that supplies its own spawner,
+// such as one that starts hosts in this process.
+func runDaemonSpawning(t *testing.T, cfg Config, spawn Spawner) *Daemon {
+	t.Helper()
 
 	cfg.Log = discardLogger()
-	d := New(cfg, nil)
+	d := New(cfg, spawn)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})

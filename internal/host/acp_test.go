@@ -448,6 +448,47 @@ func TestACPHostCarriesAChildSessionsId(t *testing.T) {
 	}
 }
 
+// TestACPHostRegistersASubagent pins the registration end to end. The fake
+// agent announces a child only to a client that advertised the capability, so
+// this also proves the advertisement: without it the update never arrives. The
+// child's title survives to the wire and its later state patch follows the
+// same stream.
+func TestACPHostRegistersASubagent(t *testing.T) {
+	_, dir := startACPHostEnv(t, acp.Auto, 0, []string{"FLT_FAKE_SUBAGENT=1"})
+
+	updates := make(chan session.UpdateMessage, 64)
+	conn := dialHost(t, dir, func(msg session.UpdateMessage) { updates <- msg }, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := conn.Call(ctx, session.MethodPrompt, session.PromptRequest{Text: "go"}); err != nil {
+		t.Fatalf("session.prompt: %v", err)
+	}
+
+	running, idle := false, false
+	deadline := time.After(waitFor)
+	for !running || !idle {
+		select {
+		case u := <-updates:
+			if u.Kind != acp.UpdateSubagent || u.SubagentID != "sess-child-1" {
+				continue
+			}
+			switch u.SubagentState {
+			case "running":
+				running = true
+				if u.SubagentTitle != "Test investigator" || u.SubagentDescription != "Investigates the repo." {
+					t.Fatalf("the registration reads %+v", u)
+				}
+			case "idle":
+				idle = true
+			}
+		case <-deadline:
+			t.Fatalf("the host never registered the child session: running=%v idle=%v", running, idle)
+		}
+	}
+}
+
 // TestChunkUpdateKeepsItsSessionId pins that splitting for the frame limit keeps
 // who the update belongs to: every piece of a child's message stays the child's.
 func TestChunkUpdateKeepsItsSessionId(t *testing.T) {
@@ -532,4 +573,43 @@ func waitForAttach(t *testing.T, h *Host) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("the host never attached the client")
+}
+
+// TestAppendCappedFillsOneFrameExactly pins the answer budget: text that fits
+// is kept whole, a cut never leaves half a rune, and a full builder refuses
+// more.
+func TestAppendCappedFillsOneFrameExactly(t *testing.T) {
+	var b strings.Builder
+	if !appendCapped(&b, "hello", 5) {
+		t.Errorf("text of exactly the budget did not fit")
+	}
+	if b.String() != "hello" {
+		t.Errorf("builder = %q, want hello", b.String())
+	}
+
+	b.Reset()
+	b.WriteString("abcd")
+	if appendCapped(&b, "more", 4) {
+		t.Errorf("a full builder reported that the text fit")
+	}
+	if b.String() != "abcd" {
+		t.Errorf("a full builder changed: %q", b.String())
+	}
+
+	b.Reset()
+	// "é" is two bytes; a budget that lands inside it must keep only the "a".
+	if appendCapped(&b, "aé", 2) {
+		t.Errorf("a cut text reported that it fit")
+	}
+	if b.String() != "a" {
+		t.Errorf("rune-boundary cut = %q, want %q", b.String(), "a")
+	}
+
+	b.Reset()
+	if !appendCapped(&b, "aé", 3) {
+		t.Errorf("text of exactly three bytes did not fit")
+	}
+	if b.String() != "aé" || !utf8.ValidString(b.String()) {
+		t.Errorf("builder = %q, want aé", b.String())
+	}
 }

@@ -1,3 +1,5 @@
+import { constants } from "../electron/contract";
+
 // The renderer's model of the wire. Everything here is pure: components project
 // these values, they never reshape them, so what the daemon said stays the only
 // source of truth.
@@ -25,6 +27,12 @@ export interface StatusEntry {
   // a reachable session can be blocked, and an unreachable one is unknown.
   lifecycle: Lifecycle;
   reachable: boolean;
+  // protected is the user's pin: the daemon never reclaims this session as idle.
+  protected: boolean;
+  // steer is whether the agent takes a message into the running turn.
+  steer: boolean;
+  // parent is the session that started this one; empty for a root session.
+  parent?: string;
 }
 
 // ArchivedEntry is a session that is over: nothing holds its agent, and its log
@@ -62,6 +70,23 @@ export interface TaskEntry {
   last_error: string;
 }
 
+// InboxKind is what an inbox entry waits on: an answer to a blocked agent, or a
+// finished turn this window has not read. The values come from the generated
+// contract, so a rename in Go reaches the parser instead of emptying the inbox.
+export type InboxKind =
+  | typeof constants.daemon.InboxInput
+  | typeof constants.daemon.InboxUnread;
+
+// InboxEntry is one item waiting on a person. It names a live session so a
+// click can open it; it is not a session and has no view of its own.
+export interface InboxEntry {
+  id: string;
+  kind: InboxKind;
+  title: string;
+  command: string;
+  dir: string;
+}
+
 export interface Status {
   channel: string;
   pid: number;
@@ -69,6 +94,8 @@ export interface Status {
   sessions: StatusEntry[];
   archived: ArchivedEntry[];
   tasks: TaskEntry[];
+  // inbox is projected per client: the same finished turn is unread for one window and idle for another.
+  inbox?: InboxEntry[];
   failures: string[];
 }
 
@@ -85,6 +112,8 @@ export interface StartRequest {
   rows?: number;
   // worktree, when set, runs the session in a fresh worktree of repo.
   worktree?: { repo: string; branch: string };
+  // parent is the session that started this one, which scopes its fleet view.
+  parent?: string;
 }
 
 // worktreeOf reads the form's two worktree fields. Both empty means none, both
@@ -494,6 +523,30 @@ export interface PermissionOption {
 
 export type Turn = "idle" | "working" | "ended" | "lost";
 
+// QueuedMessage is one message waiting for the running turn to end. The daemon
+// owns the queue; the window renders the order it answered with.
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  // error names why the last delivery failed, or empty when untried.
+  error: string;
+}
+
+// Subagent is a child session the agent registered. It answers which children
+// exist and what they are doing; the child's own lines stay in the log,
+// attributed by their session id.
+export interface Subagent {
+  id: string;
+  // parentId is the session that announced the child: this session, or another
+  // subagent for a grandchild.
+  parentId: string;
+  title: string;
+  description: string;
+  // state is the agent's own word for the child's work; an unknown one is
+  // shown as it came.
+  state: string;
+}
+
 export interface SessionState {
   id: string;
   mode: string;
@@ -513,6 +566,12 @@ export interface SessionState {
   // starts mid-turn, and saying so is the difference between a short log and a
   // lie about where the session began.
   moreHistory: boolean;
+  // queue holds the messages waiting for the running turn, in delivery order.
+  queue: QueuedMessage[];
+  // subagents are the child sessions the agent registered, in the order it
+  // announced them. Registrations are metadata about the children, not lines
+  // they said, so they never become entries.
+  subagents: Subagent[];
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -549,12 +608,96 @@ function orderSessions(sessions: StatusEntry[]): StatusEntry[] {
   );
 }
 
+function asInboxKind(value: unknown): InboxKind | null {
+  if (value === constants.daemon.InboxInput) {
+    return constants.daemon.InboxInput;
+  }
+  if (value === constants.daemon.InboxUnread) {
+    return constants.daemon.InboxUnread;
+  }
+  return null;
+}
+
+// parseInbox reads the cross-session list without inventing an entry: a kind
+// this build cannot name, or a row with no session to open, is dropped.
+function parseInbox(raw: unknown): InboxEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const entries: InboxEntry[] = [];
+  for (const item of raw) {
+    const entry = (item ?? {}) as Record<string, unknown>;
+    const id = asString(entry.id);
+    const kind = asInboxKind(entry.kind);
+    if (id === "" || kind === null) {
+      continue;
+    }
+    entries.push({
+      id,
+      kind,
+      title: asString(entry.title),
+      command: asString(entry.command),
+      dir: asString(entry.dir),
+    });
+  }
+  return entries;
+}
+
+// parseMessageQueue reads the daemon's answer to a queue call. A row with no id
+// could not be edited or removed, so it is dropped rather than rendered dead.
+export function parseMessageQueue(raw: unknown): QueuedMessage[] {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const messages = Array.isArray(value.messages) ? value.messages : [];
+
+  const out: QueuedMessage[] = [];
+  for (const item of messages) {
+    const message = (item ?? {}) as Record<string, unknown>;
+    const id = asString(message.id);
+    if (id === "") {
+      continue;
+    }
+    out.push({
+      id,
+      text: asString(message.text),
+      error: asString(message.error),
+    });
+  }
+  return out;
+}
+
+export interface Checkpoint {
+  turn: number;
+  commit: string;
+  // at is the RFC 3339 time the snapshot was taken.
+  at: string;
+}
+
+// parseCheckpoints reads the daemon's answer to a session's snapshot list. A row
+// without a turn cannot be rolled back to, so it is dropped rather than rendered
+// dead.
+export function parseCheckpoints(raw: unknown): Checkpoint[] {
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const listed = Array.isArray(value.checkpoints) ? value.checkpoints : [];
+
+  const out: Checkpoint[] = [];
+  for (const item of listed) {
+    const checkpoint = (item ?? {}) as Record<string, unknown>;
+    const turn = typeof checkpoint.turn === "number" ? checkpoint.turn : 0;
+    if (turn <= 0) {
+      continue;
+    }
+    out.push({
+      turn,
+      commit: asString(checkpoint.commit),
+      at: asString(checkpoint.at),
+    });
+  }
+  return out;
+}
+
 // parseStatus reads the daemon's answer without trusting it: a field the daemon
 // did not send becomes a visible default rather than `undefined` in the UI.
-//
-// The archive is parsed separately and never merged into `sessions`: a finished
-// run has no process, and a list that mixed the two would let the window offer
-// a stop button for something that already stopped.
 export function parseStatus(raw: unknown): Status {
   const value = (raw ?? {}) as Record<string, unknown>;
   const sessions = Array.isArray(value.sessions) ? value.sessions : [];
@@ -565,9 +708,13 @@ export function parseStatus(raw: unknown): Status {
     channel: asString(value.channel),
     pid: typeof value.pid === "number" ? value.pid : 0,
     ready: asBoolean(value.ready),
+    inbox: parseInbox(value.inbox),
     failures: Array.isArray(value.failures)
       ? value.failures.filter((f): f is string => typeof f === "string")
       : [],
+    // The archive is parsed separately and never merged into `sessions`: a
+    // finished run has no process, and a list that mixed the two would let the
+    // window offer a stop button for something that already stopped.
     archived: archived.map((entry) => {
       const run = (entry ?? {}) as Record<string, unknown>;
       return {
@@ -606,6 +753,8 @@ export function parseStatus(raw: unknown): Status {
         dir: asString(session.dir),
         lifecycle: asLifecycle(session.state),
         reachable: asBoolean(session.reachable),
+        protected: asBoolean(session.protected),
+        steer: asBoolean(session.steer),
       };
     })),
   };
@@ -659,6 +808,8 @@ export function newSession(id: string, mode: string): SessionState {
     turn: "idle",
     lastSeq: 0,
     moreHistory: false,
+    queue: [],
+    subagents: [],
   };
 }
 
@@ -713,7 +864,10 @@ export function applyUpdate(state: SessionState, raw: unknown): SessionState {
 }
 
 function foldUpdate(state: SessionState, value: Record<string, unknown>): SessionState {
-  const kind = asString(value.kind, "other") as EntryKind;
+  // rawKind is the wire's word, wider than EntryKind: "subagent" is a
+  // registration about a child, never a line of the log.
+  const rawKind = asString(value.kind, "other");
+  const kind = rawKind as EntryKind;
   const text = asString(value.text);
   const toolCallId = asString(value.tool_call_id);
   const toolTitle = asString(value.tool_title);
@@ -740,6 +894,39 @@ function foldUpdate(state: SessionState, value: Record<string, unknown>): Sessio
       entries: [
         ...state.entries,
         { key: toolCallId, kind, text, toolTitle, toolStatus },
+      ],
+    };
+  }
+
+  // A registration names a child and what is known about it; each update
+  // carries only what changed, so a later state patch keeps the title it does
+  // not repeat. A registration with no child to name is noise.
+  if (rawKind === "subagent") {
+    const id = asString(value.subagent_id);
+    if (id === "") {
+      return state;
+    }
+    const parentId = asString(value.session_id) || state.id;
+    const title = asString(value.subagent_title);
+    const description = asString(value.subagent_description);
+    const childState = asString(value.subagent_state);
+    const index = state.subagents.findIndex((child) => child.id === id);
+    if (index >= 0) {
+      const subagents = state.subagents.slice();
+      const previous = subagents[index];
+      subagents[index] = {
+        ...previous,
+        title: title || previous.title,
+        description: description || previous.description,
+        state: childState || previous.state,
+      };
+      return { ...state, subagents };
+    }
+    return {
+      ...state,
+      subagents: [
+        ...state.subagents,
+        { id, parentId, title, description, state: childState },
       ],
     };
   }

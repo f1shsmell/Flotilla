@@ -22,6 +22,8 @@ import (
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/mcpserver"
+	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/store"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
@@ -41,7 +43,7 @@ func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("flt", flag.ContinueOnError)
 	fs.SetOutput(out)
 	showVersion := fs.Bool("version", false, "print the build version and exit")
-	channel := fs.String("channel", version.Channel, "release channel to talk to: stable or preview")
+	channel := fs.String("channel", defaultChannel(), "release channel to talk to: stable or preview")
 	asJSON := fs.Bool("json", false, "print machine-readable output")
 	fs.Usage = func() { _, _ = io.WriteString(out, usage) }
 
@@ -80,9 +82,21 @@ func run(args []string, out io.Writer) error {
 		return probeAgent(fs.Args()[1:], *asJSON, out)
 	case "replay":
 		return replayCommand(fs.Args()[1:], *channel, out)
+	case "mcp":
+		return mcpCommand(fs.Args()[1:], *channel)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// defaultChannel is the channel a command talks to when --channel is not given.
+// A process inside a session carries FLT_CHANNEL, and its commands must reach
+// the daemon that serves that session rather than the default one.
+func defaultChannel() string {
+	if channel := os.Getenv("FLT_CHANNEL"); channel != "" {
+		return channel
+	}
+	return version.Channel
 }
 
 // rejectArgs refuses trailing arguments for a command that takes none. The flag
@@ -119,6 +133,11 @@ func status(channel string, asJSON bool, out io.Writer) error {
 	st, err := client.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("read the fleet status: %w", err)
+	}
+	// An agent inside a session sees its own part of the fleet and nothing
+	// else: FLT_SESSION_ID is what the host put into its environment.
+	if id := os.Getenv("FLT_SESSION_ID"); id != "" {
+		st = daemon.Scoped(st, session.ID(id))
 	}
 
 	if asJSON {
@@ -439,6 +458,48 @@ func probeTarget(command string, rest []string) (probe.Agent, error) {
 	return agent, nil
 }
 
+// mcpCommand serves the fleet as MCP tools over stdio. Stdout belongs to the
+// protocol, so even usage text goes to stderr.
+func mcpCommand(args []string, channel string) error {
+	if len(args) == 0 || args[0] != "serve" {
+		return errors.New("usage: flt mcp serve [--channel stable|preview]")
+	}
+
+	fs := flag.NewFlagSet("flt mcp serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&channel, "channel", channel, "release channel to talk to: stable or preview")
+	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("parse arguments: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("mcp serve takes no arguments, got %q", fs.Args())
+	}
+
+	paths, err := home.Resolve(channel)
+	if err != nil {
+		return fmt.Errorf("resolve state paths: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err = mcpserver.Serve(ctx, mcpserver.Dialer{
+		Channel:   channel,
+		TokenPath: paths.Token,
+		StateDir:  paths.Sessions,
+	}, mcpserver.Options{
+		SessionID: session.ID(os.Getenv("FLT_SESSION_ID")),
+		Policy:    os.Getenv("FLT_POLICY"),
+	})
+	if err != nil {
+		return fmt.Errorf("mcp serve: %w", err)
+	}
+	return nil
+}
+
 // replayCommand records a session's turn as a scenario the replay agent can
 // answer from. It reads the daemon's own transcript rather than a live session,
 // so a recording can be made after the turn that produced it, and without a
@@ -524,7 +585,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {

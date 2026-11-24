@@ -57,7 +57,7 @@ func (p Policy) String() string {
 // raw payload is kept so a later renderer is not limited to what this build
 // already understood.
 type Update struct {
-	// Kind is "message", "thought", "tool", "plan" or "other".
+	// Kind is "message", "thought", "tool", "plan", "subagent" or "other".
 	Kind string
 	// Text is the message or thought text, empty for other kinds.
 	Text string
@@ -68,6 +68,13 @@ type Update struct {
 	// SessionID is the session the update arrived under. A child session sends
 	// its own id here, so this is the only attribution the protocol carries.
 	SessionID string
+	// SubagentID, SubagentTitle, SubagentDescription and SubagentState describe
+	// a child session the agent registered. The child's own updates carry its
+	// id in SessionID instead.
+	SubagentID          string
+	SubagentTitle       string
+	SubagentDescription string
+	SubagentState       string
 	// Raw is the SDK's own encoding of the update.
 	Raw json.RawMessage
 }
@@ -419,12 +426,30 @@ func sliceLines(content string, line, limit *int64) string {
 }
 
 // patchValue reads a patch member as the value it carries, and the zero value
-// for one that is unset or null. A null clears a stored value in the protocol;
-// this client keeps no stored copy of a tool call's title or kind, so the two
-// non-value states read the same here.
+// for one that is unset or null. The protocol's null clears a stored value, but
+// this projection carries no presence bit, so a reader holding a copy cannot
+// tell a clear from "unchanged".
 func patchValue[T any](p sdk.Patch[T]) T {
 	v, _ := p.Value()
 	return v
+}
+
+// stateName names a child session's work state: the union's set variant, or a
+// custom state's own discriminator. Empty when the update carries no state.
+func stateName(state sdk.StateUpdate) string {
+	switch {
+	case state.Running != nil:
+		return "running"
+	case state.Idle != nil:
+		return "idle"
+	case state.RequiresAction != nil:
+		return "requires_action"
+	case state.Unknown != nil:
+		return "unknown"
+	case state.Other != nil:
+		return state.Other.State
+	}
+	return ""
 }
 
 // flatten converts one SDK update into the shape the daemon forwards.
@@ -452,6 +477,12 @@ func flatten(update sdk.SessionUpdate, sessionID sdk.SessionId) Update {
 		out.ToolCallID = string(update.ToolCallUpdate.ToolCallId)
 		out.ToolTitle = patchValue(update.ToolCallUpdate.Title)
 		out.ToolStatus = string(patchValue(update.ToolCallUpdate.Status))
+	case update.SubagentUpdate != nil:
+		out.Kind = kindSubagent
+		out.SubagentID = string(update.SubagentUpdate.SessionId)
+		out.SubagentTitle = patchValue(update.SubagentUpdate.Title)
+		out.SubagentDescription = patchValue(update.SubagentUpdate.Description)
+		out.SubagentState = stateName(patchValue(update.SubagentUpdate.State))
 	case update.Plan != nil:
 		out.Kind = kindPlan
 		// A plan's content lives in its entries, never in a text field, so a

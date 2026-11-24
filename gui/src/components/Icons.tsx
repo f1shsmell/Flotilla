@@ -130,3 +130,12 @@ export function IconPlan(): React.ReactElement {
     </Svg>
   );
 }
+
+export function IconInbox(): React.ReactElement {
+  return (
+    <Svg>
+      <path d="M2 3.5h12v9H2z" />
+      <path d="M2 9.5h3l1 1.5h4l1-1.5h3" />
+    </Svg>
+  );
+}

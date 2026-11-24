@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
@@ -33,6 +34,8 @@ func run(args []string, out io.Writer) error {
 		channel  = fs.String("channel", version.Channel, "release channel this daemon serves: stable or preview")
 		hostBin  = fs.String("host-binary", "", "flt-session-host executable to spawn for new sessions")
 		permWait = fs.Duration("permission-wait", 0, "how long a session waits for a permission answer before refusing it; zero waits forever")
+		reclaim  = fs.Duration("reclaim-idle", time.Hour, "how quiet an agent family must be before its host is reclaimed; zero disables")
+		sweep    = fs.Duration("reclaim-sweep", time.Minute, "how often to look for idle families")
 		showVer  = fs.Bool("version", false, "print the build version and exit")
 		logOut   = fs.Output()
 	)
@@ -83,6 +86,8 @@ func run(args []string, out io.Writer) error {
 		ConfigDir:      paths.Config,
 		HostBinary:     hostBinary,
 		PermissionWait: *permWait,
+		ReclaimIdle:    *reclaim,
+		ReclaimSweep:   *sweep,
 		Log:            logger,
 	}, daemon.ExecSpawner(logger))
 
