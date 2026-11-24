@@ -104,7 +104,42 @@ func (d *Daemon) status(peer *ipc.Conn) Status {
 	// its own rather than a sixth lifecycle value — a finished run has no
 	// process, and folding it into `sessions` would let a reader act on it.
 	st.Archived = d.archivedEntries()
+	// The queue is read the same way and for the same reason. It is a separate
+	// list because a task has no host and no window: a reader that treated one
+	// as a session would try to attach to it.
+	st.Tasks = d.taskEntries()
 	return st
+}
+
+// taskEntries lists the unattended queue for one status report. A daemon whose
+// database did not open has no queue, which is reported as no tasks rather than
+// as a failure: the fleet it does serve is still worth knowing about.
+func (d *Daemon) taskEntries() []TaskEntry {
+	if d.state == nil {
+		return nil
+	}
+
+	tasks, err := d.state.AllTasks(context.Background(), 0)
+	if err != nil {
+		d.cfg.Log.Warn("cannot list the task queue", "err", err.Error())
+		return nil
+	}
+
+	entries := make([]TaskEntry, 0, len(tasks))
+	for _, t := range tasks {
+		entries = append(entries, TaskEntry{
+			ID:        t.ID,
+			Dialect:   t.Dialect,
+			State:     string(t.State),
+			Prompt:    t.Prompt,
+			Dir:       t.Dir,
+			Runs:      t.Runs,
+			SpentUSD:  t.SpentUSD,
+			BudgetUSD: t.BudgetUSD,
+			LastError: t.LastError,
+		})
+	}
+	return entries
 }
 
 // fleetStatus projects the sessions this daemon serves for one client.

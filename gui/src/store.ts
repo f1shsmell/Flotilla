@@ -43,12 +43,32 @@ export interface ArchivedEntry {
   ended: string;
 }
 
+// TaskEntry is one unattended job: an agent run once with nobody watching. It is
+// not a session and deliberately is not shaped like one — there is no host to
+// attach to and no terminal to draw — so the window lists it beside the fleet
+// rather than inside it.
+export interface TaskEntry {
+  id: string;
+  dialect: string;
+  // state is queued, running, waiting, done, failed or cancelled. It is kept as
+  // the daemon's own word rather than mapped onto a Lifecycle: a task is not a
+  // session, and calling a queued job "idle" would say the queue is empty.
+  state: string;
+  prompt: string;
+  dir: string;
+  runs: number;
+  spent_usd: number;
+  budget_usd: number;
+  last_error: string;
+}
+
 export interface Status {
   channel: string;
   pid: number;
   ready: boolean;
   sessions: StatusEntry[];
   archived: ArchivedEntry[];
+  tasks: TaskEntry[];
   failures: string[];
 }
 
@@ -539,6 +559,7 @@ export function parseStatus(raw: unknown): Status {
   const value = (raw ?? {}) as Record<string, unknown>;
   const sessions = Array.isArray(value.sessions) ? value.sessions : [];
   const archived = Array.isArray(value.archived) ? value.archived : [];
+  const tasks = Array.isArray(value.tasks) ? value.tasks : [];
 
   return {
     channel: asString(value.channel),
@@ -558,6 +579,23 @@ export function parseStatus(raw: unknown): Status {
         ended: asString(run.ended),
       };
     }).filter((entry) => entry.id !== ""),
+    // The queue is parsed apart from the fleet for the same reason the archive
+    // is: a task has no host, and a list that mixed the two would offer to
+    // attach to something with no endpoint.
+    tasks: tasks.map((entry) => {
+      const task = (entry ?? {}) as Record<string, unknown>;
+      return {
+        id: asString(task.id),
+        dialect: asString(task.dialect),
+        state: asString(task.state, "unknown"),
+        prompt: asString(task.prompt),
+        dir: asString(task.dir),
+        runs: typeof task.runs === "number" ? task.runs : 0,
+        spent_usd: typeof task.spent_usd === "number" ? task.spent_usd : 0,
+        budget_usd: typeof task.budget_usd === "number" ? task.budget_usd : 0,
+        last_error: asString(task.last_error),
+      };
+    }).filter((task) => task.id !== ""),
     sessions: orderSessions(sessions.map((entry) => {
       const session = (entry ?? {}) as Record<string, unknown>;
       return {

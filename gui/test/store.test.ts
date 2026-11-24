@@ -106,6 +106,7 @@ describe("parseStatus", () => {
       ready: false,
       sessions: [],
       archived: [],
+      tasks: [],
       failures: [],
     });
   });
@@ -558,6 +559,7 @@ describe("fleet lifecycle", () => {
       ready: true,
       failures: [],
       archived: [],
+      tasks: [],
       sessions: [
         {
           id: "a",

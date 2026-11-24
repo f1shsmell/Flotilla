@@ -32,6 +32,14 @@ plus the two pieces it runs on.
   task spends nothing, and a run whose outcome is unknown — a timeout, or a
   daemon that died under it — is never retried on its own: it is parked for a
   person to look at.
+- **The queue, served.** The daemon now owns the queue and the outbox: it parks
+  a task its predecessor died under before it starts listening, drains the
+  effects a previous run left owed, and lists the queue under `tasks` in
+  `daemon.status` — which `flt status` prints after the fleet. A run's output
+  reaches the database through an effect queued in the same transaction as the
+  task change, so a crash between "the task finished" and "what it said" leaves
+  work owed rather than work lost, and the receipt it leaves behind is what stops
+  the next daemon doing it twice.
 
 ### Changed
 

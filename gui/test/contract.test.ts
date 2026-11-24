@@ -24,6 +24,7 @@ const storeSource = fs.readFileSync(path.join(__dirname, "..", "src", "store.ts"
 const wired: { go: string; ts: string; renamed?: Record<string, string> }[] = [
   { go: "daemon.Status", ts: "Status" },
   { go: "daemon.StatusEntry", ts: "StatusEntry", renamed: { state: "lifecycle" } },
+  { go: "daemon.TaskEntry", ts: "TaskEntry" },
   { go: "daemon.StartRequest", ts: "StartRequest" },
   { go: "daemon.SetAgentRequest", ts: "SetAgentRequest" },
   { go: "agent.Entry", ts: "AgentEntry" },
