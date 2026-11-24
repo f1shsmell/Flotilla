@@ -99,18 +99,20 @@ jobs:
           path: gui/release/*.exe
           if-no-files-found: error
 
-      # The notices ship with the release, so a stale copy is a licence claim
-      # nobody checked. Regenerating and comparing is what makes the committed
-      # file trustworthy: it must describe this commit's module graph.
-      - name: the committed notices describe this commit
+      # The notices are generated here, not committed: the file lists the module
+      # graph this run fetched, and a committed copy describes whatever the
+      # author's cache happened to hold. What is checked instead is the thing
+      # that matters — that no dependency shipped without a readable licence.
+      - name: the notices cover every dependency
         shell: bash
         run: |
           bash scripts/third-party-notices.sh "$RUNNER_TEMP/notices.md"
-          if ! diff -q THIRD-PARTY-NOTICES.md "$RUNNER_TEMP/notices.md" >/dev/null; then
-            echo "THIRD-PARTY-NOTICES.md is stale: rerun scripts/third-party-notices.sh and commit it"
-            diff THIRD-PARTY-NOTICES.md "$RUNNER_TEMP/notices.md" || true
+          if grep -q "No license file" "$RUNNER_TEMP/notices.md"; then
+            echo "a dependency has no readable licence: resolve it before shipping"
+            grep -B2 "No license file" "$RUNNER_TEMP/notices.md" || true
             exit 1
           fi
+          echo "$(grep -c '^## ' "$RUNNER_TEMP/notices.md") dependencies noticed"
 
       - name: publish the release
         if: startsWith(github.ref, 'refs/tags/v')
