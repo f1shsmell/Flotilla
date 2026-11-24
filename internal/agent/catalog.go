@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -60,6 +61,9 @@ type Preset struct {
 	// received the patterns could start classifying lines itself.
 	Adapter adapters.Adapter `json:"-"`
 
+	// Discovery is how the agent is recognised besides its start command; never on the wire.
+	Discovery Discovery `json:"-"`
+
 	// source is where the preset came from: a builtin, or an adapter file name.
 	source string
 }
@@ -78,6 +82,8 @@ type Entry struct {
 	Enabled bool `json:"enabled"`
 	Chat    bool `json:"chat"`
 	CLI     bool `json:"cli"`
+	// Tier is what this machine shows about the agent; Installed is its shortcut.
+	Tier Tier `json:"tier,omitempty"`
 }
 
 // Change is one switch update, and the stored form keyed by preset id in
@@ -102,6 +108,7 @@ type Catalog struct {
 	presets  []Preset
 	problems []string
 	lookPath func(string) (string, error)
+	home     func() (string, error)
 	// selfDir is where this build's own agent binaries sit: the directory of the
 	// executable, which is where a release puts them beside the daemon. A preset
 	// for an agent this build ships is found there when PATH does not have it,
@@ -112,7 +119,7 @@ type Catalog struct {
 // New returns the catalog rooted at dir: adapters live in dir/adapters and the
 // user's switches in dir/agents.json. Nothing is created until a switch is set.
 func New(dir string) *Catalog {
-	c := &Catalog{dir: dir, lookPath: exec.LookPath, selfDir: executableDir()}
+	c := &Catalog{dir: dir, lookPath: exec.LookPath, home: os.UserHomeDir, selfDir: executableDir()}
 	c.load()
 	return c
 }
@@ -317,6 +324,7 @@ func Builtins() []Preset {
 			Adapter: adapters.Adapter{
 				Env: map[string]string{"CLAUDE_CODE_EXECUTABLE": "claude"},
 			},
+			Discovery: Discovery{Command: "claude", Config: ".claude"},
 		},
 		{
 			ID:          "gemini",
@@ -326,6 +334,7 @@ func Builtins() []Preset {
 			Mode:        session.ModeACP,
 			Needs:       "a logged-in Gemini CLI",
 			Description: "Gemini CLI in ACP mode.",
+			Discovery:   Discovery{Config: ".gemini"},
 		},
 	}
 }
@@ -444,9 +453,8 @@ func (c *Catalog) project(preset Preset, set Change) Entry {
 		entry.CLI = *set.CLI
 	}
 
-	// A command that does not resolve is not an error: the entry says the agent
-	// is not installed, which is what the settings page shows and what the picker
-	// uses to keep an unavailable agent out of the way.
+	// A command that does not resolve is not an error: the entry's tier says how
+	// the agent was found, and the settings page and the picker read that.
 	//
 	// A bundled agent is looked for beside the executable first, then on PATH: a
 	// release ships its own agents there, and a user who also installed one on
@@ -459,6 +467,7 @@ func (c *Catalog) project(preset Preset, set Change) Entry {
 		entry.Installed = true
 		entry.Path = path
 	}
+	entry.Tier = c.grade(entry.Installed, preset.Discovery)
 	return entry
 }
 
@@ -536,6 +545,8 @@ type adapterFile struct {
 	Needs       string       `json:"needs"`
 	Description string       `json:"description"`
 
+	Discovery *Discovery `json:"discovery"`
+
 	Blocked       []string       `json:"blocked"`
 	Paste         adapters.Paste `json:"paste"`
 	TrustArgs     []string       `json:"trust_args"`
@@ -556,7 +567,7 @@ func decodeAdapter(payload []byte) (Preset, error) {
 		return Preset{}, fmt.Errorf("decode the adapter: %w", err)
 	}
 
-	return Preset{
+	preset := Preset{
 		ID:          file.ID,
 		Name:        file.Name,
 		Command:     file.Command,
@@ -571,7 +582,12 @@ func decodeAdapter(payload []byte) (Preset, error) {
 			ResumeArgs:    file.ResumeArgs,
 			ResumeCommand: file.ResumeCommand,
 		},
-	}, nil
+	}
+	// Absent stays empty so inherit() can fill it from the builtin it replaces.
+	if file.Discovery != nil {
+		preset.Discovery = *file.Discovery
+	}
+	return preset, nil
 }
 
 // normalize refuses what a session start could not use. Fields an adapter leaves
@@ -580,6 +596,32 @@ func decodeAdapter(payload []byte) (Preset, error) {
 func normalize(p *Preset) error {
 	p.ID = strings.TrimSpace(p.ID)
 	p.Command = strings.TrimSpace(p.Command)
+	p.Discovery.Command = strings.TrimSpace(p.Discovery.Command)
+	p.Discovery.Config = strings.TrimSpace(p.Discovery.Config)
+	if strings.ContainsAny(p.Discovery.Command, `/\`) {
+		return fmt.Errorf("%s: discovery.command %q is a command name, not a path: %w",
+			p.ID, p.Discovery.Command, ErrBadPreset)
+	}
+	if p.Discovery.Config != "" {
+		// The file promises a directory under the user's home; anything else is
+		// a guess that would silently match the wrong thing.
+		cleaned := path.Clean(strings.ReplaceAll(p.Discovery.Config, `\`, "/"))
+		bad := path.IsAbs(cleaned) || (len(cleaned) >= 2 && cleaned[1] == ':') ||
+			cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") ||
+			strings.HasPrefix(cleaned, "~")
+		for _, part := range strings.Split(cleaned, "/") {
+			// Win32 drops trailing dots and spaces, so "..." would stat the home
+			// itself on Windows.
+			if strings.TrimRight(part, ". ") != part {
+				bad = true
+			}
+		}
+		if bad {
+			return fmt.Errorf("%s: discovery.config %q is not a directory under the user's home: %w",
+				p.ID, p.Discovery.Config, ErrBadPreset)
+		}
+		p.Discovery.Config = cleaned
+	}
 
 	if p.ID == "" {
 		return fmt.Errorf("empty id: %w", ErrBadPreset)
@@ -641,6 +683,12 @@ func inherit(base, adapter Preset) Preset {
 	// command must not silently drop the patterns that recognise a blocked
 	// agent, or the session would look working while it waits for an answer.
 	adapter.Adapter = adapters.Inherit(base.Adapter, adapter.Adapter)
+	if adapter.Discovery.Command == "" {
+		adapter.Discovery.Command = base.Discovery.Command
+	}
+	if adapter.Discovery.Config == "" {
+		adapter.Discovery.Config = base.Discovery.Config
+	}
 	return adapter
 }
 

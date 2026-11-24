@@ -228,6 +228,8 @@ export interface AgentEntry {
   enabled: boolean;
   chat: boolean;
   cli: boolean;
+  // tier is the discovery answer; installed is its shortcut for the picker.
+  tier: string;
 }
 
 export interface AgentListing {
@@ -280,6 +282,7 @@ export function parseAgents(raw: unknown): AgentListing {
         enabled: asBoolean(agent.enabled),
         chat: asBoolean(agent.chat),
         cli: asBoolean(agent.cli),
+        tier: asString(agent.tier),
       };
     }),
     problems: asStringList(value.problems),
@@ -306,6 +309,15 @@ export function filterAgents(agents: readonly AgentEntry[], query: string): Agen
   return agents.filter((agent) => matchesAgent(agent, words));
 }
 
+// agentReady is the one "can this agent be started" every surface shares: the
+// daemon's tier when it sends one, the install flag for a daemon that predates
+// tiers. It decides for the picker, the settings page and their counts.
+export function agentReady(agent: AgentEntry): boolean {
+  return agent.tier === ""
+    ? agent.installed
+    : agent.tier === constants.agent.TierAvailable;
+}
+
 // usableAgents is what a new session of this mode may start. A preset is one
 // complete recipe — command, args and mode together — so an agent whose own mode
 // differs is not offered: its args would launch the other protocol.
@@ -320,7 +332,7 @@ export function usableAgents(
   const purpose = mode === "acp" ? "chat" : "cli";
   return agents.filter(
     (agent) =>
-      agent.installed &&
+      agentReady(agent) &&
       agent.enabled &&
       agent.mode === mode &&
       (purpose === "chat" ? agent.chat : agent.cli),

@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { agentReady } from "../store";
 import type { AgentChange, AgentEntry } from "../store";
 import { IconBack } from "./Icons";
 import { RefreshButton } from "./RefreshButton";
@@ -20,6 +21,15 @@ interface Props {
   onClose: () => void;
 }
 
+// agentState is the row's word for it: the tier itself, because "not found"
+// would be false for an agent whose CLI is installed without its ACP bridge.
+function agentState(agent: AgentEntry): string {
+  if (agent.tier !== "") {
+    return agent.tier;
+  }
+  return agent.installed ? "installed" : "not found";
+}
+
 // AgentSettings is the list the picker draws from: what this machine has, what
 // the user switched on, and which file defined each preset. It never installs
 // anything: an agent that is not on PATH says so and stays listed.
@@ -37,7 +47,7 @@ export function AgentSettings({
   const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
-  const installed = agents.filter((agent) => agent.installed).length;
+  const available = agents.filter(agentReady).length;
 
   const toggle = async (id: string, change: AgentChange): Promise<void> => {
     setSaving((current) => new Set(current).add(id));
@@ -61,7 +71,7 @@ export function AgentSettings({
         <div>
           <h2>Agents</h2>
           <p className="muted">
-            {installed} installed · {agents.length} known
+            {available} available · {agents.length} known
           </p>
         </div>
         <div className="row">
@@ -113,8 +123,8 @@ export function AgentSettings({
                   {agent.needs ? <span className="muted agent-needs">{agent.needs}</span> : null}
                 </td>
                 <td>
-                  <span className={agent.installed ? "badge ok" : "badge down"}>
-                    {agent.installed ? "installed" : "not found"}
+                  <span className={agentReady(agent) ? "badge ok" : "badge down"}>
+                    {agentState(agent)}
                   </span>
                   <span className="muted agent-source">{agent.source}</span>
                 </td>

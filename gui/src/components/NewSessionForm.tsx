@@ -95,7 +95,7 @@ export function NewSessionForm({
   // A mode with nothing in it is not a choice, it is a dead end. When the list
   // for the current mode is empty and the other mode has agents, the form moves
   // to the one that can actually start something — the user never sees "no chat
-  // agent is available" while a terminal agent sits behind a switch. A custom
+  // agent can be started" while a terminal agent sits behind a switch. A custom
   // command is exempt: it is the user deliberately typing their own, in the mode
   // they want.
   useEffect(() => {
@@ -257,8 +257,8 @@ export function NewSessionForm({
                   : unavailable
                     ? `Agents unavailable: ${unavailable}`
                     : query.trim() === ""
-                      ? `No ${modeLabel(mode).toLowerCase()} agent is available.`
-                      : "No available agent matches."}{" "}
+                      ? `No ${modeLabel(mode).toLowerCase()} agent can be started.`
+                      : "No agent that can be started matches."}{" "}
                 {loaded && onOpenAgentSettings ? (
                   <button type="button" className="link" onClick={onOpenAgentSettings}>
                     Manage agents
@@ -268,7 +268,7 @@ export function NewSessionForm({
             ) : null}
             {/* The builtins all speak acp, so a terminal session with no
                 adapter of its own would otherwise offer nothing and say only
-                that nothing is available. */}
+                that nothing can be started. */}
             {loaded &&
             visible.length === 0 &&
             !unavailable &&

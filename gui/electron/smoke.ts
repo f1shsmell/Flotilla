@@ -828,7 +828,7 @@ export async function run(target: BrowserWindow): Promise<boolean> {
         open.click();
       })()`);
       // Wait for the switch itself, not for the page's header: the header says
-      // "0 installed · 0 known" before the catalogue has been read, so a text
+      // "0 available · 0 known" before the catalogue has been read, so a text
       // wait would pass on an empty table and then look for a row that is not
       // there yet.
       await waitForCondition(

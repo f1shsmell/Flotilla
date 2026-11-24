@@ -377,9 +377,19 @@ func pickAgent(list agent.Listing, name string) (agent.Entry, error) {
 	}
 }
 
-// runnable refuses an agent the machine cannot actually start.
+// runnable refuses an agent the machine cannot actually start, in the daemon's
+// own words: the tier says why, and "not installed" would be false for half of
+// the cases it covers.
 func runnable(e agent.Entry, name string) (agent.Entry, error) {
 	if !e.Installed {
+		switch e.Tier {
+		case agent.TierInstalledNotACP:
+			return agent.Entry{}, fmt.Errorf(
+				"agent %q is installed, but the command this build starts (%s) does not resolve", name, e.Command)
+		case agent.TierSuspected:
+			return agent.Entry{}, fmt.Errorf(
+				"agent %q is not startable here: its command (%s) does not resolve and only its configuration was found", name, e.Command)
+		}
 		return agent.Entry{}, fmt.Errorf("agent %q is not installed on this machine", name)
 	}
 	if !e.Enabled {

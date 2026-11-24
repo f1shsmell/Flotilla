@@ -276,15 +276,20 @@ func listAgents(channel string, asJSON bool, out io.Writer) error {
 	return nil
 }
 
-// agentLines renders one line per agent. The switches and the install state are
+// agentLines renders one line per agent. The switches and the discovery tier are
 // printed as words, so a disabled or missing agent reads as such without a
 // second lookup.
 func agentLines(list agent.Listing) []string {
 	lines := make([]string, 0, len(list.Agents))
 	for _, e := range list.Agents {
-		state := "missing"
-		if e.Installed {
-			state = "installed"
+		state := string(e.Tier)
+		if state == "" {
+			// A daemon older than this build sends no tier; the install flag is
+			// what it does answer, and it must not read as missing.
+			state = string(agent.TierMissing)
+			if e.Installed {
+				state = "installed"
+			}
 		}
 
 		switches := make([]string, 0, 3)

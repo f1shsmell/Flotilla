@@ -150,9 +150,9 @@ func TestHelpExitsCleanly(t *testing.T) {
 	}
 }
 
-// TestAgentLinesShowEverySwitch pins the human form of `flt agents`: a disabled
-// or missing agent has to read as such, because the words are the only signal a
-// terminal gets.
+// TestAgentLinesShowEverySwitch pins the human form of `flt agents`: a disabled,
+// half-installed or missing agent has to read as such, because the words are the
+// only signal a terminal gets.
 func TestAgentLinesShowEverySwitch(t *testing.T) {
 	lines := agentLines(agent.Listing{Agents: []agent.Entry{
 		{
@@ -160,24 +160,43 @@ func TestAgentLinesShowEverySwitch(t *testing.T) {
 			Installed: true,
 			Enabled:   true,
 			Chat:      true,
+			Tier:      agent.TierAvailable,
 		},
 		{
-			Preset:  agent.Preset{ID: "gemini", Command: "gemini"},
+			Preset:  agent.Preset{ID: "claude", Command: "claude-agent-acp"},
 			Enabled: false,
+			Tier:    agent.TierInstalledNotACP,
+		},
+		{
+			// An older daemon sends no tier, and its install flag still has to
+			// read as an answer rather than as missing.
+			Preset:    agent.Preset{ID: "gemini", Command: "gemini"},
+			Installed: true,
+			Enabled:   false,
+		},
+		{
+			// The same older daemon with nothing installed still reads as missing.
+			Preset: agent.Preset{ID: "opencode", Command: "opencode"},
 		},
 	}})
 
-	if len(lines) != 2 {
+	if len(lines) != 4 {
 		t.Fatalf("agentLines returned %d lines, want one per agent", len(lines))
 	}
 
 	// An empty mode is the daemon's "acp" default, and it is spelled out rather
 	// than left as a blank column.
-	if got, want := lines[0], "reasonix\tacp\tinstalled\tenabled,chat\treasonix"; got != want {
+	if got, want := lines[0], "reasonix\tacp\tavailable\tenabled,chat\treasonix"; got != want {
 		t.Fatalf("first line = %q, want %q", got, want)
 	}
-	if got, want := lines[1], "gemini\tacp\tmissing\t\tgemini"; got != want {
+	if got, want := lines[1], "claude\tacp\tinstalled-but-not-acp\t\tclaude-agent-acp"; got != want {
 		t.Fatalf("second line = %q, want %q", got, want)
+	}
+	if got, want := lines[2], "gemini\tacp\tinstalled\t\tgemini"; got != want {
+		t.Fatalf("third line = %q, want %q", got, want)
+	}
+	if got, want := lines[3], "opencode\tacp\tmissing\t\topencode"; got != want {
+		t.Fatalf("fourth line = %q, want %q", got, want)
 	}
 }
 

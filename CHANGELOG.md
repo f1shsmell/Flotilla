@@ -81,9 +81,25 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   task change, so a crash between "the task finished" and "what it said" leaves
   work owed rather than work lost, and the receipt it leaves behind is what stops
   the next daemon doing it twice.
+- **Agents are found, not guessed.** The agent listing now says what this machine
+  shows about each agent: `available` when the command the daemon starts is
+  there, `installed-but-not-acp` when only the vendor CLI is — claude and codex
+  themselves do not speak ACP, so without their bridge the agent is installed and
+  unreachable — `suspected` when only the agent's own config directory exists,
+  and `missing` otherwise. `flt agents` prints the tier, and a daemon too old to
+  send one still reads as installed or missing. An adapter file may say how its
+  agent is recognised (`discovery.command`, `discovery.config`), so an agent this
+  build does not ship gets the same tiers. `flt probe --handshake` stays the
+  zero-token proof that an agent actually speaks ACP.
 
 ### Changed
 
+- **`flt agents` speaks the discovery tier.** The state column now prints
+  `available`, `installed-but-not-acp`, `suspected` or `missing` where it used
+  to print `installed` or `missing`; a daemon that predates the tier still
+  yields the old words. A script that matched `installed` should match
+  `available` — the agent's start command is present; the switches still decide
+  whether a session may launch it.
 - The pre-database layout (`transcripts/*.jsonl`, `seen.json`, `comments/*.json`)
   is imported once on the first start of this build and **left in place**. An
   importer is not trusted with the only copy of a user's history, and a bug

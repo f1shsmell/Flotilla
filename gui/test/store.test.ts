@@ -944,6 +944,7 @@ describe("parseAgents", () => {
           enabled: true,
           chat: true,
           cli: false,
+          tier: "available",
         },
       ],
       problems: ["adapter \"broken.json\": empty command"],
@@ -957,6 +958,7 @@ describe("parseAgents", () => {
       path: "C:\\bin\\reasonix.exe",
       chat: true,
       cli: false,
+      tier: "available",
     });
     expect(listing.problems).toEqual(["adapter \"broken.json\": empty command"]);
   });
@@ -974,6 +976,7 @@ describe("parseAgents", () => {
       enabled: false,
       chat: false,
       cli: false,
+      tier: "",
     });
     expect(listing.problems).toEqual([]);
   });
