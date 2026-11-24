@@ -150,31 +150,36 @@ func TestADaemonProcessDrainsTheEffectOwedByItsPredecessor(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	var wrote int
+	// The wait is on the outbox, not on the output row: the handler writes the
+	// output and *then* settles the row, so a test that waited for the output
+	// would read `pending` in the window between the two. Waiting for the row to
+	// settle covers both outcomes — applied or abandoned — and the assertions
+	// below then say which one happened.
+	var pending int
 	for {
 		if err := db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM task_output WHERE task_id = ? AND run = 1`, taskID).Scan(&wrote); err != nil {
-			t.Fatalf("read the task output: %v", err)
+			`SELECT COUNT(*) FROM outbox WHERE state = 'pending'`).Scan(&pending); err != nil {
+			t.Fatalf("read the outbox: %v", err)
 		}
-		if wrote == 1 {
+		if pending == 0 {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("the daemon never wrote the owed output (%d rows)", wrote)
+			t.Fatalf("the daemon never settled the owed effect (%d still pending)", pending)
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 
-	// And the effect is settled rather than left owed: a row that stayed pending
-	// would be redone by the next daemon, which is what the receipt prevents.
-	var pending int
+	// Settled and applied, not settled-and-abandoned: the output is the proof
+	// that the work happened rather than being given up on.
+	var wrote int
 	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM outbox WHERE state = 'pending'`).Scan(&pending); err != nil {
-		t.Fatalf("read the outbox: %v", err)
+		`SELECT COUNT(*) FROM task_output WHERE task_id = ? AND run = 1`, taskID).Scan(&wrote); err != nil {
+		t.Fatalf("read the task output: %v", err)
 	}
-	if pending != 0 {
-		t.Fatalf("pending effects = %d, want the owed effect settled", pending)
+	if wrote != 1 {
+		t.Fatalf("task output rows = %d, want 1: the effect was settled but the work is not on record", wrote)
 	}
 }
 
