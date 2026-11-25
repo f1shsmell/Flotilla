@@ -79,6 +79,7 @@ func TestInheritKeepsWhatAnOverrideLeavesOut(t *testing.T) {
 		TrustArgs:     []string{"--yes"},
 		ResumeArgs:    []string{"resume", "{id}"},
 		ResumeCommand: "resume-binary",
+		Env:           map[string]string{"THE_BINARY": "binary"},
 	}
 
 	got := Inherit(base, Adapter{Blocked: nil})
@@ -86,19 +87,29 @@ func TestInheritKeepsWhatAnOverrideLeavesOut(t *testing.T) {
 		len(got.ResumeArgs) != 2 || got.ResumeCommand != "resume-binary" {
 		t.Fatalf("Inherit dropped a field: %+v", got)
 	}
+	if got.Env["THE_BINARY"] != "binary" {
+		t.Fatalf("Env = %v, want the inherited variable", got.Env)
+	}
 }
 
 // TestAnExplicitEmptyListClearsTheInheritedOne pins the other direction: a
 // wrapper that must not receive the inherited arguments has to be able to say so,
 // and an empty list is that statement.
 func TestAnExplicitEmptyListClearsTheInheritedOne(t *testing.T) {
-	base := Adapter{Blocked: []string{"allow this?"}, TrustArgs: []string{"--yes"}}
+	base := Adapter{
+		Blocked:   []string{"allow this?"},
+		TrustArgs: []string{"--yes"},
+		Env:       map[string]string{"THE_BINARY": "binary"},
+	}
 
-	got := Inherit(base, Adapter{Blocked: []string{}, TrustArgs: []string{}})
+	got := Inherit(base, Adapter{Blocked: []string{}, TrustArgs: []string{}, Env: map[string]string{}})
 	if len(got.Blocked) != 0 {
 		t.Fatalf("Blocked = %q, want it cleared", got.Blocked)
 	}
 	if len(got.TrustArgs) != 0 {
 		t.Fatalf("TrustArgs = %q, want it cleared", got.TrustArgs)
+	}
+	if len(got.Env) != 0 {
+		t.Fatalf("Env = %v, want it cleared", got.Env)
 	}
 }

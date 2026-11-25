@@ -114,6 +114,23 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   exits non-zero when any pin is behind, so a scheduled job can notice a stale
   recipe without rewriting one. A binary recipe, which names no package, is
   reported as skipped.
+- **An install runs only after a person says so.** `flt install <agent>` prints
+  what the recipe would fetch and run — the pinned package, or the archive URL,
+  the platform and the sha256 — asks one question whose default is no, and
+  writes only after a yes. An npx or uvx recipe is written as an adapter the
+  catalog reads next, and its package is fetched by the runner at first launch;
+  a binary recipe is downloaded now, checked against the hash the publisher
+  gave, and unpacked into a fresh directory under the state root, with nothing
+  written if the hash does not match. An archive whose hash is published wins
+  over the same agent's package recipe, because it is the one form this build
+  can check before anything runs. A binary the publisher gave no hash for is
+  refused unless `--allow-unverified` is passed too, and an archive that
+  redirects off https, answers with a document instead of an archive or a
+  program, names a path outside its own directory, or carries an entry Windows
+  would rewrite is refused rather than unpacked. A replacement keeps the
+  previous install until the new one has landed, so a failed install leaves a
+  working agent in place. `--yes` skips the question for a caller that already
+  decided; `--json` requires it.
 
 ### Changed
 

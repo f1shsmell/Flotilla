@@ -14,3 +14,9 @@ internal/gitops 75
 # transcript is the only copy of what an agent did once its host is gone. A bug
 # here does not lose a run, it loses the record of one.
 internal/transcript 75
+# agent's install path downloads and unpacks code a publisher wrote onto the
+# user's machine. A wrong hash check, extraction path or confirmation is how an
+# archive becomes a program the user never agreed to run. The floor is below the
+# real number because the catalog's discovery heuristics are not this package's
+# point, and the install path itself is covered to the branch.
+internal/agent 80
