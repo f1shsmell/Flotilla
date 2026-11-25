@@ -1,14 +1,15 @@
-package host
+package adapters
 
 import (
 	"os/exec"
 	"strings"
 	"testing"
-
-	"github.com/f1shsmell/flotilla/internal/adapters"
 )
 
-func TestAgentEnvResolvesBareExecutableNames(t *testing.T) {
+// TestEnvironResolvesBareExecutableNames pins the rule every spawn shares: a
+// declared value that names an executable on PATH becomes its absolute path,
+// and the base environment is kept.
+func TestEnvironResolvesBareExecutableNames(t *testing.T) {
 	saved := lookPath
 	lookPath = func(name string) (string, error) {
 		if name == "claude" {
@@ -19,7 +20,7 @@ func TestAgentEnvResolvesBareExecutableNames(t *testing.T) {
 	t.Cleanup(func() { lookPath = saved })
 
 	environ := []string{"PATH=C:\\windows", "KEEP=1"}
-	env := agentEnv(environ, map[string]string{"CLAUDE_CODE_EXECUTABLE": "claude"})
+	env := Environ(environ, map[string]string{"CLAUDE_CODE_EXECUTABLE": "claude"})
 
 	var found string
 	for _, entry := range env {
@@ -38,19 +39,22 @@ func TestAgentEnvResolvesBareExecutableNames(t *testing.T) {
 			}
 		}
 		if !kept {
-			t.Errorf("the host environment lost %q", keep)
+			t.Errorf("the base environment lost %q", keep)
 		}
 	}
 }
 
-func TestAgentEnvKeepsValuesThatAreNotBareNames(t *testing.T) {
+// TestEnvironKeepsValuesThatAreNotBareNames pins the cases a resolver must not
+// touch: an absolute path, a value with no PATH entry behind it, and a plain
+// value that happens to be a bare word.
+func TestEnvironKeepsValuesThatAreNotBareNames(t *testing.T) {
 	saved := lookPath
 	lookPath = func(_ string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	t.Cleanup(func() { lookPath = saved })
 
-	env := agentEnv(nil, map[string]string{
+	env := Environ(nil, map[string]string{
 		"ABSOLUTE": `C:\tools\agent.exe`,
 		"PLAIN":    "just-a-value",
 		"MISSED":   "not-on-path",
@@ -72,11 +76,14 @@ func TestAgentEnvKeepsValuesThatAreNotBareNames(t *testing.T) {
 	}
 }
 
-func TestAgentEnvNilWithNoDeclarationsStaysInherit(t *testing.T) {
-	if env := agentEnv(nil, nil); env != nil {
+// TestEnvironNilBaseWithNoDeclarationsStaysInherit pins the inheritance signal:
+// nil means "read this process's own environment at spawn", so an empty
+// declaration must not turn it into a snapshot taken here.
+func TestEnvironNilBaseWithNoDeclarationsStaysInherit(t *testing.T) {
+	if env := Environ(nil, nil); env != nil {
 		t.Errorf("an empty declaration turned an inheriting environment into %d entries", len(env))
 	}
-	if env := agentEnv(nil, adapters.Adapter{}.Env); env != nil {
+	if env := Environ(nil, Adapter{}.Env); env != nil {
 		t.Errorf("an empty map turned an inheriting environment into %d entries", len(env))
 	}
 }

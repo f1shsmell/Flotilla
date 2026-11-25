@@ -227,6 +227,29 @@ func TestSettingASelectOptionComesBack(t *testing.T) {
 	}
 }
 
+// TestAResponseOnlySetMovesTheSurface pins the agent that reports a change in
+// the set answer alone: opencode sends no notification, so the host must fold
+// the returned list itself or every later choice is made against a stale one.
+func TestAResponseOnlySetMovesTheSurface(t *testing.T) {
+	_, dir := startACPHostEnv(t, acp.Auto, 0, []string{"FLT_FAKE_SILENT_CONFIG=1"})
+	conn, surfaces, _ := dialSurface(t, dir)
+
+	setSurface(t, conn, "model", "fake-large")
+
+	select {
+	case resp := <-surfaces:
+		if model := controlByID(t, resp.Controls, "model"); model.Current != "fake-large" {
+			t.Fatalf("the surface event reports model %q, want fake-large", model.Current)
+		}
+	case <-time.After(waitFor):
+		t.Fatal("no surface event arrived after a response-only set")
+	}
+
+	if model := controlByID(t, fetchSurface(t, conn), "model"); model.Current != "fake-large" {
+		t.Fatalf("a fresh read reports model %q, want fake-large", model.Current)
+	}
+}
+
 // TestSurfaceSetRefusesAnUnknownControl pins the boundary: a value aimed at a
 // control the agent never announced is a bad request, not a silent no-op.
 func TestSurfaceSetRefusesAnUnknownControl(t *testing.T) {

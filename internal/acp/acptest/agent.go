@@ -197,6 +197,13 @@ func fakeSurface() (*sdk.SessionModeState, []sdk.SessionConfigOption) {
 // would make "the probe read nothing" indistinguishable from "the probe is
 // broken".
 func (a *Agent) NewSession(_ context.Context, params sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+	// FLT_FAKE_REQUIRE_ENV names a variable this agent refuses a session without,
+	// which is how a launch test proves a declared environment reached the
+	// process rather than staying in the client.
+	if name := os.Getenv("FLT_FAKE_REQUIRE_ENV"); name != "" && os.Getenv(name) == "" {
+		return sdk.NewSessionResponse{}, fmt.Errorf("%s is not set in this agent's environment", name)
+	}
+
 	// FLT_FAKE_CAPTURE records what the client sent and which scope this agent
 	// process itself received, which is how a test reads the injection without
 	// a model behind it.
@@ -482,7 +489,8 @@ func (a *Agent) SetSessionMode(ctx context.Context, params sdk.SetSessionModeReq
 
 // SetSessionConfigOption records the new value and announces the whole option
 // list, which is what the protocol's update carries. Like the mode set, the
-// notification precedes the response.
+// notification precedes the response. FLT_FAKE_SILENT_CONFIG answers with the
+// list and sends no notification, which is how opencode behaves.
 func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
 	var sessionID sdk.SessionId
 	switch {
@@ -526,13 +534,15 @@ func (a *Agent) SetSessionConfigOption(ctx context.Context, params sdk.SetSessio
 		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("unknown session %q", sessionID)
 	}
 
-	if err := a.connection().SessionUpdate(ctx, sdk.SessionNotification{
-		SessionId: sessionID,
-		Update: sdk.SessionUpdate{
-			ConfigOptionUpdate: &sdk.SessionConfigOptionUpdate{ConfigOptions: options},
-		},
-	}); err != nil {
-		return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("announce the option change: %w", err)
+	if os.Getenv("FLT_FAKE_SILENT_CONFIG") == "" {
+		if err := a.connection().SessionUpdate(ctx, sdk.SessionNotification{
+			SessionId: sessionID,
+			Update: sdk.SessionUpdate{
+				ConfigOptionUpdate: &sdk.SessionConfigOptionUpdate{ConfigOptions: options},
+			},
+		}); err != nil {
+			return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("announce the option change: %w", err)
+		}
 	}
 	return sdk.SetSessionConfigOptionResponse{ConfigOptions: options}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,9 @@ func TestKnownProjectsTheBuiltinPresets(t *testing.T) {
 		}
 		if strings.Join(one.Args, " ") != strings.Join(preset.Args, " ") {
 			t.Fatalf("%q probes with %q, the preset runs with %q", one.Name, one.Args, preset.Args)
+		}
+		if !reflect.DeepEqual(one.Env, preset.Adapter.Env) {
+			t.Fatalf("%q probes with env %v, the preset declares %v", one.Name, one.Env, preset.Adapter.Env)
 		}
 		if one.NeedsCredential != preset.Needs {
 			t.Fatalf("%q says it needs %q, the preset says %q", one.Name, one.NeedsCredential, preset.Needs)

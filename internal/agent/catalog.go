@@ -344,6 +344,25 @@ func Builtins() []Preset {
 			Description: "Gemini CLI in ACP mode.",
 			Discovery:   Discovery{Config: ".gemini"},
 		},
+		{
+			ID:          "codex-acp",
+			Name:        "Codex",
+			Command:     "codex-acp",
+			Mode:        session.ModeACP,
+			Needs:       "a logged-in Codex CLI",
+			Description: "Codex through the codex-acp bridge.",
+			Discovery:   Discovery{Command: "codex", Config: ".codex"},
+		},
+		{
+			ID:          "dsh",
+			Name:        "DeepSeek dsh",
+			Command:     "dsh",
+			Args:        []string{"acp"},
+			Mode:        session.ModeACP,
+			Needs:       "a logged-in DeepSeek account",
+			Description: "DeepSeek's dsh agent over ACP.",
+			Discovery:   Discovery{Config: ".dsh"},
+		},
 	}
 }
 

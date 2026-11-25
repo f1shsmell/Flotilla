@@ -17,6 +17,7 @@ import (
 	sdk "github.com/coder/acp-go-sdk"
 
 	"github.com/f1shsmell/flotilla/internal/acp"
+	"github.com/f1shsmell/flotilla/internal/adapters"
 	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
@@ -53,6 +54,10 @@ type Agent struct {
 	// Command and Args launch it in ACP mode.
 	Command string
 	Args    []string
+	// Env is what the preset declares over this process's environment, the same
+	// map a session host overlays at spawn: a probe that skipped it would fail
+	// for an agent a real session starts.
+	Env map[string]string
 	// NeedsCredential names the environment variable or login the agent needs,
 	// so a probe can say what is missing instead of timing out.
 	NeedsCredential string
@@ -77,6 +82,7 @@ func Known() []Agent {
 			Name:            preset.ID,
 			Command:         preset.Command,
 			Args:            preset.Args,
+			Env:             preset.Adapter.Env,
 			NeedsCredential: preset.Needs,
 		})
 	}
@@ -127,6 +133,13 @@ func (a Agent) Resolve() (string, error) {
 	return path, nil
 }
 
+// launchEnv is what the agent process inherits: this probe's own environment
+// with the preset's declared variables laid over it, resolved the way a host
+// resolves them at spawn.
+func (a Agent) launchEnv() []string {
+	return adapters.Environ(nil, a.Env)
+}
+
 // Run opens one session with the agent, sends one prompt, and reports what came
 // back. It never runs in the test suite: a real turn costs money.
 func Run(ctx context.Context, agent Agent, workspace, prompt string) (Result, error) {
@@ -146,6 +159,7 @@ func Run(ctx context.Context, agent Agent, workspace, prompt string) (Result, er
 		Command: binary,
 		Args:    agent.Args,
 		Dir:     workspace,
+		Env:     agent.launchEnv(),
 	}, acp.Config{
 		Workspace: workspace,
 		Policy:    acp.Auto,

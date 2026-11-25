@@ -87,6 +87,7 @@ func Handshake(ctx context.Context, agent Agent, workspace string) (HandshakeRes
 		Command: binary,
 		Args:    agent.Args,
 		Dir:     workspace,
+		Env:     agent.launchEnv(),
 	}, acp.Config{
 		Workspace: workspace,
 		// An agent that answers with updates is an agent a turn reached, which

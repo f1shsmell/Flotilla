@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { CheckpointStrip } from "../src/components/DiffPanel";
-import type { Checkpoint } from "../src/store";
+import { CheckpointStrip, diffEmptyLabel } from "../src/components/DiffPanel";
+import type { Checkpoint, DiffFile } from "../src/store";
 
 const listed: Checkpoint[] = [
   { turn: 1, commit: "1111111aaaaa", at: "2026-01-01T10:00:00Z" },
@@ -57,5 +57,26 @@ describe("the checkpoint strip", () => {
 
   it("draws nothing for a session with no snapshots", () => {
     expect(strip([])).toBe("");
+  });
+});
+
+describe("the diff panel's empty label", () => {
+  const one: DiffFile = { path: "a.go", status: "M", added: 1, removed: 0 };
+
+  it("keeps the reading label only while the answer is pending", () => {
+    expect(diffEmptyLabel(false, null)).toContain("Reading the diff");
+  });
+
+  it("stops reading when the answer was a refusal", () => {
+    // A failed read leaves no files, exactly like a pending one; without the
+    // flag the panel would keep claiming an answer is on its way forever.
+    expect(diffEmptyLabel(true, null)).not.toContain("Reading the diff");
+    expect(diffEmptyLabel(true, null)).toContain("could not be read");
+    expect(diffEmptyLabel(true, [])).toContain("could not be read");
+  });
+
+  it("distinguishes an empty answer from one with files", () => {
+    expect(diffEmptyLabel(false, [])).toBe("Nothing changed here.");
+    expect(diffEmptyLabel(false, [one])).toContain("Pick a file");
   });
 });
