@@ -200,10 +200,13 @@ func splitLines(data []byte) [][]byte {
 
 // Inherit fills an overriding adapter's blanks from the definition it replaces,
 // field by field: an adapter that corrects the command but says nothing about
-// blocked patterns keeps the ones it inherited. A nil slice is an omission; an
-// explicit empty slice is a decision to clear the inherited list.
+// blocked patterns keeps the ones it inherited. A nil slice or map is an
+// omission; an explicit empty one is a decision to clear the inherited value.
 func Inherit(base, override Adapter) Adapter {
 	out := override
+	if out.Env == nil {
+		out.Env = base.Env
+	}
 	if out.Blocked == nil {
 		out.Blocked = base.Blocked
 	}

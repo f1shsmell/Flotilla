@@ -84,6 +84,8 @@ func run(args []string, out io.Writer) error {
 		return listAgents(*channel, *asJSON, out)
 	case "registry":
 		return registryCommand(fs.Args()[1:], *channel, *asJSON, *failOnDrift, out)
+	case "install":
+		return installCommand(fs.Args()[1:], *channel, *asJSON, os.Stdin, out)
 	case "probe":
 		return probeAgent(fs.Args()[1:], *asJSON, out)
 	case "replay":
@@ -749,7 +751,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  registry list, refresh or drift-check the cached ACP agent directory\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  registry list, refresh or drift-check the cached ACP agent directory\n  install  confirm and run one agent's install recipe, writing its adapter\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {

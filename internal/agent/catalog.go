@@ -474,6 +474,9 @@ func (c *Catalog) project(preset Preset, set Change) Entry {
 	} else if path, err := c.lookPath(preset.Command); err == nil {
 		entry.Installed = true
 		entry.Path = path
+	} else if path, ok := installedCommand(preset.Command); ok {
+		entry.Installed = true
+		entry.Path = path
 	}
 	entry.Tier = c.grade(entry.Installed, preset.Discovery)
 	return entry
@@ -556,6 +559,9 @@ type adapterFile struct {
 	Discovery *Discovery        `json:"discovery"`
 	Install   *adapters.Install `json:"install"`
 
+	// Env is the environment the launched process needs, restated from the recipe.
+	Env map[string]string `json:"env"`
+
 	Blocked       []string       `json:"blocked"`
 	Paste         adapters.Paste `json:"paste"`
 	TrustArgs     []string       `json:"trust_args"`
@@ -585,6 +591,7 @@ func decodeAdapter(payload []byte) (Preset, error) {
 		Needs:       file.Needs,
 		Description: file.Description,
 		Adapter: adapters.Adapter{
+			Env:           file.Env,
 			Blocked:       file.Blocked,
 			Paste:         file.Paste,
 			TrustArgs:     file.TrustArgs,
