@@ -20,7 +20,7 @@ export function packagingConfig(channel) {
       };
     case "preview":
       return {
-        version: "0.1.0-preview.1",
+        version: "0.1.0-preview.2",
         appId: "dev.flotilla.app.preview",
         productName: "Flotilla Preview",
         artifactName: "Flotilla-Preview-${version}-${arch}.${ext}",
