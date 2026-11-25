@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
@@ -23,6 +24,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/mcpserver"
+	"github.com/f1shsmell/flotilla/internal/registry"
 	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/store"
 	"github.com/f1shsmell/flotilla/internal/version"
@@ -78,6 +80,8 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return listAgents(*channel, *asJSON, out)
+	case "registry":
+		return registryCommand(fs.Args()[1:], *channel, *asJSON, out)
 	case "probe":
 		return probeAgent(fs.Args()[1:], *asJSON, out)
 	case "replay":
@@ -314,6 +318,142 @@ func agentLines(list agent.Listing) []string {
 			e.ID, mode, state, strings.Join(switches, ","), e.Command))
 	}
 	return lines
+}
+
+// registryFetchTimeout bounds one refresh from the terminal. The daemon's loop
+// has its own bound; this one only has to outlast a slow download.
+const registryFetchTimeout = 30 * time.Second
+
+// registryCommand serves the cached ACP agent directory. list prints what the
+// last refresh left; refresh fetches the published registry and replaces it.
+func registryCommand(args []string, channel string, asJSON bool, out io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: flt [--json] registry <list|refresh>")
+	}
+	switch args[0] {
+	case "list":
+		return listRegistry(args[1:], channel, asJSON, out)
+	case "refresh":
+		return refreshRegistry(args[1:], channel, asJSON, out)
+	default:
+		return fmt.Errorf("unknown registry command %q", args[0])
+	}
+}
+
+// listRegistry prints the cached directory. A missing cache is answered with
+// the command that fills it, never with an empty list.
+func listRegistry(args []string, channel string, asJSON bool, out io.Writer) error {
+	if len(args) > 0 {
+		return fmt.Errorf("registry list takes no arguments, got %q: flags go before the command", args)
+	}
+
+	paths, err := home.Resolve(channel)
+	if err != nil {
+		return fmt.Errorf("resolve state paths: %w", err)
+	}
+	path := registry.CachePath(paths.Cache)
+	cached, err := registry.Load(path)
+	if err != nil {
+		return fmt.Errorf("read the cached agent registry (run `flt registry refresh`): %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("read the age of the agent registry cache: %w", err)
+	}
+
+	if asJSON {
+		payload, err := json.MarshalIndent(struct {
+			registry.Registry
+			CachedAt time.Time `json:"cached_at"`
+		}{cached, info.ModTime()}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode the registry: %w", err)
+		}
+		return print(out, string(payload))
+	}
+
+	for _, a := range cached.Agents {
+		if err := print(out, fmt.Sprintf("%s\t%s\t%s\t%s",
+			terminalText(a.ID), terminalText(a.Version),
+			terminalText(a.Distribution.Summary()), terminalText(a.Name))); err != nil {
+			return err
+		}
+	}
+	// The age is part of the answer: an offline copy is still a copy, but a
+	// directory printed exactly like a fresh one would be a stale label.
+	return print(out, cacheNote(time.Since(info.ModTime())))
+}
+
+// terminalText replaces control characters in fetched data, so a name cannot
+// rewrite the terminal row it is printed on.
+func terminalText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// cacheNote renders how old the cached directory is, and says when it is past
+// the refresh interval.
+func cacheNote(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	var note string
+	switch {
+	case age < time.Minute:
+		note = "cached just now"
+	case age < time.Hour:
+		note = fmt.Sprintf("cached %dm ago", int(age.Minutes()))
+	default:
+		hours, minutes := int(age.Hours()), int(age.Minutes())%60
+		if minutes == 0 {
+			note = fmt.Sprintf("cached %dh ago", hours)
+		} else {
+			note = fmt.Sprintf("cached %dh%02dm ago", hours, minutes)
+		}
+	}
+	if age >= registry.TTL {
+		return note + " (stale; run `flt registry refresh`)"
+	}
+	return note
+}
+
+// refreshRegistry fetches the published registry and replaces the cache. What
+// lands is the validated subset this build can describe, and the count says how
+// much of the answer that was.
+func refreshRegistry(args []string, channel string, asJSON bool, out io.Writer) error {
+	if len(args) > 0 {
+		return fmt.Errorf("registry refresh takes no arguments, got %q: flags go before the command", args)
+	}
+
+	paths, err := home.Resolve(channel)
+	if err != nil {
+		return fmt.Errorf("resolve state paths: %w", err)
+	}
+	path := registry.CachePath(paths.Cache)
+
+	ctx, cancel := context.WithTimeout(context.Background(), registryFetchTimeout)
+	defer cancel()
+	answer, err := registry.Refresh(ctx, nil, path, registry.URL)
+	if err != nil {
+		return fmt.Errorf("refresh the agent registry: %w", err)
+	}
+
+	if asJSON {
+		payload, err := json.MarshalIndent(struct {
+			Path    string `json:"path"`
+			Version string `json:"version"`
+			Agents  int    `json:"agents"`
+		}{path, answer.Version, len(answer.Agents)}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode the refresh: %w", err)
+		}
+		return print(out, string(payload))
+	}
+	return print(out, fmt.Sprintf("wrote %d agents to %s", len(answer.Agents), path))
 }
 
 // probeTimeout bounds one probe turn. A real agent turn is slow, but a hung
@@ -590,7 +730,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  registry list or refresh the cached ACP agent directory\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {

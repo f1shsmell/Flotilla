@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,6 +60,17 @@ type Config struct {
 	// TaskMaxRuns bounds how many times one task may start. Zero uses the
 	// orchestrator's default.
 	TaskMaxRuns int
+	// CacheDir holds the agent registry cache; empty disables the refresh loop.
+	CacheDir string
+	// RegistryURL is where the published agent registry lives; empty uses the
+	// published default.
+	RegistryURL string
+	// RegistryRefresh is how often the published registry is refetched. Zero
+	// disables the refresh, which is how the e2e daemons stay offline.
+	RegistryRefresh time.Duration
+	// RegistryClient fetches the registry; nil uses the bounded default client,
+	// and a test substitutes one so no fetch leaves the machine.
+	RegistryClient *http.Client
 	// Log receives the daemon's diagnostics.
 	Log *slog.Logger
 }
@@ -538,8 +550,8 @@ func (d *Daemon) Detach() {
 	d.relay.closeSeen()
 }
 
-// startBackground repairs the queue and starts the two loops that serve it. It
-// is safe to call twice: the second call does nothing.
+// startBackground repairs the queue and starts the loops that serve it. It is
+// safe to call twice: the second call does nothing.
 //
 // The repair is not optional and not deferred. A task left saying running is a
 // run whose outcome this build cannot vouch for; parking it is what stops the
@@ -592,6 +604,14 @@ func (d *Daemon) startBackground() {
 			go func() {
 				defer d.background.Done()
 				d.reclaimLoop(ctx)
+			}()
+		}
+
+		if d.cfg.CacheDir != "" && d.cfg.RegistryRefresh > 0 {
+			d.background.Add(1)
+			go func() {
+				defer d.background.Done()
+				d.registryLoop(ctx)
 			}()
 		}
 	})
