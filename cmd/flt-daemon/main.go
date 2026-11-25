@@ -17,6 +17,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/daemon"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/registry"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
 
@@ -31,13 +32,15 @@ func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("flt-daemon", flag.ContinueOnError)
 
 	var (
-		channel  = fs.String("channel", version.Channel, "release channel this daemon serves: stable or preview")
-		hostBin  = fs.String("host-binary", "", "flt-session-host executable to spawn for new sessions")
-		permWait = fs.Duration("permission-wait", 0, "how long a session waits for a permission answer before refusing it; zero waits forever")
-		reclaim  = fs.Duration("reclaim-idle", time.Hour, "how quiet an agent family must be before its host is reclaimed; zero disables")
-		sweep    = fs.Duration("reclaim-sweep", time.Minute, "how often to look for idle families")
-		showVer  = fs.Bool("version", false, "print the build version and exit")
-		logOut   = fs.Output()
+		channel         = fs.String("channel", version.Channel, "release channel this daemon serves: stable or preview")
+		hostBin         = fs.String("host-binary", "", "flt-session-host executable to spawn for new sessions")
+		permWait        = fs.Duration("permission-wait", 0, "how long a session waits for a permission answer before refusing it; zero waits forever")
+		reclaim         = fs.Duration("reclaim-idle", time.Hour, "how quiet an agent family must be before its host is reclaimed; zero disables")
+		sweep           = fs.Duration("reclaim-sweep", time.Minute, "how often to look for idle families")
+		registryRefresh = fs.Duration("registry-refresh", registry.TTL,
+			"how often to refetch the published agent registry; zero disables")
+		showVer = fs.Bool("version", false, "print the build version and exit")
+		logOut  = fs.Output()
 	)
 
 	fs.Usage = func() {
@@ -80,15 +83,17 @@ func run(args []string, out io.Writer) error {
 	}
 
 	d := daemon.New(daemon.Config{
-		Channel:        *channel,
-		Token:          token,
-		StateDir:       paths.Sessions,
-		ConfigDir:      paths.Config,
-		HostBinary:     hostBinary,
-		PermissionWait: *permWait,
-		ReclaimIdle:    *reclaim,
-		ReclaimSweep:   *sweep,
-		Log:            logger,
+		Channel:         *channel,
+		Token:           token,
+		StateDir:        paths.Sessions,
+		ConfigDir:       paths.Config,
+		CacheDir:        paths.Cache,
+		HostBinary:      hostBinary,
+		PermissionWait:  *permWait,
+		ReclaimIdle:     *reclaim,
+		ReclaimSweep:    *sweep,
+		RegistryRefresh: *registryRefresh,
+		Log:             logger,
 	}, daemon.ExecSpawner(logger))
 
 	logger.Info("daemon starting", "version", version.String(), "channel", *channel, "root", paths.Root)

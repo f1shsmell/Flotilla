@@ -94,7 +94,8 @@ func startDaemon(t *testing.T, bin, home, channel string) *daemonProcess {
 		t.Fatalf("open the daemon log: %v", err)
 	}
 
-	cmd := exec.CommandContext(context.Background(), bin, "--channel", channel, "--host-binary", builtHostBinary(t))
+	cmd := exec.CommandContext(context.Background(), bin,
+		"--channel", channel, "--host-binary", builtHostBinary(t), "--registry-refresh", "0")
 	cmd.Env = append(os.Environ(),
 		"FLT_HOME="+home,
 		helperEnv+"=1",

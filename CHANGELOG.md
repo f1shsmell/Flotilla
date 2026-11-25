@@ -91,6 +91,16 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   agent is recognised (`discovery.command`, `discovery.config`), so an agent this
   build does not ship gets the same tiers. `flt probe --handshake` stays the
   zero-token proof that an agent actually speaks ACP.
+- **The published agent directory is cached.** The daemon fetches the official
+  ACP Registry at startup when its cache is stale and hourly after that, into one
+  file under the state root's cache directory. An answer that is not a registry
+  is refused, an entry naming no pinned install is left out, and a failed refresh
+  keeps the last copy serving, so an offline build still has a directory.
+  `flt registry list` prints the cache and how old it is, and
+  `flt registry refresh` refetches it; listing a recipe installs nothing, and
+  nothing in it is run. The registry's
+  `distribution` is the adapter file's `install` field — one recipe format for
+  both: npx or uvx pinned to an exact version, or a binary archive per platform.
 
 ### Changed
 

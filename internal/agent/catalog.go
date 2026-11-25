@@ -64,6 +64,9 @@ type Preset struct {
 	// Discovery is how the agent is recognised besides its start command; never on the wire.
 	Discovery Discovery `json:"-"`
 
+	// Install is how the agent is fetched, in the registry's own shape.
+	Install adapters.Install `json:"-"`
+
 	// source is where the preset came from: a builtin, or an adapter file name.
 	source string
 }
@@ -545,7 +548,8 @@ type adapterFile struct {
 	Needs       string       `json:"needs"`
 	Description string       `json:"description"`
 
-	Discovery *Discovery `json:"discovery"`
+	Discovery *Discovery        `json:"discovery"`
+	Install   *adapters.Install `json:"install"`
 
 	Blocked       []string       `json:"blocked"`
 	Paste         adapters.Paste `json:"paste"`
@@ -586,6 +590,9 @@ func decodeAdapter(payload []byte) (Preset, error) {
 	// Absent stays empty so inherit() can fill it from the builtin it replaces.
 	if file.Discovery != nil {
 		preset.Discovery = *file.Discovery
+	}
+	if file.Install != nil {
+		preset.Install = *file.Install
 	}
 	return preset, nil
 }
@@ -633,6 +640,10 @@ func normalize(p *Preset) error {
 		return fmt.Errorf("%s: mode %q is neither %s nor %s: %w", p.ID, p.Mode, session.ModeACP, session.ModePTY, ErrBadPreset)
 	}
 	if err := p.Adapter.Validate(); err != nil {
+		return fmt.Errorf("%s: %w: %w", p.ID, ErrBadPreset, err)
+	}
+	p.Install.Normalize()
+	if err := p.Install.Validate(); err != nil {
 		return fmt.Errorf("%s: %w: %w", p.ID, ErrBadPreset, err)
 	}
 	return nil
@@ -688,6 +699,15 @@ func inherit(base, adapter Preset) Preset {
 	}
 	if adapter.Discovery.Config == "" {
 		adapter.Discovery.Config = base.Discovery.Config
+	}
+	if adapter.Install.Npx == nil {
+		adapter.Install.Npx = base.Install.Npx
+	}
+	if adapter.Install.Uvx == nil {
+		adapter.Install.Uvx = base.Install.Uvx
+	}
+	if len(adapter.Install.Binary) == 0 {
+		adapter.Install.Binary = base.Install.Binary
 	}
 	return adapter
 }

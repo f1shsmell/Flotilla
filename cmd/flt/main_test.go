@@ -2,11 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/f1shsmell/flotilla/internal/acp/probe"
+	"github.com/f1shsmell/flotilla/internal/adapters"
 	"github.com/f1shsmell/flotilla/internal/agent"
+	"github.com/f1shsmell/flotilla/internal/home"
+	"github.com/f1shsmell/flotilla/internal/registry"
 	"github.com/f1shsmell/flotilla/internal/session"
 	"github.com/f1shsmell/flotilla/internal/version"
 )
@@ -197,6 +203,114 @@ func TestAgentLinesShowEverySwitch(t *testing.T) {
 	}
 	if got, want := lines[3], "opencode\tacp\tmissing\t\topencode"; got != want {
 		t.Fatalf("fourth line = %q, want %q", got, want)
+	}
+}
+
+// TestRegistryListPrintsTheCachedDirectory pins the terminal view of the
+// directory the daemon refreshes, and that a missing cache names the command
+// that fills it instead of reading as an empty registry.
+func TestRegistryListPrintsTheCachedDirectory(t *testing.T) {
+	t.Setenv("FLT_HOME", t.TempDir())
+	t.Setenv("FLT_CHANNEL", "")
+
+	var out bytes.Buffer
+	err := run([]string{"registry", "list"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "flt registry refresh") {
+		t.Fatalf("list without a cache = %v, want the refresh hint", err)
+	}
+
+	paths, err := home.Resolve(version.Channel)
+	if err != nil {
+		t.Fatalf("resolve state paths: %v", err)
+	}
+	path := registry.CachePath(paths.Cache)
+	cached := registry.Registry{Version: "1.0.0", Agents: []registry.Agent{{
+		ID: "npx-agent", Name: "NPX Agent", Version: "1.3.0",
+		Distribution: adapters.Install{Npx: &adapters.Package{Package: "agent@1.3.0"}},
+	}}}
+	if err := registry.Save(path, cached); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	out.Reset()
+	if err := run([]string{"registry", "list"}, &out); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if want := "npx-agent\t1.3.0\tnpx agent@1.3.0\tNPX Agent\ncached just now\n"; out.String() != want {
+		t.Fatalf("list printed %q, want %q", out.String(), want)
+	}
+
+	out.Reset()
+	if err := run([]string{"--json", "registry", "list"}, &out); err != nil {
+		t.Fatalf("list --json: %v", err)
+	}
+	var decoded struct {
+		registry.Registry
+		CachedAt time.Time `json:"cached_at"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode the json listing: %v", err)
+	}
+	if len(decoded.Agents) != 1 || decoded.Agents[0].ID != "npx-agent" || decoded.CachedAt.IsZero() {
+		t.Fatalf("json listing = %+v", decoded)
+	}
+
+	old := time.Now().Add(-2 * registry.TTL)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age the cache: %v", err)
+	}
+	out.Reset()
+	if err := run([]string{"registry", "list"}, &out); err != nil {
+		t.Fatalf("list a stale cache: %v", err)
+	}
+	if want := "cached 2h ago (stale; run `flt registry refresh`)"; !strings.Contains(out.String(), want) {
+		t.Fatalf("stale listing = %q, want %q", out.String(), want)
+	}
+}
+
+// TestRegistryListCannotRewriteTheTerminal keeps fetched text from acting on
+// the terminal: a control character is printed as a question mark.
+func TestRegistryListCannotRewriteTheTerminal(t *testing.T) {
+	t.Setenv("FLT_HOME", t.TempDir())
+	t.Setenv("FLT_CHANNEL", "")
+
+	paths, err := home.Resolve(version.Channel)
+	if err != nil {
+		t.Fatalf("resolve state paths: %v", err)
+	}
+	cached := registry.Registry{Version: "1.0.0", Agents: []registry.Agent{{
+		ID: "agent", Name: "x\u001b[2K\ry", Version: "1.0.0",
+		Distribution: adapters.Install{Npx: &adapters.Package{Package: "agent@1.0.0"}},
+	}}}
+	if err := registry.Save(registry.CachePath(paths.Cache), cached); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := run([]string{"registry", "list"}, &out); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if strings.ContainsAny(out.String(), "\x1b\r") {
+		t.Fatalf("listing printed control characters: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "x?[2K?y") {
+		t.Fatalf("listing = %q, want the control characters replaced", out.String())
+	}
+}
+
+// TestRegistryRejectsWhatItDoesNotServe keeps a mistyped subcommand from
+// reaching the network or the cache.
+func TestRegistryRejectsWhatItDoesNotServe(t *testing.T) {
+	for _, args := range [][]string{
+		{"registry"},
+		{"registry", "frobnicate"},
+		{"registry", "list", "extra"},
+		{"registry", "refresh", "extra"},
+	} {
+		var out bytes.Buffer
+		if err := run(args, &out); err == nil {
+			t.Fatalf("run(%q) = nil, want an error", args)
+		}
 	}
 }
 
