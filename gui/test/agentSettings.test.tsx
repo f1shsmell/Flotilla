@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentSettings } from "../src/components/AgentSettings";
-import type { AgentEntry } from "../src/store";
+import type { AgentEntry, RegistryEntry } from "../src/store";
 
 function entry(over: Partial<AgentEntry>): AgentEntry {
   return {
@@ -24,16 +24,31 @@ function entry(over: Partial<AgentEntry>): AgentEntry {
   };
 }
 
-function settings(agents: AgentEntry[]): string {
+function settings(agents: AgentEntry[], registry = directory()): string {
   return renderToStaticMarkup(
     <AgentSettings
       agents={agents}
+      registry={registry}
       problems={[]}
       onToggle={async () => {}}
       onRefresh={() => {}}
       onClose={() => {}}
     />,
   );
+}
+
+function directory(): RegistryEntry[] {
+  return [
+    {
+      id: "kimi",
+      name: "Kimi Code",
+      version: "1.2.3",
+      description: "A Kimi agent",
+      repository: "https://example.com/kimi",
+      license: "MIT",
+      recipe: "uvx kimi-code@1.2.3",
+    },
+  ];
 }
 
 describe("the agent settings page", () => {
@@ -50,5 +65,22 @@ describe("the agent settings page", () => {
 
     expect(html).toContain("installed");
     expect(html).toContain("1 available");
+  });
+
+  it("lists the published directory without switches to flip", () => {
+    const html = settings([entry({ tier: "available" })]);
+
+    expect(html).toContain("ACP Registry");
+    expect(html).toContain("Kimi Code");
+    expect(html).toContain("uvx kimi-code@1.2.3");
+    // A directory entry has no stored switches, so it has no row in the table:
+    // a toggle here would write a switch nothing reads.
+    expect(html).not.toContain("enable Kimi Code");
+  });
+
+  it("keeps the directory out of the page when there is none", () => {
+    const html = settings([entry({ tier: "available" })], []);
+
+    expect(html).not.toContain("ACP Registry");
   });
 });

@@ -262,10 +262,10 @@ func listAgents(channel string, asJSON bool, out io.Writer) error {
 		return print(out, string(payload))
 	}
 
-	if len(list.Agents) == 0 {
+	if len(list.Agents) == 0 && len(list.Registry) == 0 {
 		return print(out, "no agents")
 	}
-	for _, line := range agentLines(list) {
+	for _, line := range agentListingLines(list) {
 		if err := print(out, line); err != nil {
 			return err
 		}
@@ -316,6 +316,20 @@ func agentLines(list agent.Listing) []string {
 		}
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
 			e.ID, mode, state, strings.Join(switches, ","), e.Command))
+	}
+	return lines
+}
+
+// agentListingLines renders the catalog and then the directory's extra agents:
+// a reader sees what can start, then what only needs installing.
+func agentListingLines(list agent.Listing) []string {
+	lines := agentLines(list)
+	if len(list.Registry) == 0 {
+		return lines
+	}
+	lines = append(lines, "ACP Registry (not installed):")
+	for _, entry := range list.Registry {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s", entry.ID, entry.Version, entry.Recipe))
 	}
 	return lines
 }

@@ -153,6 +153,16 @@ export const wireTypes = {
   "agent.Listing": {
     "agents": { go: "Agents", type: "[]Entry" },
     "problems": { go: "Problems", type: "[]string", optional: true },
+    "registry": { go: "Registry", type: "[]RegistryEntry", optional: true },
+  },
+  "agent.RegistryEntry": {
+    "description": { go: "Description", type: "string", optional: true },
+    "id": { go: "ID", type: "string" },
+    "license": { go: "License", type: "string", optional: true },
+    "name": { go: "Name", type: "string" },
+    "recipe": { go: "Recipe", type: "string" },
+    "repository": { go: "Repository", type: "string", optional: true },
+    "version": { go: "Version", type: "string" },
   },
   "comments.Comment": {
     "at": { go: "At", type: "time.Time" },

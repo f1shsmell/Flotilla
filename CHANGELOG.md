@@ -101,6 +101,11 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   nothing in it is run. The registry's
   `distribution` is the adapter file's `install` field — one recipe format for
   both: npx or uvx pinned to an exact version, or a binary archive per platform.
+- **The directory reaches the picker.** `daemon.agents` now carries the cached
+  registry's agents that this build does not already know, each with its pinned
+  recipe. The new-session picker and the agent settings page list them under
+  **ACP Registry**: searchable, with no switch and no Start, because a recipe is
+  not an install. `flt agents` prints the same section after the catalog.
 
 ### Changed
 

@@ -77,7 +77,7 @@ export function App(): React.ReactElement {
   const [fleetError, setFleetError] = useState<string | null>(null);
   // agents is the daemon's catalogue. It changes when the user edits a switch,
   // so it is read again after every write rather than patched in the renderer.
-  const [agents, setAgents] = useState<AgentListing>({ agents: [], problems: [] });
+  const [agents, setAgents] = useState<AgentListing>({ agents: [], problems: [], registry: [] });
   // agentsError is why the catalogue is empty, when it is empty because the
   // daemon could not be reached rather than because the machine has no agents.
   const [agentsError, setAgentsError] = useState<string | null>(null);
@@ -355,7 +355,7 @@ export function App(): React.ReactElement {
           setAgents(parseAgents(await window.flotilla.agents()));
           setAgentsError(null);
         } catch (error) {
-          setAgents({ agents: [], problems: [] });
+          setAgents({ agents: [], problems: [], registry: [] });
           setAgentsError(error instanceof Error ? error.message : String(error));
         }
       } while (agentsReread.current);
@@ -793,6 +793,7 @@ export function App(): React.ReactElement {
       ) : null}
       <NewSessionForm
         agents={agents.agents}
+        registry={agents.registry}
         unavailable={agentsError}
         loaded={agentsLoaded}
         onStart={start}
@@ -961,6 +962,7 @@ export function App(): React.ReactElement {
           <div className="agent-settings-overlay">
             <AgentSettings
               agents={agents.agents}
+              registry={agents.registry}
               problems={agents.problems}
               unavailable={agentsError}
               loaded={agentsLoaded}

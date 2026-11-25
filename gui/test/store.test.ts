@@ -982,8 +982,48 @@ describe("parseAgents", () => {
   });
 
   it("survives a reply that is not a listing", () => {
-    expect(parseAgents(null)).toEqual({ agents: [], problems: [] });
+    expect(parseAgents(null)).toEqual({ agents: [], problems: [], registry: [] });
     expect(parseAgents({ agents: "nope" }).agents).toEqual([]);
+  });
+
+  it("reads the published directory beside the catalog", () => {
+    const listing = parseAgents({
+      agents: [],
+      registry: [
+        {
+          id: "kimi",
+          name: "Kimi Code",
+          version: "1.2.3",
+          description: "A Kimi agent",
+          repository: "https://example.com/kimi",
+          license: "MIT",
+          recipe: "uvx kimi-code@1.2.3",
+        },
+      ],
+    });
+
+    expect(listing.registry).toEqual([
+      {
+        id: "kimi",
+        name: "Kimi Code",
+        version: "1.2.3",
+        description: "A Kimi agent",
+        repository: "https://example.com/kimi",
+        license: "MIT",
+        recipe: "uvx kimi-code@1.2.3",
+      },
+    ]);
+  });
+
+  it("drops a directory entry a session could not be started from", () => {
+    const listing = parseAgents({
+      agents: [],
+      // No name to search for, and no recipe to show: an entry with a hole is
+      // an entry the picker cannot describe.
+      registry: [{ version: "1.0.0", recipe: "npx x@1.0.0" }, { id: "ok", name: "OK" }],
+    });
+
+    expect(listing.registry).toEqual([]);
   });
 });
 

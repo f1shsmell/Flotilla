@@ -30,6 +30,7 @@ const wired: { go: string; ts: string; renamed?: Record<string, string> }[] = [
   { go: "daemon.SetAgentRequest", ts: "SetAgentRequest" },
   { go: "agent.Entry", ts: "AgentEntry" },
   { go: "agent.Listing", ts: "AgentListing" },
+  { go: "agent.RegistryEntry", ts: "RegistryEntry" },
   { go: "agent.Change", ts: "AgentChange" },
   { go: "diff.File", ts: "DiffFile" },
   { go: "comments.Comment", ts: "Comment" },

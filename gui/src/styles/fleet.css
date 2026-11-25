@@ -516,6 +516,30 @@
   color: var(--muted);
 }
 
+/* The published directory inside the picker: rows are not buttons, so they
+   carry no hover or selection state that would promise a start. */
+.registry-list {
+  margin-top: 2px;
+  max-height: 132px;
+}
+
+.registry-option {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px var(--sp-3);
+  padding: 3px var(--sp-3);
+  font-size: var(--fs-small);
+}
+
+.registry-option .mono {
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+}
+
+.registry-option .registry-recipe {
+  grid-column: 1 / -1;
+}
+
 button.link {
   background: transparent;
   border-color: transparent;

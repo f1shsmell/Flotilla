@@ -95,6 +95,7 @@ var WireTypes = []string{
 	"daemon.WorktreeRequest",
 	"agent.Entry",
 	"agent.Listing",
+	"agent.RegistryEntry",
 	"agent.Change",
 	"diff.File",
 	"comments.Comment",

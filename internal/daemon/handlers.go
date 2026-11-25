@@ -45,7 +45,7 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 	case MethodStatus:
 		return d.status(peer), nil
 	case MethodAgents:
-		return d.agents.List(), nil
+		return d.agentListing(), nil
 	case MethodAgentSet:
 		return d.setAgent(params)
 	case MethodSessionStart:

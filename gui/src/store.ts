@@ -232,11 +232,28 @@ export interface AgentEntry {
   tier: string;
 }
 
+// RegistryEntry is one agent the published ACP Registry offers that this build
+// does not otherwise know: a catalogue row, not a preset. It has no switches
+// and cannot be started, so it is listed apart from the catalog.
+export interface RegistryEntry {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  repository: string;
+  license: string;
+  // recipe is the one-line install plan the directory publishes, such as
+  // "npx agent@1.2.3". It is shown to a person; nothing here installs it.
+  recipe: string;
+}
+
 export interface AgentListing {
   agents: AgentEntry[];
   // problems are adapter or switch files the daemon could not read. They are
   // reported beside the list rather than instead of it.
   problems: string[];
+  // registry is the published directory's agents the catalog does not know.
+  registry: RegistryEntry[];
 }
 
 // AgentChange is one switch update. An absent field keeps the stored value, so a
@@ -263,6 +280,7 @@ function asStringList(value: unknown): string[] {
 export function parseAgents(raw: unknown): AgentListing {
   const value = (raw ?? {}) as Record<string, unknown>;
   const agents = Array.isArray(value.agents) ? value.agents : [];
+  const registry = Array.isArray(value.registry) ? value.registry : [];
 
   return {
     agents: agents.map((entry) => {
@@ -286,6 +304,28 @@ export function parseAgents(raw: unknown): AgentListing {
       };
     }),
     problems: asStringList(value.problems),
+    registry: registry.flatMap((entry) => {
+      const agent = (entry ?? {}) as Record<string, unknown>;
+      const id = asString(agent.id);
+      const name = asString(agent.name);
+      const recipe = asString(agent.recipe);
+      // An entry with a hole cannot be described or searched for, and a row
+      // with no recipe would claim an install without saying what it is.
+      if (id === "" || name === "" || recipe === "") {
+        return [];
+      }
+      return [
+        {
+          id,
+          name,
+          version: asString(agent.version),
+          description: asString(agent.description),
+          repository: asString(agent.repository),
+          license: asString(agent.license),
+          recipe,
+        },
+      ];
+    }),
   };
 }
 
@@ -307,6 +347,24 @@ export function filterAgents(agents: readonly AgentEntry[], query: string): Agen
     return agents.slice();
   }
   return agents.filter((agent) => matchesAgent(agent, words));
+}
+
+// filterRegistry narrows the published directory by the same words the picker
+// searches for: name, id, description, version and recipe, in any case.
+export function filterRegistry(
+  entries: readonly RegistryEntry[],
+  query: string,
+): RegistryEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter((word) => word !== "");
+  if (words.length === 0) {
+    return entries.slice();
+  }
+  return entries.filter((entry) => {
+    const haystack = [entry.name, entry.id, entry.description, entry.version, entry.recipe]
+      .join(" ")
+      .toLowerCase();
+    return words.every((word) => haystack.includes(word));
+  });
 }
 
 // agentReady is the one "can this agent be started" every surface shares: the
