@@ -67,6 +67,10 @@ type Session struct {
 	surfMu  sync.Mutex
 	modes   *sdk.SessionModeState
 	options []sdk.SessionConfigOption
+	// onSurface folds a change into the live state and tells the client. It is
+	// set at open, and the setters call it for an agent that answers in the
+	// reply instead of sending a notification.
+	onSurface func(SurfaceChange)
 }
 
 // workspaceOf returns the first candidate a session can run in, falling back to
@@ -154,6 +158,7 @@ func Open(ctx context.Context, launch Launch, cfg Config) (*Session, error) {
 			cfg.OnSurface(change)
 		}
 	}
+	s.onSurface = wrapped.OnSurface
 	client := NewClient(wrapped)
 	s.client = client
 	s.conn = sdk.NewClientSideConnection(client, stdin, stdout)
@@ -339,31 +344,52 @@ func (s *Session) SetMode(ctx context.Context, modeID string) error {
 	return nil
 }
 
-// SetConfigValue asks the agent to pick one value of a select option.
+// noteSurface folds a change the agent reported in a reply rather than in a
+// notification. It takes the same path, so a client hears it and a read that
+// follows reports the new value.
+func (s *Session) noteSurface(change SurfaceChange) {
+	if change.Options == nil {
+		return
+	}
+	if s.onSurface != nil {
+		s.onSurface(change)
+		return
+	}
+	s.applySurface(change)
+}
+
+// SetConfigValue asks the agent to pick one value of a select option. The
+// reply carries the full option list — some agents (opencode) report changes
+// nowhere else — so it is folded into the surface here.
 func (s *Session) SetConfigValue(ctx context.Context, configID, value string) error {
-	if _, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
+	resp, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
 		ValueId: &sdk.SetSessionConfigOptionValueId{
 			SessionId: s.agentID,
 			ConfigId:  sdk.SessionConfigId(configID),
 			Value:     sdk.SessionConfigValueId(value),
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("set config %q to %q: %w", configID, value, err)
 	}
+	s.noteSurface(SurfaceChange{Options: resp.ConfigOptions})
 	return nil
 }
 
-// SetConfigBool asks the agent to flip a boolean option.
+// SetConfigBool asks the agent to flip a boolean option, folding the reply's
+// option list like SetConfigValue.
 func (s *Session) SetConfigBool(ctx context.Context, configID string, value bool) error {
-	if _, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
+	resp, err := s.conn.SetSessionConfigOption(ctx, sdk.SetSessionConfigOptionRequest{
 		Boolean: &sdk.SetSessionConfigOptionBoolean{
 			SessionId: s.agentID,
 			ConfigId:  sdk.SessionConfigId(configID),
 			Value:     value,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("set config %q to %t: %w", configID, value, err)
 	}
+	s.noteSurface(SurfaceChange{Options: resp.ConfigOptions})
 	return nil
 }
 

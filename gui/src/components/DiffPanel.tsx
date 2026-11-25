@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GitActions } from "./GitActions";
 import { RefreshButton } from "./RefreshButton";
@@ -14,6 +14,19 @@ import {
   type DiffFile,
   type DiffLine,
 } from "../store";
+
+// diffEmptyLabel is what the panel says under its file list. A failure and a
+// pending read both leave no files, so they are told apart by `failed`: a
+// refusal that kept the reading label up would claim an answer is coming.
+export function diffEmptyLabel(failed: boolean, files: DiffFile[] | null): string {
+  if (failed) {
+    return "The diff could not be read; the error above says why.";
+  }
+  if (files === null) {
+    return "Reading the diff…";
+  }
+  return files.length > 0 ? "Pick a file to read its patch." : "Nothing changed here.";
+}
 
 interface Props {
   sessionId: string;
@@ -100,6 +113,10 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
   const [composing, setComposing] = useState<Composing | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // failed separates "the answer has not arrived" from "the answer was a
+  // refusal": both used to be files === null, so a failure kept the reading
+  // label up forever beside its own error.
+  const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [confirming, setConfirming] = useState<number | null>(null);
@@ -114,16 +131,29 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
     }
   }, [sessionId]);
 
+  // latest names the read the state should follow. A slow answer for the scope
+  // the user left must not overwrite the one they are looking at, and a failed
+  // earlier read must not claim the current scope could not be read.
+  const latest = useRef(0);
   const load = useCallback(
     async (next: (typeof scopes)[number]) => {
+      const ticket = ++latest.current;
       setError(null);
+      setFailed(false);
       setOpen(null);
       setComposing(null);
       try {
         const listed = (await window.flotilla.diff(sessionId, next)) as { files?: DiffFile[] };
+        if (ticket !== latest.current) {
+          return;
+        }
         setFiles(listed.files ?? []);
       } catch (cause) {
+        if (ticket !== latest.current) {
+          return;
+        }
         setFiles(null);
+        setFailed(true);
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     },
@@ -352,15 +382,7 @@ export function DiffPanel({ sessionId }: Props): React.ReactElement {
             })}
           </div>
         ) : (
-          <p className="empty">
-            {/* A null list is still loading. Saying "nothing changed" before the
-                answer arrives is a claim the window cannot make. */}
-            {files === null
-              ? "Reading the diff…"
-              : files.length > 0
-                ? "Pick a file to read its patch."
-                : "Nothing changed here."}
-          </p>
+          <p className="empty">{diffEmptyLabel(failed, files)}</p>
         )}
       </div>
     </div>

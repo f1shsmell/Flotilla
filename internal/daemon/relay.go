@@ -416,6 +416,9 @@ func (d *Daemon) readDiff(ctx context.Context, id session.ID, params json.RawMes
 	if att == nil {
 		return nil, fmt.Errorf("%s on session %q: %w", session.MethodDiff, id, ErrUnknownSession)
 	}
+	if att.Info.Dir == "" {
+		return nil, fmt.Errorf("%s on session %q: the session was started without a working directory, so it has no repository to diff: %w", session.MethodDiff, id, diff.ErrNotARepository)
+	}
 
 	request := diff.Request{
 		Repo:  att.Info.Dir,

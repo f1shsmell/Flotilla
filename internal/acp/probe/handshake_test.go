@@ -128,6 +128,25 @@ func TestHandshakeReadsWhatTheAgentAnnounced(t *testing.T) {
 	}
 }
 
+// TestHandshakeLaysTheDeclaredEnvOverTheProcess pins the preset environment
+// reaching the agent process: claude-agent-acp exits unless
+// CLAUDE_CODE_EXECUTABLE names a binary, so a probe that skipped the preset map
+// would report a failure a real session start cannot have.
+func TestHandshakeLaysTheDeclaredEnvOverTheProcess(t *testing.T) {
+	binary := fakeAgentBinary(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+
+	// The trigger is inherited by every child; the demanded variable can only
+	// arrive through the Agent's own overlay, which is what the probe is wiring.
+	t.Setenv("FLT_FAKE_REQUIRE_ENV", "FLT_PROBE_DECLARED")
+	env := map[string]string{"FLT_PROBE_DECLARED": "present"}
+	if _, err := probe.Handshake(ctx, probe.Agent{Name: "fake", Command: binary, Env: env}, t.TempDir()); err != nil {
+		t.Fatalf("the declared environment did not reach the agent: %v", err)
+	}
+}
+
 // TestHandshakeReportNamesTheIds pins what a support-matrix row records: the
 // ids a user can switch between, not just a count.
 func TestHandshakeReportNamesTheIds(t *testing.T) {

@@ -250,6 +250,10 @@ func (d *Daemon) startSession(ctx context.Context, params json.RawMessage) (any,
 	if err != nil {
 		return nil, err
 	}
+	dir, err = sessionDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", MethodSessionStart, err)
+	}
 	req.Dir = dir
 	// A worktree outlives a failed start: it holds a branch and whatever
 	// .worktreeinclude copied, so it is kept and named rather than deleted.
@@ -353,6 +357,20 @@ func gitHead(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("read the commit of %q: %w", dir, err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// sessionDir is where a session runs when no worktree was asked for. The form
+// calls the directory optional; an empty one means the user's home, never the
+// daemon's own folder, which for an installed build is the application.
+func sessionDir(dir string) (string, error) {
+	if dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no working directory given and no home directory to use: %w", err)
+	}
+	return home, nil
 }
 
 // worktreeFor creates the worktree a request asks for and reports where the

@@ -728,6 +728,10 @@ function installTray(): void {
 }
 
 app.whenReady().then(() => {
+  // Electron's default menu offers New Window, Reload and toggle-devtools,
+  // none of which this app's single-window model uses. Hiding it leaves the
+  // frame to the app's own controls.
+  Menu.setApplicationMenu(null);
   // A hidden start creates no window, and every smoke walk drives one: the
   // combination would wait out the deadline silently, so it refuses here.
   if (process.env.FLT_GUI_SMOKE && hiddenStart) {

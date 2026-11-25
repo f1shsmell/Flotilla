@@ -11,6 +11,8 @@ package adapters
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -44,6 +46,33 @@ type Adapter struct {
 	// ResumeCommand replaces Command for a resume, for a bridge whose resume is
 	// a different binary. Empty means ResumeArgs are given to Command.
 	ResumeCommand string `json:"resume_command,omitempty"`
+}
+
+// lookPath is the resolver Environ uses for bare executable names; a variable so
+// tests can pin the resolution without a real PATH.
+var lookPath = exec.LookPath
+
+// Environ lays declared variables over base, the environment a spawn starts
+// from. A value that names an executable on PATH resolves to its absolute path:
+// an adapter cannot know where a machine keeps its binaries. A nil base means
+// this process's own environment, and no declarations return base unchanged.
+func Environ(base []string, declared map[string]string) []string {
+	if len(declared) == 0 {
+		return base
+	}
+	env := base
+	if env == nil {
+		env = os.Environ()
+	}
+	for key, value := range declared {
+		if !strings.ContainsAny(value, `\/`) {
+			if resolved, err := lookPath(value); err == nil {
+				value = resolved
+			}
+		}
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 // Paste says how a terminal agent reads a multi-line paste.

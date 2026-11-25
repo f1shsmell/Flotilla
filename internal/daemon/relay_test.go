@@ -563,6 +563,27 @@ func TestStartRunsTheSessionInAWorktree(t *testing.T) {
 	}
 }
 
+// TestStartWithoutADirectoryUsesTheHome pins the optional field's meaning: a
+// session the form started with no directory runs in the user's home, not in
+// the daemon's own application folder.
+func TestStartWithoutADirectoryUsesTheHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+
+	dir, err := sessionDir("")
+	if err != nil {
+		t.Fatalf("sessionDir: %v", err)
+	}
+	if dir != home {
+		t.Fatalf("sessionDir(\"\") = %q, want the home %q", dir, home)
+	}
+
+	if got, err := sessionDir(`C:\work\proj`); err != nil || got != `C:\work\proj` {
+		t.Fatalf("sessionDir kept = (%q, %v), want the caller's directory", got, err)
+	}
+}
+
 // TestStartWithoutAWorktreeKeepsTheCallersDirectory keeps the simple case.
 func TestStartWithoutAWorktreeKeepsTheCallersDirectory(t *testing.T) {
 	dir, included, skipped, err := worktreeFor(context.Background(), StartRequest{
@@ -688,6 +709,37 @@ func TestDiffCrossesTheDaemon(t *testing.T) {
 	}
 	if len(turn.Files) != 1 || turn.Files[0].Path != "readme.md" {
 		t.Fatalf("turn files = %+v, want the edit since the session started", turn.Files)
+	}
+}
+
+// TestDiffWithoutADirectorySaysWhy pins the refusal a session with no
+// directory gets: the reason names the missing directory instead of a bare
+// "empty path" from git, and keeps the not-a-repository class.
+func TestDiffWithoutADirectorySaysWhy(t *testing.T) {
+	stateDir := t.TempDir()
+	const token = "shared"
+
+	startHostIn(t, stateDir, "sess-nodir", token, "")
+	runDaemon(t, stateDir, token)
+
+	client := dialDaemon(t, stateDir, token, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	if _, err := client.Call(ctx, session.MethodAttach, session.AttachRequest{ID: "sess-nodir"}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	_, err := client.Call(ctx, session.MethodDiff, session.DiffRequest{Scope: "unstaged"})
+	if err == nil {
+		t.Fatal("a session with no directory answered a diff")
+	}
+	if !strings.Contains(err.Error(), "without a working directory") {
+		t.Fatalf("refusal = %v, want it to name the missing directory", err)
+	}
+	if code := ipc.CodeOf(err); code != ipc.CodeNotARepository {
+		t.Fatalf("refusal code = %d, want CodeNotARepository (%d)", code, ipc.CodeNotARepository)
 	}
 }
 
