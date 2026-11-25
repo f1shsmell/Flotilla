@@ -9,7 +9,7 @@ Two channels ship from this repository: **stable** (`Flotilla`) and **preview**
 (`Flotilla Preview`, versions ending `-preview.N`). Preview builds are not
 covered by the compatibility promises in VERSIONING.md.
 
-## [Unreleased]
+## [0.1.0-preview.2] - 2026-11-26
 
 Scope is the opening of M2: the durable state layer the orchestrator needs, the
 pieces it runs on, and the inbox that surfaces what waits on a person.
@@ -145,6 +145,16 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   importer is not trusted with the only copy of a user's history, and a bug
   found later can be re-run against the originals. Nothing in the running product
   reads those files afterwards.
+
+### Notes
+
+- The GUI has no install button: `flt install` is the only way to run a recipe,
+  and it asks first. The directory section in the window is read-only.
+- The MCP fleet tools and the agent-driven flows are covered by zero-token
+  integration tests; no live agent turn has exercised them yet.
+- No domestic (Chinese) agent has been probed or run. The adapter format and
+  the published directory accept one without code changes.
+- The transcript-style chat view and hook telemetry are not in this build.
 
 ## [0.1.0-preview.1] - 2026-11-24
 

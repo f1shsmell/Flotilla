@@ -36,7 +36,7 @@ describe("packaging identity", () => {
     // The installer's name and the Go binaries' `--version` come from this one
     // number; a second copy would let a release ship two different versions.
     expect(stable.version).toBe("0.1.0");
-    expect(preview.version).toBe("0.1.0-preview.1");
+    expect(preview.version).toBe("0.1.0-preview.2");
     expect(preview.version.startsWith(stable.version)).toBe(true);
   });
 

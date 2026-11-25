@@ -1,6 +1,6 @@
 // Prints the CHANGELOG section for one version, for use as a release's notes.
 //
-//   node scripts/release-notes.mjs 0.1.0-preview.1
+//   node scripts/release-notes.mjs 0.1.0-preview.2
 //
 // The CHANGELOG is the single source of what a version says about itself: the
 // release workflow reads this rather than keeping a second copy of the notes
