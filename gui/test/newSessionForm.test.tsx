@@ -49,11 +49,14 @@ describe("the form's published directory", () => {
     const html = form(false, directory());
 
     expect(html).toContain("ACP Registry");
-    expect(html).toContain("Kimi Code");
-    expect(html).toContain("uvx kimi-code@1.2.3");
-    // The directory is a catalogue, not an install: a button here would start
-    // a command this machine does not have.
-    expect(html).not.toContain("Start Kimi Code");
+    const start = html.indexOf('<ul class="agent-list registry-list"');
+    expect(start).toBeGreaterThan(-1);
+    const list = html.slice(start, html.indexOf("</ul>", start));
+    expect(list).toContain("Kimi Code");
+    expect(list).toContain("uvx kimi-code@1.2.3");
+    // The directory is a catalogue, not an install: a button inside the list
+    // would start a command this machine does not have.
+    expect(list).not.toContain("<button");
   });
 
   it("says nothing when the directory is empty or missing", () => {

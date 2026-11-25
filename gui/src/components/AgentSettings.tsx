@@ -180,8 +180,8 @@ export function AgentSettings({
           <h3>ACP Registry</h3>
           <p className="muted">
             {registry.length} {registry.length === 1 ? "agent" : "agents"} the published
-            directory offers. Listing one installs nothing, and none can be started
-            until its recipe is installed.
+            directory offers. Listing one installs nothing, and a recipe alone does not
+            make the agent startable here.
           </p>
           <ul className="agent-registry-list" aria-label="published agents">
             {registry.map((agent) => (

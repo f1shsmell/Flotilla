@@ -89,6 +89,10 @@ func TestTheListingCarriesThePublishedDirectory(t *testing.T) {
 			ID: "gemini", Name: "Gemini from the directory", Version: "9.9.9",
 			Distribution: adapters.Install{Npx: &adapters.Package{Package: "gemini@9.9.9"}},
 		},
+		{
+			ID: "GEMINI", Name: "Gemini in another case", Version: "9.9.8",
+			Distribution: adapters.Install{Npx: &adapters.Package{Package: "gemini@9.9.8"}},
+		},
 	}}
 	if err := registry.Save(registry.CachePath(cacheDir), published); err != nil {
 		t.Fatalf("seed the directory cache: %v", err)
@@ -105,7 +109,7 @@ func TestTheListingCarriesThePublishedDirectory(t *testing.T) {
 	list := fetchAgents(t, ctx, client)
 	var kimi *agent.RegistryEntry
 	for i := range list.Registry {
-		switch list.Registry[i].ID {
+		switch strings.ToLower(list.Registry[i].ID) {
 		case "kimi":
 			kimi = &list.Registry[i]
 		case "gemini":

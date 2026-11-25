@@ -21,6 +21,7 @@ import (
 	"github.com/f1shsmell/flotilla/internal/acp/replay"
 	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/daemon"
+	"github.com/f1shsmell/flotilla/internal/drift"
 	"github.com/f1shsmell/flotilla/internal/home"
 	"github.com/f1shsmell/flotilla/internal/ipc"
 	"github.com/f1shsmell/flotilla/internal/mcpserver"
@@ -47,6 +48,7 @@ func run(args []string, out io.Writer) error {
 	showVersion := fs.Bool("version", false, "print the build version and exit")
 	channel := fs.String("channel", defaultChannel(), "release channel to talk to: stable or preview")
 	asJSON := fs.Bool("json", false, "print machine-readable output")
+	failOnDrift := fs.Bool("fail-on-drift", false, "exit non-zero when `registry drift` finds a pin behind its registry")
 	fs.Usage = func() { _, _ = io.WriteString(out, usage) }
 
 	if err := fs.Parse(args); err != nil {
@@ -81,7 +83,7 @@ func run(args []string, out io.Writer) error {
 		}
 		return listAgents(*channel, *asJSON, out)
 	case "registry":
-		return registryCommand(fs.Args()[1:], *channel, *asJSON, out)
+		return registryCommand(fs.Args()[1:], *channel, *asJSON, *failOnDrift, out)
 	case "probe":
 		return probeAgent(fs.Args()[1:], *asJSON, out)
 	case "replay":
@@ -339,16 +341,19 @@ func agentListingLines(list agent.Listing) []string {
 const registryFetchTimeout = 30 * time.Second
 
 // registryCommand serves the cached ACP agent directory. list prints what the
-// last refresh left; refresh fetches the published registry and replaces it.
-func registryCommand(args []string, channel string, asJSON bool, out io.Writer) error {
+// last refresh left; refresh fetches the published registry and replaces it;
+// drift asks the package registries whether the pins are still the latest.
+func registryCommand(args []string, channel string, asJSON, failOnDrift bool, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: flt [--json] registry <list|refresh>")
+		return errors.New("usage: flt [--json] registry <list|refresh|drift>")
 	}
 	switch args[0] {
 	case "list":
 		return listRegistry(args[1:], channel, asJSON, out)
 	case "refresh":
 		return refreshRegistry(args[1:], channel, asJSON, out)
+	case "drift":
+		return driftCommand(args[1:], channel, asJSON, failOnDrift, drift.Checker{}, out)
 	default:
 		return fmt.Errorf("unknown registry command %q", args[0])
 	}
@@ -744,7 +749,7 @@ func replayCommand(args []string, channel string, out io.Writer) error {
 	return print(out, fmt.Sprintf("wrote %d turns to %s", len(scenario.Turns), *target))
 }
 
-const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  registry list or refresh the cached ACP agent directory\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
+const usage = "usage: flt [--channel stable|preview] <command>\n\ncommands:\n  version  print the build version\n  status   list the sessions a running daemon serves\n  agents   list the agents the machine offers, with their switches\n  registry list, refresh or drift-check the cached ACP agent directory\n  probe    run one real turn against an agent, or --handshake to read what it announces for free\n  replay   export a session's log as a replay scenario\n  mcp      serve the fleet tools over stdio for an agent inside a session\n"
 
 func print(out io.Writer, line string) error {
 	if _, err := io.WriteString(out, line+"\n"); err != nil && !errors.Is(err, io.ErrClosedPipe) {
