@@ -206,6 +206,35 @@ func TestAgentLinesShowEverySwitch(t *testing.T) {
 	}
 }
 
+// TestAgentListingNamesThePublishedDirectory pins the terminal form of the
+// second catalogue source: the directory's agents follow the catalog, with the
+// pinned recipe that would install them and no switches they do not have.
+func TestAgentListingNamesThePublishedDirectory(t *testing.T) {
+	list := agent.Listing{
+		Agents: []agent.Entry{{
+			Preset:    agent.Preset{ID: "reasonix", Command: "reasonix", Mode: session.ModeACP},
+			Installed: true,
+			Enabled:   true,
+			Chat:      true,
+			Tier:      agent.TierAvailable,
+		}},
+		Registry: []agent.RegistryEntry{{
+			ID: "kimi", Name: "Kimi Code", Version: "1.2.3",
+			Recipe: "uvx kimi-code@1.2.3",
+		}},
+	}
+
+	got := strings.Join(agentListingLines(list), "\n")
+	want := strings.Join([]string{
+		"reasonix\tacp\tavailable\tenabled,chat\treasonix",
+		"ACP Registry (not installed):",
+		"kimi\t1.2.3\tuvx kimi-code@1.2.3",
+	}, "\n")
+	if got != want {
+		t.Fatalf("agentListingLines =\n%s\nwant\n%s", got, want)
+	}
+}
+
 // TestRegistryListPrintsTheCachedDirectory pins the terminal view of the
 // directory the daemon refreshes, and that a missing cache names the command
 // that fills it instead of reading as an empty registry.

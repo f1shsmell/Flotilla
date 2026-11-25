@@ -153,6 +153,55 @@ func (i *Install) Normalize() {
 	}
 }
 
+// Runner names the package registry a pin belongs to.
+type Runner string
+
+const (
+	// RunnerNPM is the npm registry, which npx recipes fetch from.
+	RunnerNPM Runner = "npm"
+	// RunnerPyPI is the Python package index, which uvx recipes fetch from.
+	RunnerPyPI Runner = "pypi"
+)
+
+// Pin is one package a recipe pins to an exact version: the runner that would
+// fetch it, and the name and version without the separator syntax.
+type Pin struct {
+	Runner  Runner
+	Package string
+	Version string
+}
+
+// Pins lists what a recipe pins, for a caller that asks each registry what it
+// publishes. A recipe this build would refuse pins nothing: its specs are not
+// trusted enough to turn into requests.
+func (i Install) Pins() []Pin {
+	if i.Validate() != nil {
+		return nil
+	}
+
+	pins := make([]Pin, 0, 2)
+	for _, entry := range []struct {
+		runner     Runner
+		pkg        *Package
+		separators []string
+	}{
+		{RunnerNPM, i.Npx, []string{"@"}},
+		{RunnerPyPI, i.Uvx, []string{"==", "@"}},
+	} {
+		if entry.pkg == nil {
+			continue
+		}
+		spec := strings.TrimSpace(entry.pkg.Package)
+		at, width := lastSeparator(spec, entry.separators)
+		pins = append(pins, Pin{
+			Runner:  entry.runner,
+			Package: spec[:at],
+			Version: spec[at+width:],
+		})
+	}
+	return pins
+}
+
 // Summary renders the recipe as the one line a terminal shows: which runner a
 // package goes through, or how many platforms have a binary.
 func (i Install) Summary() string {

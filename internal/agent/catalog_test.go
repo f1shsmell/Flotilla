@@ -580,6 +580,7 @@ func TestTheGUITypeMatchesTheWireShape(t *testing.T) {
 	}{
 		{Entry{}, "AgentEntry"},
 		{Listing{}, "AgentListing"},
+		{RegistryEntry{}, "RegistryEntry"},
 		{Change{}, "AgentChange"},
 	} {
 		got := goJSONFields(t, tc.goValue)

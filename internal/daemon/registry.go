@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/registry"
 )
 
@@ -37,6 +39,43 @@ func (d *Daemon) registryUsable() bool {
 		return true
 	}
 	return registry.Usable(registry.CachePath(d.cfg.CacheDir), time.Now())
+}
+
+// agentListing is the picker's answer: the catalog, plus the published
+// directory's agents it does not already know. A missing or unreadable cache is
+// not a listing problem: the catalog stands without it, and the refresh loop
+// owns healing it.
+func (d *Daemon) agentListing() agent.Listing {
+	listing := d.agents.List()
+	if d.cfg.CacheDir == "" {
+		return listing
+	}
+	cached, err := registry.Load(registry.CachePath(d.cfg.CacheDir))
+	if err != nil {
+		return listing
+	}
+
+	known := make(map[string]struct{}, len(listing.Agents))
+	for _, entry := range listing.Agents {
+		known[strings.ToLower(entry.ID)] = struct{}{}
+	}
+	for _, published := range cached.Agents {
+		id := strings.ToLower(published.ID)
+		if _, ok := known[id]; ok {
+			continue
+		}
+		known[id] = struct{}{}
+		listing.Registry = append(listing.Registry, agent.RegistryEntry{
+			ID:          published.ID,
+			Name:        published.Name,
+			Version:     published.Version,
+			Description: published.Description,
+			Repository:  published.Repository,
+			License:     published.License,
+			Recipe:      published.Distribution.Summary(),
+		})
+	}
+	return listing
 }
 
 // refreshRegistry replaces the cache. A failed fetch leaves the last copy in

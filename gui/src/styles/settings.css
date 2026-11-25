@@ -101,3 +101,37 @@
   color: var(--muted);
   text-align: center;
 }
+
+/* The published directory under the table: read-only rows, so the section is
+   visually quieter than the table a person can act on. */
+.agent-registry {
+  margin-top: var(--sp-4);
+}
+
+.agent-registry h3 {
+  margin: 0 0 2px;
+  font-size: var(--fs-small);
+}
+
+.agent-registry p {
+  margin: 0 0 var(--sp-2);
+}
+
+.agent-registry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.agent-registry-list li {
+  display: grid;
+  gap: 1px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+}
+
+.agent-registry-list .mono {
+  font-size: var(--fs-tiny);
+}

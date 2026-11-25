@@ -5,15 +5,21 @@ import {
   defaultAgent,
   defaultBranch,
   filterAgents,
+  filterRegistry,
   splitArgs,
   usableAgents,
   worktreeRequest,
   type AgentEntry,
+  type RegistryEntry,
   type StartRequest,
 } from "../store";
 
 interface Props {
   agents: AgentEntry[];
+  // registry is the published directory's agents this build does not know. They
+  // are shown so a person can see what exists and how it installs; starting one
+  // is not offered, because nothing on this machine can run it yet.
+  registry?: RegistryEntry[];
   // unavailable is set when the catalogue could not be read at all. The picker
   // then says the daemon is unreachable instead of claiming nothing is installed.
   unavailable?: string | null;
@@ -46,6 +52,7 @@ const policyLabels: Record<string, string> = {
 // the user switched on, and a custom entry covers everything else.
 export function NewSessionForm({
   agents,
+  registry = [],
   unavailable,
   loaded = true,
   onStart,
@@ -78,6 +85,9 @@ export function NewSessionForm({
   // that makes it unstartable must.
   const usable = useMemo(() => usableAgents(agents, mode), [agents, mode]);
   const available = useMemo(() => filterAgents(usable, query), [usable, query]);
+  // The directory is narrowed by the same search box, so a term that finds
+  // nothing startable can still find an agent this machine could install.
+  const directory = useMemo(() => filterRegistry(registry, query), [registry, query]);
 
   // A second list, resolved in the other mode, answers one question the form
   // could otherwise only answer by making the user flip a switch and watch an
@@ -277,6 +287,23 @@ export function NewSessionForm({
               <p className="muted">
                 No built-in terminal agent: add an adapter, or use a custom command.
               </p>
+            ) : null}
+            {/* The directory follows what this machine can start: a person who
+                typed the name of an agent the catalog lacks finds the recipe
+                below the empty search rather than a dead end. */}
+            {directory.length > 0 ? (
+              <>
+                <p className="muted overline">ACP Registry (not installed)</p>
+                <ul className="agent-list registry-list" aria-label="published agents">
+                  {directory.map((agent) => (
+                    <li key={agent.id} className="registry-option">
+                      <span>{agent.name}</span>
+                      <span className="muted mono">{agent.version}</span>
+                      <span className="muted mono registry-recipe">{agent.recipe}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : null}
             {chosen?.needs ? <p className="muted">{chosen.needs}</p> : null}
             <button type="button" className="link" onClick={() => setCustom(true)}>

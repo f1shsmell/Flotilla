@@ -28,6 +28,7 @@ import {
   needsAttention,
   usableAgents,
   filterAgents,
+  filterRegistry,
   withLifecycle,
   withControls,
   type Status,
@@ -982,8 +983,48 @@ describe("parseAgents", () => {
   });
 
   it("survives a reply that is not a listing", () => {
-    expect(parseAgents(null)).toEqual({ agents: [], problems: [] });
+    expect(parseAgents(null)).toEqual({ agents: [], problems: [], registry: [] });
     expect(parseAgents({ agents: "nope" }).agents).toEqual([]);
+  });
+
+  it("reads the published directory beside the catalog", () => {
+    const listing = parseAgents({
+      agents: [],
+      registry: [
+        {
+          id: "kimi",
+          name: "Kimi Code",
+          version: "1.2.3",
+          description: "A Kimi agent",
+          repository: "https://example.com/kimi",
+          license: "MIT",
+          recipe: "uvx kimi-code@1.2.3",
+        },
+      ],
+    });
+
+    expect(listing.registry).toEqual([
+      {
+        id: "kimi",
+        name: "Kimi Code",
+        version: "1.2.3",
+        description: "A Kimi agent",
+        repository: "https://example.com/kimi",
+        license: "MIT",
+        recipe: "uvx kimi-code@1.2.3",
+      },
+    ]);
+  });
+
+  it("drops a directory entry a session could not be started from", () => {
+    const listing = parseAgents({
+      agents: [],
+      // No name to search for, and no recipe to show: an entry with a hole is
+      // an entry the picker cannot describe.
+      registry: [{ version: "1.0.0", recipe: "npx x@1.0.0" }, { id: "ok", name: "OK" }],
+    });
+
+    expect(listing.registry).toEqual([]);
   });
 });
 
@@ -1014,6 +1055,52 @@ describe("filterAgents", () => {
     const kept = filterAgents(agents, "");
     kept.reverse();
     expect(agents[0].id).toBe("reasonix");
+  });
+});
+
+describe("filterRegistry", () => {
+  const directory = () => [
+    {
+      id: "kimi",
+      name: "Kimi Code",
+      version: "1.2.3",
+      description: "A Kimi agent",
+      repository: "https://example.com/kimi",
+      license: "MIT",
+      recipe: "uvx kimi-code@1.2.3",
+    },
+    {
+      id: "zeta",
+      name: "Zeta",
+      version: "9.0.0",
+      description: "A shell runner",
+      repository: "",
+      license: "",
+      recipe: "npx zeta@9.0.0",
+    },
+  ];
+
+  it("keeps the directory's order for an empty query", () => {
+    expect(filterRegistry(directory(), "  ").map((entry) => entry.id)).toEqual(["kimi", "zeta"]);
+  });
+
+  it("matches the name, id, description, version and recipe without case", () => {
+    expect(filterRegistry(directory(), "KIMI").map((entry) => entry.id)).toEqual(["kimi"]);
+    expect(filterRegistry(directory(), "shell").map((entry) => entry.id)).toEqual(["zeta"]);
+    expect(filterRegistry(directory(), "9.0").map((entry) => entry.id)).toEqual(["zeta"]);
+    // The recipe is a thing someone copies in from a page, so it is searched.
+    expect(filterRegistry(directory(), "uvx").map((entry) => entry.id)).toEqual(["kimi"]);
+  });
+
+  it("requires every word the user typed", () => {
+    expect(filterRegistry(directory(), "kimi code").map((entry) => entry.id)).toEqual(["kimi"]);
+    expect(filterRegistry(directory(), "kimi zeta")).toEqual([]);
+  });
+
+  it("returns a copy so a caller cannot reorder the daemon's list", () => {
+    const entries = directory();
+    filterRegistry(entries, "").reverse();
+    expect(entries[0].id).toBe("kimi");
   });
 });
 

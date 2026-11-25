@@ -1,12 +1,15 @@
 import { useState } from "react";
 
 import { agentReady } from "../store";
-import type { AgentChange, AgentEntry } from "../store";
+import type { AgentChange, AgentEntry, RegistryEntry } from "../store";
 import { IconBack } from "./Icons";
 import { RefreshButton } from "./RefreshButton";
 
 interface Props {
   agents: AgentEntry[];
+  // registry is the published directory's agents the catalog does not know.
+  // They are shown apart from the table: no switches, no start, only a recipe.
+  registry: RegistryEntry[];
   problems: string[];
   // unavailable is set when the catalogue could not be read at all, so an empty
   // list is not mistaken for a machine with no agents defined.
@@ -35,6 +38,7 @@ function agentState(agent: AgentEntry): string {
 // anything: an agent that is not on PATH says so and stays listed.
 export function AgentSettings({
   agents,
+  registry,
   problems,
   unavailable,
   loaded = true,
@@ -170,6 +174,31 @@ export function AgentSettings({
           </tbody>
         </table>
       )}
+
+      {registry.length > 0 ? (
+        <section className="agent-registry">
+          <h3>ACP Registry</h3>
+          <p className="muted">
+            {registry.length} {registry.length === 1 ? "agent" : "agents"} the published
+            directory offers. Listing one installs nothing, and a recipe alone does not
+            make the agent startable here.
+          </p>
+          <ul className="agent-registry-list" aria-label="published agents">
+            {registry.map((agent) => (
+              <li key={agent.id}>
+                <span className="agent-name">{agent.name}</span>
+                <span className="muted mono">
+                  {agent.id} {agent.version}
+                </span>
+                <span className="muted mono">{agent.recipe}</span>
+                {agent.description ? (
+                  <span className="muted agent-description">{agent.description}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </section>
   );
 }

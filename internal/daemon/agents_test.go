@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/f1shsmell/flotilla/internal/adapters"
 	"github.com/f1shsmell/flotilla/internal/agent"
+	"github.com/f1shsmell/flotilla/internal/registry"
 )
 
 // fetchAgents asks the daemon what it can offer.
@@ -66,6 +68,82 @@ func TestDaemonListsTheAgentsItShips(t *testing.T) {
 		if entry.Command != preset.Command || entry.Source != agent.BuiltinSource {
 			t.Fatalf("%s was listed as %+v", preset.ID, entry)
 		}
+	}
+}
+
+// TestTheListingCarriesThePublishedDirectory is the picker's second source: an
+// agent the catalog does not know appears with the recipe that would install
+// it, and one the catalog already knows is not listed twice.
+func TestTheListingCarriesThePublishedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := t.TempDir()
+	const token = "shared"
+
+	published := registry.Registry{Version: "1.0.0", Agents: []registry.Agent{
+		{
+			ID: "kimi", Name: "Kimi Code", Version: "1.2.3",
+			Description: "A Kimi agent", Repository: "https://example.com/kimi",
+			Distribution: adapters.Install{Uvx: &adapters.Package{Package: "kimi-code@1.2.3"}},
+		},
+		{
+			ID: "gemini", Name: "Gemini from the directory", Version: "9.9.9",
+			Distribution: adapters.Install{Npx: &adapters.Package{Package: "gemini@9.9.9"}},
+		},
+		{
+			ID: "GEMINI", Name: "Gemini in another case", Version: "9.9.8",
+			Distribution: adapters.Install{Npx: &adapters.Package{Package: "gemini@9.9.8"}},
+		},
+	}}
+	if err := registry.Save(registry.CachePath(cacheDir), published); err != nil {
+		t.Fatalf("seed the directory cache: %v", err)
+	}
+
+	runDaemonWith(t, Config{
+		Channel: "test", Token: token, StateDir: dir, ConfigDir: t.TempDir(), CacheDir: cacheDir,
+	})
+
+	client := dialDaemon(t, dir, token, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	list := fetchAgents(t, ctx, client)
+	var kimi *agent.RegistryEntry
+	for i := range list.Registry {
+		switch strings.ToLower(list.Registry[i].ID) {
+		case "kimi":
+			kimi = &list.Registry[i]
+		case "gemini":
+			t.Fatalf("the listing repeats the builtin gemini: %+v", list.Registry)
+		}
+	}
+	if kimi == nil {
+		t.Fatalf("the listing has no kimi from the directory: %+v", list.Registry)
+	}
+	if kimi.Name != "Kimi Code" || kimi.Version != "1.2.3" || kimi.Recipe != "uvx kimi-code@1.2.3" {
+		t.Fatalf("kimi was listed as %+v", *kimi)
+	}
+}
+
+// TestAMissingDirectoryCacheLeavesTheCatalogAlone keeps the directory optional:
+// a daemon whose cache has not been written still serves the agents it ships.
+func TestAMissingDirectoryCacheLeavesTheCatalogAlone(t *testing.T) {
+	dir := t.TempDir()
+	const token = "shared"
+
+	runDaemonWith(t, Config{
+		Channel: "test", Token: token, StateDir: dir, ConfigDir: t.TempDir(), CacheDir: t.TempDir(),
+	})
+
+	client := dialDaemon(t, dir, token, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+
+	list := fetchAgents(t, ctx, client)
+	if len(list.Registry) != 0 {
+		t.Fatalf("a missing cache listed %+v", list.Registry)
+	}
+	if len(list.Agents) != len(agent.Builtins()) {
+		t.Fatalf("the catalog shrank to %d agents", len(list.Agents))
 	}
 }
 

@@ -122,6 +122,47 @@ func TestAnInstallRecipeNamesWhereItComesFrom(t *testing.T) {
 	}
 }
 
+// TestARecipesPinsAreWhatTheCheckLooksUp pins the split the drift check uses:
+// the runner, the bare package name and the exact version, in the order the
+// recipe names them. A binary recipe has no package registry to ask.
+func TestARecipesPinsAreWhatTheCheckLooksUp(t *testing.T) {
+	install := Install{
+		Npx: &Package{Package: "@scope/agent@1.2.3"},
+		Uvx: &Package{Package: "kimi-code@0.3.1"},
+	}
+	pins := install.Pins()
+	if len(pins) != 2 {
+		t.Fatalf("Pins = %+v, want npx and uvx", pins)
+	}
+	if pins[0] != (Pin{Runner: RunnerNPM, Package: "@scope/agent", Version: "1.2.3"}) {
+		t.Fatalf("npx pin = %+v", pins[0])
+	}
+	if pins[1] != (Pin{Runner: RunnerPyPI, Package: "kimi-code", Version: "0.3.1"}) {
+		t.Fatalf("uvx pin = %+v", pins[1])
+	}
+
+	equal := Install{Uvx: &Package{Package: "fast-agent-acp==0.10.66"}}.Pins()
+	if len(equal) != 1 || equal[0].Version != "0.10.66" || equal[0].Package != "fast-agent-acp" {
+		t.Fatalf("a '==' pin = %+v", equal)
+	}
+
+	padded := Install{Npx: &Package{Package: " agent@1.0.0 "}}.Pins()
+	if len(padded) != 1 || padded[0].Package != "agent" || padded[0].Version != "1.0.0" {
+		t.Fatalf("a padded pin = %+v", padded)
+	}
+
+	binary := Install{Binary: map[string]Binary{
+		"linux-x86_64": {Archive: "https://example.com/x.tgz", Cmd: "./x"},
+	}}
+	if got := binary.Pins(); len(got) != 0 {
+		t.Fatalf("a binary recipe pinned %+v", got)
+	}
+	unpinned := Install{Npx: &Package{Package: "agent@latest"}}
+	if got := unpinned.Pins(); len(got) != 0 {
+		t.Fatalf("an unpinned recipe pinned %+v", got)
+	}
+}
+
 // TestAnInstallSummaryNamesTheRunner keeps the one line a terminal prints
 // honest: a reader sees which runner a package goes through.
 func TestAnInstallSummaryNamesTheRunner(t *testing.T) {

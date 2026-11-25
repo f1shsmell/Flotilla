@@ -98,10 +98,15 @@ type Change struct {
 }
 
 // Listing is what the daemon reports: the agents in display order, plus the
-// adapter files it could not read.
+// adapter files it could not read and the published directory's agents this
+// build does not know.
 type Listing struct {
 	Agents   []Entry  `json:"agents"`
 	Problems []string `json:"problems,omitempty"`
+	// Registry is the published directory's agents this build does not know.
+	// They are listed, never started: a directory entry names a recipe, not a
+	// command this machine has.
+	Registry []RegistryEntry `json:"registry,omitempty"`
 }
 
 // Catalog is the presets this build knows and the switches on them.
