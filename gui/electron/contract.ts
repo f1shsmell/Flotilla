@@ -52,6 +52,10 @@ export const methods = {
 export const constants = {
   agent: {
     BuiltinSource: "builtin",
+    TierAvailable: "available",
+    TierInstalledNotACP: "installed-but-not-acp",
+    TierMissing: "missing",
+    TierSuspected: "suspected",
   },
   comments: {
     NewSide: "new",
@@ -144,6 +148,7 @@ export const wireTypes = {
     "needs": { go: "Needs", type: "string", optional: true },
     "path": { go: "Path", type: "string", optional: true },
     "source": { go: "Source", type: "string" },
+    "tier": { go: "Tier", type: "Tier", optional: true },
   },
   "agent.Listing": {
     "agents": { go: "Agents", type: "[]Entry" },

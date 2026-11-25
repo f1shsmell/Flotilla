@@ -30,6 +30,8 @@ func newCatalog(t *testing.T, installed ...string) *Catalog {
 
 	c := New(t.TempDir())
 	c.selfDir = t.TempDir()
+	home := t.TempDir()
+	c.home = func() (string, error) { return home, nil }
 	c.lookPath = func(command string) (string, error) {
 		for _, name := range installed {
 			if name == command {
@@ -394,6 +396,8 @@ func TestDisablingKeepsTheAgentListed(t *testing.T) {
 func TestSwitchesSurviveANewCatalog(t *testing.T) {
 	dir := t.TempDir()
 	c := New(dir)
+	home := t.TempDir()
+	c.home = func() (string, error) { return home, nil }
 	c.lookPath = func(string) (string, error) { return "", os.ErrNotExist }
 
 	if _, err := c.Set("reasonix", Change{Enabled: boolPtr(false), Chat: boolPtr(false)}); err != nil {
@@ -402,6 +406,7 @@ func TestSwitchesSurviveANewCatalog(t *testing.T) {
 
 	// A daemon restart rebuilds the catalog from disk.
 	reloaded := New(dir)
+	reloaded.home = c.home
 	reloaded.lookPath = c.lookPath
 
 	entry := entryFor(t, reloaded.List(), "reasonix")
