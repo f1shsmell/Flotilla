@@ -25,8 +25,8 @@ import (
 //
 // 2 adds the task tables the orchestrator keeps its queue in. 3 adds the table
 // a task's runs write their output to. 4 adds the sessions a user pinned
-// against idle reclamation.
-const schemaVersion = 4
+// against idle reclamation. 5 adds the schedules the daemon's clock fires.
+const schemaVersion = 5
 
 // ErrNewerSchema reports a database this build is too old to read.
 var ErrNewerSchema = errors.New("store: the database was written by a newer build")
@@ -282,5 +282,33 @@ CREATE TABLE IF NOT EXISTS task_output (
 CREATE TABLE IF NOT EXISTS protected (
 	session_id TEXT PRIMARY KEY,
 	at         INTEGER NOT NULL
+);
+
+-- schedules is the daemon's clock: one row per timed job. next_at is the slot
+-- the clock will fire, and it is stored rather than recomputed at boot so a
+-- missed slot is a fact the daemon can see; zero means nothing is pending.
+CREATE TABLE IF NOT EXISTS schedules (
+	id              TEXT PRIMARY KEY,
+	name            TEXT    NOT NULL DEFAULT '',
+	prompt          TEXT    NOT NULL,
+	cadence_type    TEXT    NOT NULL,
+	every_ms        INTEGER NOT NULL DEFAULT 0,
+	cron_expression TEXT    NOT NULL DEFAULT '',
+	timezone        TEXT    NOT NULL DEFAULT '',
+	target_type     TEXT    NOT NULL,
+	agent_id        TEXT    NOT NULL DEFAULT '',
+	dialect         TEXT    NOT NULL DEFAULT '',
+	cwd             TEXT    NOT NULL DEFAULT '',
+	access          TEXT    NOT NULL DEFAULT '',
+	isolation       TEXT    NOT NULL DEFAULT '',
+	status          TEXT    NOT NULL,
+	missed_run      TEXT    NOT NULL,
+	next_at         INTEGER NOT NULL DEFAULT 0,
+	last_at         INTEGER NOT NULL DEFAULT 0,
+	last_task       TEXT    NOT NULL DEFAULT '',
+	last_error      TEXT    NOT NULL DEFAULT '',
+	skipped         INTEGER NOT NULL DEFAULT 0,
+	created         INTEGER NOT NULL,
+	updated         INTEGER NOT NULL
 );
 `

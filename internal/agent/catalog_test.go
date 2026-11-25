@@ -674,6 +674,47 @@ func between(text, start, end string) (string, bool) {
 
 func boolPtr(v bool) *bool { return &v }
 
+// TestTheUnattendedDialectsThisBuildShips pins which presets a schedule can
+// name: a target resolves its dialect from the preset, so a preset without one
+// is not a schedule target.
+func TestTheUnattendedDialectsThisBuildShips(t *testing.T) {
+	c := newCatalog(t)
+	for id, want := range map[string]string{"claude": "claude", "codex-acp": "codex", "replay": ""} {
+		preset, ok := c.Preset(id)
+		if !ok {
+			t.Fatalf("the catalog has no %q", id)
+		}
+		if preset.Headless != want {
+			t.Errorf("%s headless = %q, want %q", id, preset.Headless, want)
+		}
+	}
+}
+
+// TestAnAdapterOverrideKeepsTheInheritedDialect pins what a schedule depends
+// on: a wrapper that changes only the command still runs the same agent
+// unattended.
+func TestAnAdapterOverrideKeepsTheInheritedDialect(t *testing.T) {
+	c := newCatalog(t)
+	writeAdapter(t, c.dir, "claude.json", `{"command": "my-claude-wrapper"}`)
+	c.load()
+
+	preset, ok := c.Preset("claude")
+	if !ok || preset.Headless != "claude" {
+		t.Fatalf("overridden claude = %+v, want the inherited headless dialect", preset)
+	}
+}
+
+func TestAdapterNamesItsUnattendedDialect(t *testing.T) {
+	c := newCatalog(t)
+	writeAdapter(t, c.dir, "my-agent.json", `{"command": "my-agent", "headless": "claude"}`)
+	c.load()
+
+	preset, ok := c.Preset("my-agent")
+	if !ok || preset.Headless != "claude" {
+		t.Fatalf("adapter preset = %+v (found %v), want headless claude", preset, ok)
+	}
+}
+
 // TestTheClaudePresetPointsTheBridgeAtTheWorkingCLI pins why claude-agent-acp
 // can start at all: its bundled sdk wants a native binary the machine may not
 // have installed under the sdk, and the preset declares CLAUDE_CODE_EXECUTABLE

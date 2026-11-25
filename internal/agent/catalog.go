@@ -47,6 +47,8 @@ type Preset struct {
 	Args    []string `json:"args,omitempty"`
 	// Mode is how the agent is driven. Empty means acp.
 	Mode session.Mode `json:"mode,omitempty"`
+	// Headless is the unattended dialect the preset runs under; empty means none.
+	Headless string `json:"headless,omitempty"`
 	// Needs names what the agent requires besides its binary, such as a login.
 	Needs string `json:"needs,omitempty"`
 	// Description is one line the picker can show.
@@ -321,11 +323,12 @@ func Builtins() []Preset {
 			Description: "opencode over ACP.",
 		},
 		{
-			ID:      "claude",
-			Name:    "Claude Code",
-			Command: "claude-agent-acp",
-			Mode:    session.ModeACP,
-			Needs:   "a logged-in Claude Code CLI",
+			ID:       "claude",
+			Name:     "Claude Code",
+			Command:  "claude-agent-acp",
+			Mode:     session.ModeACP,
+			Headless: "claude",
+			Needs:    "a logged-in Claude Code CLI",
 			Description: "Claude Code through the claude-agent-acp bridge. The bridge's sdk wants " +
 				"its own native binary; CLAUDE_CODE_EXECUTABLE points it at the working CLI, " +
 				"resolved on PATH at spawn.",
@@ -349,6 +352,7 @@ func Builtins() []Preset {
 			Name:        "Codex",
 			Command:     "codex-acp",
 			Mode:        session.ModeACP,
+			Headless:    "codex",
 			Needs:       "a logged-in Codex CLI",
 			Description: "Codex through the codex-acp bridge.",
 			Discovery:   Discovery{Command: "codex", Config: ".codex"},
@@ -386,6 +390,15 @@ func (c *Catalog) find(id string) (Preset, bool) {
 		}
 	}
 	return Preset{}, false
+}
+
+// Preset reports one preset by id. It is the read-only lookup a caller that
+// needs the definition — a schedule whose target names an agent — uses; the
+// switch page has its own Set beside it.
+func (c *Catalog) Preset(id string) (Preset, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.find(id)
 }
 
 // AdapterForCommand reports the knowledge declared for the agent behind a
@@ -578,6 +591,9 @@ type adapterFile struct {
 	Discovery *Discovery        `json:"discovery"`
 	Install   *adapters.Install `json:"install"`
 
+	// Headless is the unattended dialect the agent runs under, when it has one.
+	Headless string `json:"headless"`
+
 	// Env is the environment the launched process needs, restated from the recipe.
 	Env map[string]string `json:"env"`
 
@@ -607,6 +623,7 @@ func decodeAdapter(payload []byte) (Preset, error) {
 		Command:     file.Command,
 		Args:        file.Args,
 		Mode:        file.Mode,
+		Headless:    file.Headless,
 		Needs:       file.Needs,
 		Description: file.Description,
 		Adapter: adapters.Adapter{
@@ -720,6 +737,11 @@ func inherit(base, adapter Preset) Preset {
 	}
 	if adapter.Description == "" {
 		adapter.Description = base.Description
+	}
+	if adapter.Headless == "" {
+		// An adapter that changes only the command still runs the same agent,
+		// and a schedule naming it must keep working.
+		adapter.Headless = base.Headless
 	}
 	// The operational knowledge inherits field by field too: correcting a
 	// command must not silently drop the patterns that recognise a blocked
