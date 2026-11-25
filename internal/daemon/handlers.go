@@ -32,6 +32,14 @@ const (
 	// itself: the host that ran the agent is gone, and the log it left behind
 	// is the daemon's.
 	MethodSessionArchive = session.MethodArchive
+	// MethodScheduleList lists the daemon's timed jobs.
+	MethodScheduleList = "schedule.list"
+	// MethodScheduleSet creates or edits a schedule.
+	MethodScheduleSet = "schedule.set"
+	// MethodScheduleRemove deletes a schedule.
+	MethodScheduleRemove = "schedule.remove"
+	// MethodScheduleTrigger runs a schedule now, idempotently per request id.
+	MethodScheduleTrigger = "schedule.trigger"
 )
 
 func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, params json.RawMessage) (any, error) {
@@ -54,6 +62,14 @@ func (d *Daemon) handleCall(ctx context.Context, peer *ipc.Conn, method string, 
 		return d.stopSession(ctx, params)
 	case MethodSessionArchive:
 		return d.archive(params)
+	case MethodScheduleList:
+		return d.listSchedules()
+	case MethodScheduleSet:
+		return d.setSchedule(params)
+	case MethodScheduleRemove:
+		return d.removeSchedule(params)
+	case MethodScheduleTrigger:
+		return d.triggerSchedule(ctx, params)
 	case session.MethodProtect:
 		return d.protectSession(params)
 	case session.MethodAttach:
@@ -141,17 +157,7 @@ func (d *Daemon) taskEntries() []TaskEntry {
 
 	entries := make([]TaskEntry, 0, len(tasks))
 	for _, t := range tasks {
-		entries = append(entries, TaskEntry{
-			ID:        t.ID,
-			Dialect:   t.Dialect,
-			State:     string(t.State),
-			Prompt:    t.Prompt,
-			Dir:       t.Dir,
-			Runs:      t.Runs,
-			SpentUSD:  t.SpentUSD,
-			BudgetUSD: t.BudgetUSD,
-			LastError: t.LastError,
-		})
+		entries = append(entries, taskEntry(t))
 	}
 	return entries
 }

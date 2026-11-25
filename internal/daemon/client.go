@@ -8,6 +8,7 @@ import (
 
 	"github.com/f1shsmell/flotilla/internal/agent"
 	"github.com/f1shsmell/flotilla/internal/ipc"
+	"github.com/f1shsmell/flotilla/internal/schedule"
 	"github.com/f1shsmell/flotilla/internal/session"
 )
 
@@ -166,4 +167,51 @@ func (c *Client) PromptSession(ctx context.Context, id session.ID, text string) 
 		AnswerTruncated: resp.AnswerTruncated,
 		Declined:        declined,
 	}, nil
+}
+
+// Schedules lists the daemon's timed jobs.
+func (c *Client) Schedules(ctx context.Context) ([]schedule.Schedule, error) {
+	raw, err := c.conn.Call(ctx, MethodScheduleList, struct{}{})
+	if err != nil {
+		return nil, fmt.Errorf("ask the daemon for its schedules: %w", err)
+	}
+	var resp ScheduleListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decode the schedules: %w", err)
+	}
+	return resp.Schedules, nil
+}
+
+// SetSchedule creates or edits one schedule.
+func (c *Client) SetSchedule(ctx context.Context, req ScheduleSetRequest) (schedule.Schedule, error) {
+	raw, err := c.conn.Call(ctx, MethodScheduleSet, req)
+	if err != nil {
+		return schedule.Schedule{}, fmt.Errorf("set a schedule: %w", err)
+	}
+	var applied schedule.Schedule
+	if err := json.Unmarshal(raw, &applied); err != nil {
+		return schedule.Schedule{}, fmt.Errorf("decode the schedule: %w", err)
+	}
+	return applied, nil
+}
+
+// RemoveSchedule deletes one schedule.
+func (c *Client) RemoveSchedule(ctx context.Context, id string) error {
+	if _, err := c.conn.Call(ctx, MethodScheduleRemove, ScheduleRemoveRequest{ID: id}); err != nil {
+		return fmt.Errorf("remove schedule %q: %w", id, err)
+	}
+	return nil
+}
+
+// TriggerSchedule runs one schedule now. The same request id twice runs it once.
+func (c *Client) TriggerSchedule(ctx context.Context, id, requestID string) (ScheduleTriggerResponse, error) {
+	raw, err := c.conn.Call(ctx, MethodScheduleTrigger, ScheduleTriggerRequest{ID: id, RequestID: requestID})
+	if err != nil {
+		return ScheduleTriggerResponse{}, fmt.Errorf("trigger schedule %q: %w", id, err)
+	}
+	var resp ScheduleTriggerResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ScheduleTriggerResponse{}, fmt.Errorf("decode the trigger answer: %w", err)
+	}
+	return resp, nil
 }

@@ -218,6 +218,9 @@ export interface AgentEntry {
   command: string;
   args: string[];
   mode: string;
+  // headless is the unattended dialect a schedule runs the agent under; an
+  // agent without one cannot be a schedule target.
+  headless: string;
   // needs names what the agent requires besides its binary, such as a login.
   needs: string;
   description: string;
@@ -292,6 +295,7 @@ export function parseAgents(raw: unknown): AgentListing {
         command: asString(agent.command),
         args: asStringList(agent.args),
         mode: asString(agent.mode, "acp"),
+        headless: asString(agent.headless),
         needs: asString(agent.needs),
         description: asString(agent.description),
         source: asString(agent.source, "builtin"),

@@ -196,6 +196,45 @@ func (o *Orchestrator) Enqueue(ctx context.Context, t store.Task) (store.Task, e
 	return t, nil
 }
 
+// EnqueueOnce adds one task only when its id is new, and reports whether it
+// did. The id is the caller's idempotency key: a schedule slot or a webhook
+// request rendered as a task id, so a trigger that arrives twice is one queue
+// row and the second call gets the first call's answer.
+func (o *Orchestrator) EnqueueOnce(ctx context.Context, t store.Task) (store.Task, bool, error) {
+	if t.Dialect == "" {
+		return store.Task{}, false, errors.New("orch: a task needs a dialect")
+	}
+	if t.Prompt == "" {
+		return store.Task{}, false, errors.New("orch: a task needs a prompt")
+	}
+	if t.BudgetUSD < 0 {
+		return store.Task{}, false, fmt.Errorf("orch: budget %v is negative", t.BudgetUSD)
+	}
+	if t.ID == "" {
+		return store.Task{}, false, errors.New("orch: an idempotent enqueue needs the caller's task id")
+	}
+
+	t.State = store.TaskQueued
+	t.Runs = 0
+	t.SpentUSD = 0
+	t.Created = o.cfg.Now()
+	t.Updated = t.Created
+
+	stored, created, err := o.cfg.Store.AppendTaskOnce(ctx, store.EventTaskQueued, t)
+	if err != nil {
+		return store.Task{}, false, fmt.Errorf("enqueue task %q: %w", t.ID, err)
+	}
+	if created {
+		// Nothing changed on a retry, so nothing is woken: a duplicate trigger
+		// must not cost a queue pass.
+		if o.cfg.OnChange != nil {
+			o.cfg.OnChange()
+		}
+		o.Wake()
+	}
+	return stored, created, nil
+}
+
 // Hold moves a queued task to waiting, so it stops to ask a person something
 // before it runs. Nothing runs and nothing is spent while it waits: that is what
 // the state is for, and it is why a suspended task costs nothing at all.

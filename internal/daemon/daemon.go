@@ -60,6 +60,9 @@ type Config struct {
 	// TaskMaxRuns bounds how many times one task may start. Zero uses the
 	// orchestrator's default.
 	TaskMaxRuns int
+	// ScheduleTick is how often the clock looks for a due schedule. Zero uses
+	// the default of a minute; a test sets it small to drive the clock by hand.
+	ScheduleTick time.Duration
 	// CacheDir holds the agent registry cache; empty disables the refresh loop.
 	CacheDir string
 	// RegistryURL is where the published agent registry lives; empty uses the
@@ -268,6 +271,9 @@ type Daemon struct {
 	// tasks runs the unattended queue. It is nil when the database could not be
 	// opened: a daemon that cannot record a task must not start one.
 	tasks *orch.Orchestrator
+	// clock fires the schedules the store holds. It is nil exactly when tasks
+	// is: a fire is a task, and a daemon without a queue has nothing to fire.
+	clock *scheduler
 	// effects drains the work the store says is owed, so a task's output lands
 	// even if the daemon dies between recording the task and writing the output.
 	effects *outbox.Worker
@@ -405,6 +411,16 @@ func New(cfg Config, spawn Spawner) *Daemon {
 			cfg.Log.Warn("cannot build the task queue", "err", err.Error())
 		default:
 			d.tasks = tasks
+			d.clock = newScheduler(state, tasks, cfg.Log, nil).withTick(cfg.ScheduleTick)
+			// An agent target takes its dialect from the preset: the catalog
+			// says how the agent runs unattended, and the clock must not guess.
+			d.clock.agentDialect = func(id string) (string, bool) {
+				preset, ok := d.agents.Preset(id)
+				if !ok || preset.Headless == "" {
+					return "", false
+				}
+				return preset.Headless, true
+			}
 		}
 	}
 	return d
@@ -595,6 +611,16 @@ func (d *Daemon) startBackground() {
 				defer d.background.Done()
 				if err := d.tasks.Run(ctx); err != nil {
 					d.recordLoopFailure("tasks", err)
+				}
+			}()
+		}
+
+		if d.clock != nil {
+			d.background.Add(1)
+			go func() {
+				defer d.background.Done()
+				if err := d.clock.Run(ctx); err != nil {
+					d.recordLoopFailure("schedules", err)
 				}
 			}()
 		}

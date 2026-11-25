@@ -12,6 +12,11 @@ import (
 // ErrNoTask reports a task id this store does not hold.
 var ErrNoTask = errors.New("store: no such task")
 
+// ErrTaskExists reports a task id the store already holds. It is the receipt an
+// idempotent enqueue reads: the work was accepted once, and a retry must not
+// queue it a second time.
+var ErrTaskExists = errors.New("store: task already recorded")
+
 // TaskState is where one unattended job stands. It is a closed set: a row whose
 // state this build does not recognise is reported as-is rather than mapped onto
 // the nearest one, because guessing here would either re-run finished work or
@@ -111,11 +116,8 @@ func (s *Store) AppendTask(ctx context.Context, kind string, t Task) (uint64, er
 //
 // A nil effect means the change owes nothing, which is the common case.
 func (s *Store) AppendTaskWithEffect(ctx context.Context, kind string, t Task, effect *Effect) (uint64, error) {
-	if !t.State.Valid() {
-		return 0, fmt.Errorf("task %q: state %q is not one this build knows", t.ID, t.State)
-	}
-	if t.ID == "" {
-		return 0, fmt.Errorf("task: empty id")
+	if err := validateTask(t); err != nil {
+		return 0, err
 	}
 
 	payload, err := marshalTask(t)
@@ -130,6 +132,77 @@ func (s *Store) AppendTaskWithEffect(ctx context.Context, kind string, t Task, e
 			return writeTask(ctx, tx, t)
 		},
 	})
+}
+
+// validateTask is the write path's own gate, shared by every task writer so a
+// second entry point cannot store a row the queue cannot read.
+func validateTask(t Task) error {
+	if !t.State.Valid() {
+		return fmt.Errorf("task %q: state %q is not one this build knows", t.ID, t.State)
+	}
+	if t.ID == "" {
+		return fmt.Errorf("task: empty id")
+	}
+	return nil
+}
+
+// AppendTaskOnce records a task only when its id is new, and reports whether it
+// did. It is the store half of an idempotent enqueue: a caller that derives the
+// id from what it is asking for — a schedule slot, a webhook request — can send
+// the same request again and get the row it already made rather than a second
+// run. A conflicting attempt writes no event either, because nothing happened.
+func (s *Store) AppendTaskOnce(ctx context.Context, kind string, t Task) (Task, bool, error) {
+	if err := validateTask(t); err != nil {
+		return Task{}, false, err
+	}
+	payload, err := marshalTask(t)
+	if err != nil {
+		return Task{}, false, err
+	}
+
+	// The row is checked under the store lock first: a conflicting commit would
+	// roll its event back, but burning a sequence number on a retry is noise in
+	// a log a person reads.
+	s.mu.Lock()
+	var exists int
+	err = s.db.QueryRowContext(ctx, `SELECT 1 FROM tasks WHERE id = ?`, t.ID).Scan(&exists)
+	s.mu.Unlock()
+	switch {
+	case err == nil:
+		existing, readErr := s.Task(ctx, t.ID)
+		if readErr != nil {
+			return Task{}, false, readErr
+		}
+		return existing, false, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return Task{}, false, fmt.Errorf("read task %q: %w", t.ID, err)
+	}
+
+	if _, err := s.Append(ctx, Commit{
+		Event: Event{Kind: kind, Payload: payload},
+		Apply: func(ctx context.Context, tx *sql.Tx, _ uint64) error {
+			inserted, err := insertTaskOnce(ctx, tx, t)
+			if err != nil {
+				return err
+			}
+			if !inserted {
+				return ErrTaskExists
+			}
+			return nil
+		},
+	}); err != nil {
+		// A writer that slipped in between the check and the commit is the
+		// same retry; the row it made is the answer.
+		if errors.Is(err, ErrTaskExists) {
+			existing, readErr := s.Task(ctx, t.ID)
+			if readErr != nil {
+				return Task{}, false, readErr
+			}
+			return existing, false, nil
+		}
+		return Task{}, false, fmt.Errorf("record task %q: %w", t.ID, err)
+	}
+	return t, true, nil
 }
 
 // writeTask upserts one row. It runs inside a commit's transaction, so it takes
@@ -169,6 +242,38 @@ func writeTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		return fmt.Errorf("write task %q: %w", t.ID, err)
 	}
 	return nil
+}
+
+// insertTaskOnce writes one row only if its id is free. It runs inside a
+// commit's transaction; a conflict reports false rather than updating, which is
+// what tells the caller its request was a retry.
+func insertTaskOnce(ctx context.Context, tx *sql.Tx, t Task) (bool, error) {
+	created := t.Created
+	if created.IsZero() {
+		created = time.Now()
+	}
+	updated := t.Updated
+	if updated.IsZero() {
+		updated = time.Now()
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO tasks (id, prompt, dialect, dir, access, state, parent,
+		                    budget_usd, spent_usd, runs, resume_id, last_error,
+		                    created, updated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO NOTHING`,
+		t.ID, t.Prompt, t.Dialect, t.Dir, t.Access, string(t.State), t.Parent,
+		t.BudgetUSD, t.SpentUSD, t.Runs, t.ResumeID, t.LastError,
+		created.UnixNano(), updated.UnixNano())
+	if err != nil {
+		return false, fmt.Errorf("write task %q: %w", t.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read whether task %q was new: %w", t.ID, err)
+	}
+	return affected > 0, nil
 }
 
 // Task reads one task.

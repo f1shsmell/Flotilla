@@ -34,6 +34,7 @@ var Packages = []string{
 	"internal/diff",
 	"internal/comments",
 	"internal/home",
+	"internal/schedule",
 }
 
 // WireTypes are the structs a client reads. The list is explicit rather than
@@ -89,6 +90,15 @@ var WireTypes = []string{
 	"daemon.StatusEntry",
 	"daemon.InboxEntry",
 	"daemon.TaskEntry",
+	"daemon.ScheduleListResponse",
+	"daemon.ScheduleSetRequest",
+	"daemon.ScheduleRemoveRequest",
+	"daemon.ScheduleTriggerRequest",
+	"daemon.ScheduleTriggerResponse",
+	"schedule.Schedule",
+	"schedule.Cadence",
+	"schedule.Target",
+	"schedule.TargetConfig",
 	"daemon.StartRequest",
 	"daemon.StartResponse",
 	"daemon.SetAgentRequest",

@@ -11,6 +11,7 @@ function entry(over: Partial<AgentEntry>): AgentEntry {
     command: "claude-agent-acp",
     args: [],
     mode: "acp",
+    headless: "",
     needs: "",
     description: "",
     source: "builtin",

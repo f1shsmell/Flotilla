@@ -81,6 +81,22 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
   task change, so a crash between "the task finished" and "what it said" leaves
   work owed rather than work lost, and the receipt it leaves behind is what stops
   the next daemon doing it twice.
+- **Timed jobs the daemon owns.** A schedule is one prompt on a cadence: every
+  N seconds, or a five-field cron expression in an explicit timezone, which is
+  refused when the zone is missing or unknown rather than read against the
+  daemon's own. Its target is a catalog agent — run under that agent's own
+  unattended dialect, so the person names the agent, not the dialect — or a new
+  agent defined by the schedule. The clock lives in the daemon, not the window:
+  it ticks every minute, fires each slot once, never stacks a run on one still
+  in flight, and records every skip with its reason. A slot that came due while
+  the daemon was down is not invented: the schedule's own policy skips it or
+  catches up on the latest one, and the count is kept. Each fire's task id is
+  derived from the schedule and the slot, so a fire that reaches the queue twice
+  is one task even across a crash; a worktree target gets a fresh checkout per
+  fire, named after the task. `flt schedule list`, `add`, `rm` and `run` drive it;
+  `run` takes a request id and a retry answers with the first request's task.
+  The four calls are wire contract (`schedule.list`, `schedule.set`,
+  `schedule.remove`, `schedule.trigger`).
 - **Agents are found, not guessed.** The agent listing now says what this machine
   shows about each agent: `available` when the command the daemon starts is
   there, `installed-but-not-acp` when only the vendor CLI is — claude and codex
@@ -150,6 +166,9 @@ pieces it runs on, and the inbox that surfaces what waits on a person.
 
 - The GUI has no install button: `flt install` is the only way to run a recipe,
   and it asks first. The directory section in the window is read-only.
+- Schedules have no window of their own yet: they are created and run with
+  `flt schedule`. A webhook is another caller of `schedule.trigger`, not a
+  listener this build ships.
 - The MCP fleet tools and the agent-driven flows are covered by zero-token
   integration tests; no live agent turn has exercised them yet.
 - No domestic (Chinese) agent has been probed or run. The adapter format and
